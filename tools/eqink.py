@@ -42,6 +42,23 @@ from tools.formulafind import frame_rect, page_frames        # noqa: E402
 
 LIB = pathlib.Path.home() / "pdfdrill-library"
 
+#: least interior gap counted as a NUMBER separation, in 400 dpi px.
+#: MEASURED, not chosen. Two populations:
+#:   * the gaps BETWEEN symbols of one equation. Labelled ceiling: over
+#:     202 rows whose number pdfdrill had already split out -- so known
+#:     to be body only -- no interior gap exceeds 188 px.
+#:   * the gap before a number set at the right margin, which runs to
+#:     1,919 px.
+#: Over 4,000 rows sampled from the corpus list (seed 690, the 26,883
+#: rows whose page is rendered), the histogram has a genuine minimum
+#: between them:
+#:     150-190  31 | 190-250  41 | 250-300  15 | 300-400  25 | 400-600 51
+#: 250 is above the labelled ceiling AND inside that minimum, rather
+#: than on either edge. Sensitivity: >=190 gives 180 rows (4.5%), >=250
+#: gives 141 (3.5%), >=300 gives 128 (3.2%).
+#: `--floor 0` measures without splitting at all.
+NUMBER_FLOOR_PX = 250.0
+
 
 def column_runs(mask):
     """(inked columns, inked scan-line runs) of a mask."""
@@ -152,10 +169,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--list", type=pathlib.Path, required=True)
     ap.add_argument("--library", type=pathlib.Path, default=LIB)
-    ap.add_argument("--floor", type=float, default=0.0,
-                    help="least interior gap counted as a NUMBER separation, "
-                         "in 400 dpi px. 0 measures without splitting. Place "
-                         "it between the two populations --distribution shows.")
+    ap.add_argument("--floor", type=float, default=NUMBER_FLOOR_PX,
+                    help=f"least interior gap counted as a NUMBER separation, "
+                         f"in 400 dpi px. Default {NUMBER_FLOOR_PX:.0f}, measured "
+                         f"-- see the constant. 0 measures without splitting.")
     ap.add_argument("--distribution", action="store_true")
     ap.add_argument("--out", type=pathlib.Path, default=None)
     args = ap.parse_args()

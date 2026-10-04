@@ -1,0 +1,102 @@
+691 - the floor at corpus scale, and a frame that verified itself
+=================================================================
+
+out/689 placed a floor at 250 px to separate an equation's internal
+gaps from the gap before a right-set number, on a valley SIX ROWS
+WIDE. pdfdrill's corpus pass then made the list 107x larger — 272,442
+display rows over 1,667 documents — so the valley could be checked
+against a real population.
+
+It held. And getting there cost a retraction.
+
+====================================================================
+1. WHAT COULD BE MEASURED AT ALL
+====================================================================
+
+    display rows in the list              272,442
+    rows whose page is RENDERED            26,883  (9.9%)
+    sampled, seed 690                       4,000
+
+An ink measurement needs a rendered page. 983 of 1,667 documents have a
+render directory and 6,349 of 14,500 needed pages exist, so this is a
+tenth of the list — and NOT a random tenth: renders exist for the
+documents somebody chose to work on, which are the maths-dense ones.
+Every figure below is of that subset.
+
+====================================================================
+2. THE FLOOR HELD
+====================================================================
+
+    widest interior gap, 4,000 rows
+      p50 26   p90 89   p95 156   p97 323   p99 689   max 1,919
+
+      0-50   2,963 | 50-100  487 | 100-150 153 | 150-190  31
+    190-250     41 | 250-300   15 | 300-400  25 | 400-600  51
+    600-900     37 | 900-2000  11
+
+250-300 is 15 rows between 41 and 25 — a local minimum on 3,990 rows
+where sigma26 gave 6. The floor sits above the LABELLED CEILING of 188
+(the widest interior gap over 202 rows whose number was already split
+out, so known to be body only) and inside that minimum.
+
+    >= 190 px   180 rows (4.5%)
+    >= 250 px   141 (3.5%)
+    >= 300 px   128 (3.2%)
+
+Shipped as `NUMBER_FLOOR_PX = 250`, with the two populations asserted
+rather than the number: `tests/test_eqink.py` fails if the constant
+moves below the labelled ceiling or outside the measured minimum.
+
+====================================================================
+3. THE RETRACTION — A FRAME THAT COULD NOT FAIL ITS OWN TEST
+====================================================================
+
+The first pass reported 181 of 3,995 rows (4.5%) with NO INK in their
+declared region, against 0 of 2,549 on sigma26. It was the mapping.
+
+I put the list's regions through `page_frames`, which exists for
+MATHPIX page pixels. The list's regions come from the PDF page. On a
+document whose page size differs from the one MathPix rastered, that
+frame carries an inset — 504 x 492 px on cardona p14 — and every region
+lands in the bottom margin.
+
+    cardona p14, `a\in\mathrm{Sp}(a)`
+      through page_frames     0 ink px, the bottom margin
+      pure 400/250, no inset  890 ink px, and the crop reads ∫_{a∈Sp(a)}
+
+    the 181 "no ink" rows, re-measured   171 recover, 10 remain (0.25%)
+
+THE PART WORTH KEEPING IS WHY IT SURVIVED VERIFICATION. I had checked
+this mapping by eye on four sigma26 rows and all four landed perfectly.
+sigma26's frames are (1.6, 1.6, 0, 0) — the broken mapping and the
+correct one are IDENTICAL there. The check was run on the population
+where the bug cannot appear.
+
+A HYPOTHESIS RETRACTED TOO. I attributed the inset to a CropBox/MediaBox
+difference, quoting a row as reporting `page_width_pt: 411.4` beside
+MediaBox-origin coordinates. It does not reproduce: that row reads
+595.0 x 842.0, one row, file unmodified. The real cause is MIXED PAGE
+SIZES — cardona p1 is 411x620 pt and its body is A4 — and the rows
+report each page correctly. Said before defending it.
+
+pdfdrill then found the same shape on their side, larger: their list
+carried ONE page size per document from `pdfinfo`, so "region past its
+page" read 16,729 rows (6.14%) and is 199 (0.07%) against the per-page
+map. My own 1,501 width-only count used their per-row page width and
+inherited the same denominator.
+
+====================================================================
+WHAT THIS DOES NOT SAY
+====================================================================
+
+  * 9.9% of the list, and a biased 9.9%. A document nobody rendered is
+    a document this cannot see.
+  * The 188 px ceiling is still from 202 rows of ONE publisher. It is
+    the only LABELLED population available — rows whose number another
+    tool had already removed — and it has not grown.
+  * The floor separates a gap from a number. It does not say the
+    right-hand group IS a number: out/689's `∅ ⟵——— [1,n]` is a
+    diagram whose right group is 115 px, the width of a real `(4.1)`.
+    Ink finds the separation; only the content test confirms it.
+  * 10 rows still have no ink in their region. Not yet diagnosed, and
+    reported as 10 rows rather than as a class.

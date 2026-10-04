@@ -198,6 +198,20 @@ last touched the file.
     documents and false for those. Item 11's open question (AA on took
     hole instability 75.0% -> 9.4%) is still open and still not acted on.
 
+30. **Verify on the population where the bug CAN appear.** The
+    equation-list mapping was checked by eye on four sigma26 rows and
+    all four landed exactly on their equations — while the mapping was
+    wrong. sigma26's page frames are (1.6, 1.6, 0, 0), so the broken
+    mapping and the correct one are IDENTICAL there; the four documents
+    that would have exposed it (cardona, voloshin, gilmore,
+    kohlhase-omdoc) were not in the check. 181 rows then read as "no
+    ink in the declared region" and would have gone to a peer as a
+    defect in THEIR list (out/691).
+    An eye check is only as good as the sample it runs on, and a sample
+    drawn from the easy population cannot fail. Before trusting a
+    verification, ask which documents would show the error and whether
+    any of them is in it.
+
 29. **Check that the instrument did not CREATE the quantity being
     measured — especially when the first answer is a round 100%**
     (out/690). "How much grey is on these pages" came back as *248 of

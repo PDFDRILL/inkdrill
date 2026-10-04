@@ -106,5 +106,33 @@ class TE_2_TheInteriorGap(unittest.TestCase):
         self.assertNotIn("number_box", r)
 
 
+class TE_3_TheShippedFloor(unittest.TestCase):
+    """The floor is 250 px and the two populations it separates are
+    measured, so the test asserts the SEPARATION rather than the
+    number: narrowing it to either edge must fail."""
+
+    LABELLED_CEILING = 188     # max interior gap over 202 known body-only rows
+    MINIMUM_LO, MINIMUM_HI = 250, 300   # the histogram's local minimum
+
+    def test_the_floor_is_above_the_labelled_ceiling(self):
+        self.assertGreater(E.NUMBER_FLOOR_PX, self.LABELLED_CEILING)
+
+    def test_the_floor_is_inside_the_measured_minimum(self):
+        self.assertGreaterEqual(E.NUMBER_FLOOR_PX, self.MINIMUM_LO)
+        self.assertLessEqual(E.NUMBER_FLOOR_PX, self.MINIMUM_HI)
+
+    def test_at_the_floor_an_inter_symbol_gap_does_not_split(self):
+        """188 px is the widest gap ever seen inside a body-only row."""
+        cols = list(range(0, 10)) + list(range(10 + self.LABELLED_CEILING, 10 + self.LABELLED_CEILING + 10))
+        gap, _ = E.widest_interior_gap(cols)
+        self.assertEqual(gap, self.LABELLED_CEILING)
+        self.assertLess(gap, E.NUMBER_FLOOR_PX)
+
+    def test_a_right_set_number_does_split(self):
+        cols = list(range(0, 10)) + list(range(10 + 400, 10 + 400 + 10))
+        gap, _ = E.widest_interior_gap(cols)
+        self.assertGreaterEqual(gap, E.NUMBER_FLOOR_PX)
+
+
 if __name__ == "__main__":
     unittest.main()
