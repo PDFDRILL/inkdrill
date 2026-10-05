@@ -1,0 +1,385 @@
+693: the MathPix-docmodel table -- 12 volumes, and three defects found building it
+=================================================================================
+
+Deliverable: eqlists/mathpix-vol01..12 in pdfdrill-library (pushed
+cf75b624..50c2ebb6). corpus-display rows with MathPix's LaTeX swapped in
+from each document's model.docmodel.json, every row beside its crop.
+
+    59,079 rows   854 documents   5,789 pages   879.3 MB
+    largest volume 83.9 MB (GitHub refuses a single file over 100 MB)
+    9 rows without a crop
+    all 12 validate clean, including against eqlist.validate's new hash check
+
+Re-runnable:
+    python3 tools/docmodelswap.py --rows-csv corpus-display.rows.csv \
+        --out-dir <d> --name corpus-display-mathpix-docmodel
+    (gate meta.source == "mathpix"; keep rows matching a MathPix Equation
+     region at IoU >= 0.5)
+
+Population and split rule: 854 documents are those whose model.docmodel.json
+names mathpix as its source AND which yielded at least one IoU>=0.5 region
+match. Of corpus-display's 283,949 rows, 171,342 are dropped for having no
+docmodel at all and 40,030 for having no MathPix equation at the region. So
+this is NOT a sample of the corpus -- it is the subset where MathPix has an
+answer to compare against, which is the population the comparison needs.
+
+Note the swap's own counter reads "documents used: 972" while 854 contribute
+rows: it counts docmodels opened as MathPix, not documents that yielded one.
+
+
+THREE DEFECTS, each of a shape this project has a rule for
+----------------------------------------------------------
+
+1. latex_sha16 described the text it replaced.  51,431 of 59,079 rows wrong,
+   6,997 absent, 651 right. The swap put MathPix's LaTeX in the row and left
+   pdf2mmd's hash, and that field is the ONLY way a stale mark is detectable.
+   Nothing raises: a 16-hex string looks the same whichever text it hashed.
+
+   The instructive part is not the bug but its travel. pdfdrill's two lists
+   were clean because a previous inkdrill session had already found this and
+   told it to recompute -- so the rule existed, in one writer, with nothing
+   making the second writer use it. The fix that lasts is pdfdrill putting
+   the check in eqlist.validate(), which walks every row already holding
+   both the LaTeX and the hash.
+
+   A FILTER HOLDING A GUARANTEE, exactly: all 12 volumes validated clean
+   before that check existed, on the very field that was wrong.
+
+2. The volumes were packed by the wrong unit.  10.6 KB/row measured on 22
+   documents; 16.0 KB/row actual on the next 90. Crop size is a property of
+   the document, not the row. A 5,970-row volume compiled to 100.7 MB, over
+   the refusal -- so the first full set would have failed at push.
+
+   POPULATION, again: the instrument was right and the claim was wider than
+   its reach. Fixed by cutting crops into a pool first and packing on bytes
+   that exist on disk; volume 1 then read 71.8 MB against 68.9 predicted.
+
+3. One unrenderable page cost a whole document's crops.  _crops_for
+   rasterizes all of a document's needed pages in one ghostscript run and,
+   on any failure, dropped every crop for the document -- including crops
+   already on disk -- and returned an empty result silently. 1511.08771 is
+   an 11,232-page PDF where gs refuses pages 1553-1607 at ANY resolution
+   while page 43 renders fine: 131 rows got 0 crops.
+
+   Retrying per page brought it to 9 rows (3 pages in 1511.08771, 1 in
+   ThomasKecker). pdfdrill then fixed it at source and made the refused page
+   a reported fact rather than an absence -- a page gs will not rasterize is
+   not the same fact as a row with no region, and `uncropped` could not tell
+   them apart.
+
+   I reached it through two wrong hypotheses first: that the page number was
+   out of range (no row exceeds the page map) and that the page map was
+   lying (the PDF really has 11,232 pages). The page is simply broken.
+
+
+WHAT THE TABLE IS FOR, AND THE FINDING IT ALREADY PRODUCED
+-----------------------------------------------------------
+
+pdfdrill's three-class split over the 16,576 rows it had paired:
+
+        22    0.1%  byte-identical
+     1,634    9.9%  equal after normalising
+    13,027   78.6%  still different
+     1,893   11.4%  one side empty (ours absent, MathPix present)
+
+"0.1% agreement" was the wrong sentence; the normaliser is aggressive, so
+9.9% is an UPPER bound on cosmetic-only difference and 78.6% a LOWER bound
+on real disagreement. Stated in that direction on purpose.
+
+Censused over the 14,683 rows where both produced LaTeX:
+
+     3,770  25.7%  ours DROPPED A RELATION SYMBOL (= present in MathPix)
+     3,114  21.2%  ours has unbalanced delimiters
+       485   3.3%  ours leaked the equation number into the LaTeX
+        10   0.1%  delimiter inside a \hat{} group
+
+The first is the one that matters, and it is this project's thesis in one
+line: a dropped `=` TYPESETS. It turns an equation into a juxtaposition and
+renders plausibly everywhere, leaving delimiters balanced and the expression
+well-formed -- so structural_ok (278,143 of 283,949) and lost_operand
+(2,254) both pass it. It is detectable by putting the LaTeX beside the
+picture, which is what the crop column is.
+
+That census is over 352 documents selected in NAME ORDER (pdfdrill's crop
+cut was stopped at document 373 of 832, and it kept the documents whose
+crops were complete). So 25.7% is measured on an alphabetical prefix and is
+being re-measured over these 59,079. Hold the number loosely until then.
+
+
+ADDENDUM -- two corrections after publishing, and the re-measurement
+--------------------------------------------------------------------
+
+4. FIELDS THAT DESCRIBED THE WRONG STRING.  Found by pdfdrill reading
+   vol01 row 1, not by me and not by the suite. Every published row carried
+   `structural_ok`, `spans` and `projected` at top level beside `latex`,
+   which is MathPix's. pdfdrill read them as pdf2mmd values carried forward;
+   they were not carried from anywhere -- they were CONSTANTS I wrote
+   (True, 1, 1) on all 59,079 rows. An unmeasured assertion, which is worse
+   than a true field about the wrong string.
+
+   The rows.csv had pdf2mmd's real confidence, structural_ok and
+   lost_operand in columns 16-18 the whole time. I ignored them.
+
+   `lost_operand` being hardcoded None is the only reason the compiled PDFs
+   are not wrong too: eqtable renders an annotation when that field is set,
+   so carrying pdf2mmd's value naively would have annotated MathPix's LaTeX
+   with a finding about pdf2mmd's reading, in the PDF, looking
+   authoritative. 502 rows.
+
+   v2 (a1972e91): top level describes the CURRENT LaTeX; `source` carries
+   pdf2mmd's real values with a note. structural_ok FALSE on 1,276,
+   lost_operand firing on 502 -- facts v1 had destroyed.
+
+5. I REPORTED A FIELD AS PUBLISHED THAT WAS NOT.  Commit d09af760's message
+   and my report to the user both said the superseded hash was kept as
+   `latex_sha16_pdf2mmd`. True of the rows.csv; absent from all 12 published
+   lists, because row_obj never wrote it. The same class of error as the one
+   it was documenting, inside the fix for it. Present from v2.
+
+   Both of these were found by a second reader looking at the artefact, not
+   by validate, not by the suite, and not by me re-reading my own code --
+   which is the same argument as the table's own.
+
+RE-MEASUREMENT ON THIS POPULATION (pdfdrill, over all 59,079):
+
+                        this set 59,079     prefix 16,576
+    byte-identical          651   1.1%         22   0.1%
+    equal after norm      6,154  10.4%      1,634   9.9%
+    still different      45,277  76.6%     13,027  78.6%
+    one side empty        6,997  11.8%      1,893  11.4%
+
+    ours DROPPED a relation symbol  14,755  28.3%  (prefix said 25.7%)
+    ours UNBALANCED delimiters       9,606  18.4%  (21.2%)
+    ours leaked the EQUATION NUMBER  1,331   2.6%  (3.3%)
+
+So the alphabetical prefix UNDERSTATED the headline defect. I held the
+number loosely for the right reason and guessed the wrong direction; the
+caution was about the population, and the population was not conservative.
+
+The byte-identical class moving 0.1% -> 1.1% is a tenfold change on a
+22-row base. A rate computed over 22 rows was never stable, and that is the
+more transferable lesson than the number.
+
+HEADLINE: 28.3% of our display equations lose a relation symbol MathPix
+found. It typesets. structural_ok passes it, lost_operand does not fire
+(2,254 corpus-wide against 14,755 here), and confidence is computed from
+span projection, which a missing operator does not disturb. Undetectable
+from our side alone; obvious the moment a second reader sits beside it.
+
+
+ADDENDUM 2 -- the gate was a claim, and it was false on 24 documents
+---------------------------------------------------------------------
+
+6. THE USER FOUND IT by opening vol12 and asking how they could be sure
+   what the LaTeX column holds. It held our own reader's output labelled as
+   MathPix's, on 24 of 854 documents.
+
+   `model.docmodel.json` is built from the live `<doc>.lines.json`, which is
+   whatever wrote it last. A free reader displaced MathPix's reading, the
+   model was rebuilt from ours, and `meta.source` still said "mathpix"
+   because nothing re-derives it. The field was TRUE WHEN WRITTEN -- the
+   same shape as latex_sha16 describing text that had been replaced, and the
+   same shape as the `pages` map being read as a document property.
+
+   What came through, published as latex_origin "mathpix-docmodel":
+
+     L <!-- DEFERRED p3l33s1 rect=[...] reason=script-attachment --> $
+     $\gamma$ \xf0 $\lambda$ \xde \xbc 1L $\ln$ ... (cid:2)
+
+   833 of vol12's 2,952 rows would not typeset. 28%, concentrated in the
+   sigma26 papers -- the exact set prepared for inspection, so not a tail.
+
+   THE GATE NOW REQUIRES BOTH:
+       meta.source == "mathpix"
+     AND no pdf2mmd-only marker (DEFERRED / deferred_glyphs / "gaps")
+         anywhere in the model's BYTES
+
+   `meta.source` is a claim; a marker our reader alone emits is evidence of
+   who produced it. Byte scan rather than parse: a marker anywhere in the
+   file settles it, whatever part of the structure holds it.
+
+     59,079 -> 57,233 rows      854 -> 830 documents
+     2,438 rows refused on the marker test
+
+   Dropped, NOT repaired -- these documents have no usable MathPix reading
+   whatever the field says. sigma26-075 alone has its real reading parked in
+   a .lines.mathpix.bak.json and is recoverable by rebuilding its model from
+   that, which belongs to the tool that owns the document. (pdfdrill
+   believed four documents had such a backup; one does.)
+
+   Volumes 1-11 kept their row sets exactly: all 1,846 removed rows fell in
+   vol12 because the mislabelled documents sort last. Verified against the
+   published lists in git -- identities, ORDER and latex identical in all
+   eleven -- so only vol12 was recompiled. 1,106 rows, 99 pages, 0 LaTeX
+   errors. Checked over all 57,233 rows: 0 carry a DEFERRED marker, a
+   (cid:n), or pdfminer's \xf0/\xde garbage.
+
+   Pushed f07df5bb.
+
+THE PATTERN ACROSS ALL SIX DEFECTS IN THIS UNIT OF WORK
+
+Five of the six are one shape: A FIELD THAT WAS TRUE WHEN WRITTEN AND WAS
+NEVER RE-DERIVED, trusted by something downstream.
+
+    latex_sha16       hashed text that had since been replaced
+    meta.source       named a reader that had since been displaced
+    source.latex_origin  built from a column already overwritten
+    structural_ok     a constant asserting something about text nobody read
+    KB/row            measured on 22 documents, applied to 854
+
+None is caught by a mutation sweep, because the code computing each one is
+correct. What catches them is asking of every field carried across a
+transformation: DOES THIS STILL DESCRIBE WHAT IT NAMES? And the gate case
+adds the sharper form: a field that names its own provenance is a CLAIM. If
+evidence of provenance exists in the artefact -- a marker only one producer
+emits -- the evidence outranks the field, and the gate must read the
+evidence.
+
+Four of the six were found by a second reader looking at the artefact
+(pdfdrill three, the user one). None by the suite, none by validate as it
+stood, none by me re-reading my own code. That is the table's own thesis
+turned on its builder, and it is the argument for the paired table
+independent of any number in it.
+
+
+ADDENDUM 3 -- the tables the user actually wanted
+--------------------------------------------------
+
+The 12 mathpix volumes answered "where does MathPix have LaTeX". That was
+not the job. Restated by the user twice:
+
+  "we do not need the failed pdfreader output, what we need is the
+   pdfreaders rendered LaTeX and the page crops, then I can compare this
+   images (which is fast if the difference is large) and give the chat the
+   correct LaTeX what should have been the correct result"
+  "The Mathpix LaTeX code is need to show the chat or cli what the result
+   should look like."
+
+So the row is TWO PICTURES AND ONE STRING:
+
+  document | eq no | page/rect | pdf2mmd's LaTeX TYPESET | the page's ink
+          | MathPix's LaTeX -- the answer, as text
+
+The eye compares the two pictures; the string is dictated onward. Our
+reader's failed LaTeX is absent on purpose -- at ~30% correct it is not what
+is being read. The reference is NEVER typeset: that would make it a third
+picture to compare and defeat the point.
+
+Nothing existed with this shape. eqtable's compare mode gave the two
+pictures and dropped all text; normal mode gave source+typeset+ink of ONE
+reader, because both cells come from r["latex"]. pdfdrill added
+reference_latex / reference_origin.
+
+DELIVERED (pushed 362264f2, 7124a721, df1737cd):
+
+  noread-vol01..02      6,730 rows   455 docs   637 pages   102.1 MB
+  inkcompare-vol01..11 52,748 rows   833 docs 5,867 pages   764.7 MB
+
+noread FIRST, at the user's instruction, and it needed no new column: our
+reader produced NOTHING for those rows, so there is no typeset cell of ours
+to show and ordinary mode with MathPix's LaTeX already gives answer +
+rendering + ink. No judgement about which reader is right, because only one
+read anything. 306 further rows have ink and NEITHER reader has anything --
+not in the table, listed in no_answer_rows.
+
+REFERENCE COVERAGE IS 50,494 / 52,748, AND THE GAP IS NOT SCATTERED.
+27 documents, almost all sigma26: vol11 reads 542/1,825 and vol10
+4,064/5,034 while vols 1-9 are complete. Those are precisely the documents
+Addendum 2's gate removed -- their "MathPix" docmodel had been rebuilt from
+our own reader, so no genuine MathPix reading survives to reference. The
+user's own inspection set is the one place the answer column is empty.
+
+pdfdrill searched the library exhaustively: 23 of the 24 have nothing
+recoverable. The 19 *.lines.pre844.json files that looked like the recovery
+hold OUR pre-844 readings (source=pdfminer-docmodel, carrying DEFERRED) --
+844 was the type-vocabulary change, so the suffix means "before we renamed
+the types", not "the reading we displaced". A name that looks like a backup
+of the thing you want, holding the thing you already have.
+
+sigma26-075 alone is recoverable and was NOT recovered: 103 rows of the
+2,185 the mislabelled documents contribute, 4.7% of the gap, against
+overwriting two artefacts in a document folder under a standing instruction
+to leave documents alone. The trade was put to the user rather than taken.
+
+THE CHECK THAT MATTERED MOST: 0 of 50,494 reference strings contain
+DEFERRED, (cid: or pdfminer's \xf0/\xde, and the typeset column is pdf2mmd
+on all 52,748 rows. Everywhere else today a mislabelled row was merely
+wrong. This column is read and HANDED ONWARD AS THE ANSWER, so our own
+broken output appearing in it would be actively misleading -- the one place
+in the whole build where a defect would propagate rather than sit still.
+
+AND `(no reference)` IS LOAD-BEARING. Had the column vanished where rows
+lack a reference, a 2,254-row hole in the exact documents prepared for
+inspection would have read as a formatting difference between volumes.
+An absent cell that SAYS it is absent is a coverage fact; a missing column
+is nothing at all.
+
+ONE RATE OF MINE WAS WRONG IN THE FAMILIAR WAY. The per-volume log printed
+"reference on 4,855 (100.0%)" where 4,855 was the volume's TOTAL rows and
+only 4,742 were compared -- a percentage over a population it did not
+describe, for the second time in one unit of work. The tool now prints
+N / M. pdfdrill's framing is the right one: care does not fix this class,
+printing the denominator does, because then the number cannot be quoted
+without its base.
+
+
+ADDENDUM 4 -- inkdrill run against the ink: 6,184 rows deleted
+---------------------------------------------------------------
+
+The user's instruction: run inkdrill on the table and delete the equations
+that already match, so only real differences reach the eye. THE RESIDUAL IS
+THE PRODUCT, applied to the work queue itself.
+
+`tools/inkresidual.py`. Renders each row's pdf2mmd LaTeX one page per
+equation, rasterizes via the pgmraw stream, describes BOTH pictures with
+ink-only topology, deletes the row when they agree. The criterion names no
+second reader: a row whose LaTeX differs from MathPix's but matches the ink
+has nothing for an eye to fix.
+
+PREMISE MEASURED FIRST. 150 rows equal-after-normalising between the two
+readers against 150 where the reference carries a relation symbol ours
+lacks -- the 28.3% defect, the class the deletion must never touch:
+
+    feature                   AGREE median   DISAGREE median
+    ink - render components        0               +7
+    elongation difference          0.25             3.67
+    aspect difference              0.03             0.33
+    ink has MORE components        6%               95%
+
+A dropped `=` removes two components from the render while the ink keeps
+them. The defect being hunted is exactly the one topology sees, which is
+why this works at all and is worth stating rather than assuming.
+
+RULES PRICED AT FULL SCALE (descriptors saved, so no re-run):
+
+    |dcomp|<=1                     deletes 17,579 (33.3%)   loses 5.3%
+    components equal                       14,077 (26.7%)         3.3%
+    |dcomp|<=1 |dh|<=1 aspect<.15           8,906 (16.9%)         1.3%
+    CHOSEN + aspect<.10 elong<.8            6,184 (11.7%)         0.7%
+
+Conservative end: deleting a row that still holds a defect is the expensive
+error, because those rows are the entire point of the table. 61% of the
+agreeing work removed for 0.7% of the findings.
+
+    described 52,748 | deleted 6,184 | survive 46,564 | unusable 6
+
+AND THE DELETION RATE IS ITSELF A MEASUREMENT, in the direction that
+matters. 11.7% deleted at 61% sensitivity implies ~19% of rows match the
+ink, against the ~30% the reader was thought to be correct at. An
+INDICATION and not a measurement: the sensitivity was measured on rows two
+readers agree about, which need not represent all ink-matching rows. Stated
+with its reasoning so nobody quotes 19% as measured.
+
+THE LABELS ARE PROXIES AND THE POPULATION IS 300. Two readers agreeing is
+not an eye agreeing. The rule is APPLIED to 52,748 rows and was VALIDATED
+on 300 whose agreement two readers happen to agree about. That gap is the
+honest weakness of this run, and the cure is eye verdicts on a sample of
+the deleted -- which the user can now give, since inkresid-deleted.json
+names every one with the numbers that condemned it.
+
+Delivered: inkresid-vol01..10, 46,564 rows / 826 docs / 5,198 pages /
+712.4 MB (pushed ed0c0a9c, f33dabfd), plus inkresid-deleted.json carrying
+all 6,184 deleted rows with both pictures' descriptors, the rule constants,
+the validation numbers and this caveat. inkcompare-* removed rather than
+kept beside it: two tables differing only by a filter read as a formatting
+difference and the wrong one gets worked through.
