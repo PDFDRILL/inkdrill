@@ -383,3 +383,48 @@ all 6,184 deleted rows with both pictures' descriptors, the rule constants,
 the validation numbers and this caveat. inkcompare-* removed rather than
 kept beside it: two tables differing only by a filter read as a formatting
 difference and the wrong one gets worked through.
+
+
+ADDENDUM 5 -- the sensitivity is an OVERESTIMATE, and why (pdfdrill's point)
+-----------------------------------------------------------------------------
+
+I recorded the 61% rule sensitivity as measured on rows two readers agree
+about, which "need not represent all ink-matching rows". pdfdrill put it
+correctly and the correction is directional, not an uncertainty:
+
+    A row where both readers produce the same string is a row the reader
+    found EASY. Easy rows are precisely where a rendering matches its ink.
+    So the sensitivity was measured on the FAVOURABLE TAIL: 61% is an
+    overestimate, and the implied ~19% ink-matching rate is therefore an
+    overestimate too.
+
+This is the same family as everything else in this record -- a figure whose
+population was narrower than the claim -- but it is the first one where the
+DIRECTION of the error was identifiable in advance. Quote the 19% with
+"probably less" attached, or do not quote it.
+
+THE 10.4% / 19% GAP DECOMPOSES, and the second half is uncounted:
+
+    10.4%  our STRING equals MathPix's after normalising
+    ~19%   our RENDER matches the PAGE          (and should be the larger)
+
+The ~9 point gap is rows that render correctly while differing from
+MathPix's string, and it holds two different things:
+
+  * markup that differs and renders the same beyond what the normaliser
+    collapses (it handles 22 operator names, \left\right, thin spaces,
+    single-token braces -- not \frac{a}{b} against a \over b)
+  * rows where MATHPIX IS WRONG AND WE ARE RIGHT
+
+Nothing in either method separates them, and the second has never been
+counted. `inkresid-deleted.json` is where that set lives: 6,184 rows, both
+pictures' descriptors each. Fifty eye verdicts would split it. Neither tool
+can produce those verdicts, which is the honest end of this work.
+
+A WEAK CROSS-CHECK WORTH KEEPING. A dropped relation symbol removes two
+components from the render while the ink keeps them, so the ink-matching
+set and the dropped-`=` set are very nearly DISJOINT by construction.
+19% matching alongside 28.3% missing a relation symbol are consistent with
+each other. Weak, because consistency is not accuracy -- but a
+contradiction here would have condemned one of the two numbers, and there
+is none.
