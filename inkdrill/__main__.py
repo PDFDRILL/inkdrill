@@ -932,9 +932,40 @@ def _apply_polarity(args, mask, auto):
     return mask, None
 
 
+def cmd_verify(argv) -> int:
+    """`verify --pairs P --original X.pdf --candidates C.pdf -o F` (T-0146).
+
+    The judge of contract inkverify/1; see `inkdrill/verify.py`. Exit 0
+    means the findings file was written, 2 that the run was refused with
+    one line on stderr and no file -- a usage error included, so a caller
+    sees one shape of refusal.
+    """
+    from .verify import Refusal, run
+
+    class _Parser(argparse.ArgumentParser):
+        def error(self, message):
+            raise Refusal(f"bad arguments ({message})",
+                          "python3 -m inkdrill verify --pairs P --original "
+                          "X.pdf --candidates C.pdf -o F")
+
+    ap = _Parser(prog="python3 -m inkdrill verify", add_help=True)
+    ap.add_argument("--pairs", type=pathlib.Path, required=True)
+    ap.add_argument("--original", type=pathlib.Path, required=True)
+    ap.add_argument("--candidates", type=pathlib.Path, required=True)
+    ap.add_argument("-o", "--out", type=pathlib.Path, required=True)
+    try:
+        args = ap.parse_args(argv)
+    except Refusal as r:
+        print(r.line(), file=sys.stderr)
+        return 2
+    return run(args.pairs, args.original, args.candidates, args.out)
+
+
 def main(argv=None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == "verify":
+        return cmd_verify(argv[1:])
     if argv and argv[0] == "compare":
         return cmd_compare(argv[1:])
     if argv and argv[0] == "topology":
