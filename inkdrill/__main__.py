@@ -287,7 +287,7 @@ def cmd_locate(argv) -> int:
                     help="points conversion when the page has no pHYs")
     args = ap.parse_args(argv)
 
-    from .mathstruct import Glyph, pair_counts, pair_stats, rows
+    from .mathstruct import best_row_window, pair_stats
     from .pngio import read_png, auto_mask
 
     img = read_png(args.candidate)
@@ -307,23 +307,8 @@ def cmd_locate(argv) -> int:
                              round(dpi, 3))
     C = collections.namedtuple("C", "id x0 y0 x1 y1 area holes")
     comps = [C(*c) for c in comps]
-    by_id = {c.id: c for c in comps}
 
-    best = None
-    for row in rows([Glyph(c.id, float(c.x0), float(c.y0),
-                           float(c.x1), float(c.y1)) for c in comps]):
-        members = sorted((by_id[g.id] for g in row.members),
-                         key=lambda c: (c.x0, c.id))
-        for k in range(max(1, n - 2), n + 3):
-            for i in range(len(members) - k + 1):
-                win = members[i:i + k]
-                st, ce, of = pair_counts(win)
-                vec = (k, sum(c.holes for c in win), st, ce, of)
-                d = sum(abs(a - b) for a, b in zip(vec, cvec))
-                if best is None or d < best[0]:
-                    box = (min(c.x0 for c in win), min(c.y0 for c in win),
-                           max(c.x1 for c in win), max(c.y1 for c in win))
-                    best = (d, box, k)
+    best = best_row_window(comps, cvec)
     if best is None:
         print("NO MATCH: no text-row window within +-2 of "
               f"{n} components")

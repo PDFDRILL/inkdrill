@@ -472,6 +472,43 @@ def pair_counts(comps):
     return stacked, centred, offset
 
 
+def best_row_window(comps, cvec):
+    """The text-row window whose five-tuple is nearest `cvec` (T29).
+
+    `comps` are box-like items with id, x0, y0, x1, y1, area and holes
+    (inclusive pixel boxes); `cvec` is the candidate's
+    (components, holes, stacked, centred, offset). Windows of
+    n-2..n+2 x-consecutive components, n = cvec[0], are taken within
+    each `rows()` row and scored by L1 over the same five-tuple
+    `pair_counts` defines. Returns (distance, (x0, y0, x1, y1), k) for
+    the first strictly-best window, or None when no row holds a window
+    of a size in range -- the caller's NO MATCH.
+
+    Pure geometry, no pixels and no I/O: extracted unchanged from
+    `cmd_locate` (T-0146) so a second caller scores windows with the
+    same body rather than a copy. It gates on the component COUNT
+    only; a distance gate is the caller's.
+    """
+    n = cvec[0]
+    by_id = {c.id: c for c in comps}
+    best = None
+    for row in rows([Glyph(c.id, float(c.x0), float(c.y0),
+                           float(c.x1), float(c.y1)) for c in comps]):
+        members = sorted((by_id[g.id] for g in row.members),
+                         key=lambda c: (c.x0, c.id))
+        for k in range(max(1, n - 2), n + 3):
+            for i in range(len(members) - k + 1):
+                win = members[i:i + k]
+                st, ce, of = pair_counts(win)
+                vec = (k, sum(c.holes for c in win), st, ce, of)
+                d = sum(abs(a - b) for a, b in zip(vec, cvec))
+                if best is None or d < best[0]:
+                    box = (min(c.x0 for c in win), min(c.y0 for c in win),
+                           max(c.x1 for c in win), max(c.y1 for c in win))
+                    best = (d, box, k)
+    return best
+
+
 def _box_gap(a, b) -> int:
     """Separation between two boxes, in pixels, 0 when they overlap.
 
