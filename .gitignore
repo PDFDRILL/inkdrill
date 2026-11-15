@@ -17,3 +17,6 @@ inkdrillchat.txt
 # corpus run outputs: the harness is the reproducible artifact, the
 # run file is data (git add -f a specific run when it records a decision)
 results/
+
+# C build output (make, D-6)
+/build/
