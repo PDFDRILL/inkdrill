@@ -4,8 +4,8 @@
 reports residuals with enough detail to change the docmodel or a pdfdrill setting. It links
 GLYPHDRILL3's sources and does not change them.
 
-This file holds the contracts of the first three units. Units 4–8 (registration, matching,
-findings, docmodel join, LLM branch) get their contracts when they are started.
+This file holds the contracts of units 1–3 and the draft of units 4–6 (registration, matching,
+findings). Units 7–8 (docmodel join, LLM branch) get their contracts when they are started.
 
 Common rules (GLYPHDRILL3 CLAUDE.md): coordinates 0-based, half-open, in page pixels; no image
 or stream files, pages arrive on stdin through a pipe; no blob labelling on a full page; no
@@ -113,3 +113,101 @@ CLI:
     vsep <x0> <y0> <x1> <y1>               (sorted by x0, y0, x1, y1)
     hsep <x0> <y0> <x1> <y1>               (sorted by y0, x0, y1, x1)
     end <vseps> <hseps>
+
+## Units 4–6 — the comparison (DRAFT, T-0148, 2026-11-16)
+
+Document A is the original (the published PDF), and B is its reading rendered again. Both are
+rendered at the same dpi and threshold. B page p is compared with A pages p-1, p and p+1, which
+arrive on stdin as one stream:
+
+    inkcmp compare [--threshold T] --a-pages N < A(p-1) A(p) A(p+1) B(p)   (N = 2 or 3 at the ends)
+
+The PGMs are concatenated, as `gs -sOutputFile=%stdout` writes them. `lh` is GD3Blocks.lh of A
+page p, and `q = ceil(lh / 4)`. Lines come from unit 2. A's lines are shifted into page p's frame
+by whole page heights.
+
+Evidence: scratch measurements on spent documents (work/run-files/inkcmp-unit4 and t0148-compare,
+reported in drillgroup T-0148). G-R2 passed 3 of 4 fresh documents, and its failure was two merged
+columns. Per-glyph XOR at t = 1 put every paired planted swap (b/d, l/1, =/-, x/×, a dropped
+prime; 27 lines) at 164 px or more, while 2126 of 2146 unchanged lines were 0.
+
+### Unit 4 — registration (`inkcmp/register.h`)
+
+1. Cut lines at gutters: a unit 2 line that crosses a unit 3 `vsep` is cut into its parts left
+   and right of it, and each part is shrunk to its ink. This is the G-R3 change, against merged
+   columns.
+2. Fingerprint of a line: the centres, minus x0, of the white column runs of width >= q that lie
+   strictly inside [x0, x1) of the line's ink projection over its rows. The cost is one pass over
+   the line's spans.
+3. Two fingerprints match when their gap counts differ by at most 1 and at least 80% of the
+   smaller set have a partner within q.
+4. Segments, in B's reading order (left column, then right):
+   - A segment starts only on a matching pair with widths within q.
+   - The start is chosen by votes over the next 5 B lines.
+   - The segment's offset is (dx, dy) = A - B of the starting pair.
+   - Inside a segment, a B line pairs with an unused A line whose x0, x1 and y0 lie within q of
+     b + (dx, dy). A line with fewer than 2 gaps ("nofp") pairs only there.
+5. Candidates come from an index keyed by width / q (start) and by (y0 / q, x0 / q) (continuation).
+   Each lookup reads O(1) buckets, so there is no n² search.
+
+Guarantees
+- R1 Every B line is paired at most once and every A line at most once.
+- R2 A against itself (the same stream twice) pairs every line, with offset (0, 0).
+- R3 The output does not depend on the order of lines inside a bucket (sorted keys).
+
+### Unit 5 — matching (`inkcmp/match.h`)
+
+Each pair (a, b) is matched glyph by glyph inside the two line crops. Labelling inside a line crop
+is allowed: the rule against full-page labelling is GLYPHDRILL3's, and inkdrill's C works on crops
+(coordinator, 2026-11-16).
+
+1. Words: each line is cut at its fingerprint gaps. When A and B have the same number of words
+   and every pair of words has widths within 2 px, each word pair gets its own dx (the difference
+   of the word x0s). Otherwise the line's dx is used for every word.
+   - This answers the measured tail: in all 4 unchanged lines with nonzero XOR, a group of glyphs
+     sat more than 3 px along the line from the line offset.
+   - Following the drift glyph by glyph was tried twice and was worse (17 nonzero lines instead of 4).
+2. Components: 8-connected, from the crop's spans (union-find over runs, so no per-pixel calls).
+3. Each B component gets a candidate A component when:
+   - its box size is within 2 px;
+   - its box position is within 3 px after the word's (dx, dy);
+   - the candidates come from a window sweep over components sorted by x0, which is linear.
+4. The best candidate and a shift in [-2, 2]^2 give the least XOR. A pixel counts in the XOR only
+   when it lies more than t = 1 px from the other side's ink. This is computed on runs.
+5. Each A component without a partner is matched the same way, from A's side.
+
+Guarantees
+- M1 A against itself: every XOR is 0.
+- M2 XOR is symmetric under exchanging A and B (computed on both sides).
+- M3 A component whose box exceeds the window is never matched; it is reported, never dropped.
+
+**Open branch: a font-tolerant comparison.** The plants above keep the font and the renderer. The
+judge's real input is an original, possibly in Times with its own line breaks, against our reading
+rendered again in CM. If on such a page the t = 1 XOR flags most glyphs:
+- XOR is kept only for pairs inside one font (decided per pair by the XOR of matched glyphs);
+- across fonts, a component is compared by font-free features (GLYPHDRILL3's key16, ends/caps,
+  holes, crossings, or the ffeat distance; T-0149's measurement).
+Which branch holds is decided by the experiment "original against rendered reading" before this
+unit is frozen.
+
+### Unit 6 — findings (`inkcmp/findings.h`)
+
+    INKCMP1 page <p> lh <lh> linesA <n> linesB <n> paired <n>
+    pair <bx0> <by0> <bx1> <by1> <a-page> <ax0> <ay0> <ax1> <ay1> <dx> <dy> fp|nofp
+    glyph <side A|B> <page> <x0> <y0> <x1> <y1> xor <px> pair <k>
+    line <side A|B> <page> <x0> <y0> <x1> <y1> unpaired
+    end <glyph findings> <line findings> residual_px <sum>
+
+- Boxes are page px, half-open, of the side named. The pt boxes of blob/1 come with T-0150's writer.
+- `residual_px` is the page's value in the board's judge residual column (ink px with no
+  counterpart, unpaired lines included).
+- F1 Every finding names a box that contains ink. F2 With A = B, the page reports no findings.
+
+### Gate (three lines, rule 5)
+- Test: 4 fresh documents past draw position 396 (at least 2 two-column), plus the five plant
+  kinds recompiled into 2 of them.
+- Pass:
+  - every paired plant has a glyph finding at its place;
+  - at most 1% of unchanged pairs have any finding;
+  - A against A gives no finding.
+- Board: the judge residual column gets its first values, `residual_px` per page.
