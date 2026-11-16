@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR]: see inkdrill/judge.py"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from inkdrill.judge import main  # noqa: E402
+
+sys.exit(main())

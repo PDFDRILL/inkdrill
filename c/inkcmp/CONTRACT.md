@@ -230,6 +230,20 @@ Open:
   sampling. A C judge would rasterise the original's glyphs from their embedded font programs at their origins
   (U9's type1 → charstring → scan route), not render pages.
 
+**Command (2026-11-17).** `bin/inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR]` (`inkdrill/judge.py`)
+is this born-digital branch exactly as measured above: UP 8, OX = OY = -1/16, ink < 154, threshold 7, bp -> TeX pt.
+On 040123 p2 its `G` lines equal the scratch runs line for line, clean and planted (2857 glyphs, 176 and 185
+flagged), in 7.5 s. `tests/test_judge.py` makes a CM page with pdflatex and plants one letter per line. The clean
+reading gets 0 flags. 7 of 8 plants are flagged, and nothing else is. e->c at 10 pt (crossbar, solid 4) is the
+thin-stroke miss, and an expected-failure test holds it open.
+
+**Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
+Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
+8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of
+12 plants are flagged. Time: font extract and parse 0.14 s, stext 0.13 s, raster and compare 2.68 s (Python), plus a
+400 dpi page render for the ink that is not glyphs, 0.08 s. That is about 3 s against the route above's 7.5 to 22 s.
+In the library sample (299 documents, pp. 1-3), 72% of documents use only Type 1 and Type 1C fonts.
+
 **Scan branch (named, not measured).** A scan has no text layer, so the glyph positions come from the original's ink
 (GLYPHDRILL3 word boxes or blob centroids). Its noise floor has its own measurement before it gets a threshold.
 

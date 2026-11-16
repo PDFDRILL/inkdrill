@@ -23,6 +23,9 @@ _PKG = pathlib.Path(__file__).resolve().parents[1] / "inkdrill"
 #: Modules deliberately NOT on the CLI path, each with its reason.
 #: A reason is a claim about scope, and a wrong one is a bug report.
 OFF_THE_CLI_PATH = {
+    "judge": "the inkcmp judge (T-0148), its own command bin/inkcmp-judge: "
+             "it compares a lines.json reading with a born-digital PDF and "
+             "needs the PDF, pdflatex, mutool and poppler, not a page raster",
     "band": "the parallel sweep tier; the CLI does one page at a time "
             "and U8's band tier was measured into the ground",
     "domains": "the Gardenfors design test; an analysis tool for adding "
