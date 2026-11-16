@@ -131,29 +131,32 @@ reported in drillgroup T-0148). G-R2 passed 3 of 4 fresh documents, and its fail
 columns. Per-glyph XOR at t = 1 put every paired planted swap (b/d, l/1, =/-, x/×, a dropped
 prime; 27 lines) at 164 px or more, while 2126 of 2146 unchanged lines were 0.
 
-### Unit 4 — registration (`inkcmp/register.h`)
+### Unit 4 — registration (`inkcmp/register.h`): in place
 
-1. Cut lines at gutters: a unit 2 line that crosses a unit 3 `vsep` is cut into its parts left
-   and right of it, and each part is shrunk to its ink. This is the G-R3 change, against merged
-   columns.
-2. Fingerprint of a line: the centres, minus x0, of the white column runs of width >= q that lie
-   strictly inside [x0, x1) of the line's ink projection over its rows. The cost is one pass over
-   the line's spans.
-3. Two fingerprints match when their gap counts differ by at most 1 and at least 80% of the
-   smaller set have a partner within q.
-4. Segments, in B's reading order (left column, then right):
-   - A segment starts only on a matching pair with widths within q.
-   - The start is chosen by votes over the next 5 B lines.
-   - The segment's offset is (dx, dy) = A - B of the starting pair.
-   - Inside a segment, a B line pairs with an unused A line whose x0, x1 and y0 lie within q of
-     b + (dx, dy). A line with fewer than 2 gaps ("nofp") pairs only there.
-5. Candidates come from an index keyed by width / q (start) and by (y0 / q, x0 / q) (continuation).
-   Each lookup reads O(1) buckets, so there is no n² search.
+The judge renders the reading in place (coordinator, T-0148, 2026-11-16). Each lines.json line is a
+standalone snippet; all snippets of a page go into one pdflatex run (one page per line).
+
+Pass 1 renders every line page in one gs call at 400 dpi and takes each line's ink height. Pass 2
+re-sets every line whose height ratio to the original's ink inside the region is off by >= 3%
+with `\scalebox`, and renders all of them in one gs call at 400 dpi. Each line raster is then
+placed with its ink box's top-left on the top-left of the original's ink box inside the region
+(MathPix px → page px per page and per axis; CropBox frame).
+
+Registration is therefore per line by construction. G-R2's segment search remains only for
+readings that have no region boxes.
+
+Measured (scratch, 2207.03560 p1, MathPix, both sides CM):
+- 72 of 83 lines have glyph residual 0;
+- the other 11 are real reading differences: quotes, lost bold/italic/small caps, a spurious
+  space, a lost dagger, a caption formula;
+- in-memory rescaling from one 600-dpi render gives 20 of 83 instead, so it is not used;
+- cost: pdflatex 0.46 + 1.55 s and gs 0.45 s per page (above the board's 1 s; the second
+  pdflatex should cover only the rescaled lines).
 
 Guarantees
-- R1 Every B line is paired at most once and every A line at most once.
-- R2 A against itself (the same stream twice) pairs every line, with offset (0, 0).
-- R3 The output does not depend on the order of lines inside a bucket (sorted keys).
+- R1 Every line of the reading has exactly one placement or one refusal: a LaTeX error, or no ink
+  in its region on either side. A refusal is a finding, never a silent drop.
+- R2 A page rendered from its own text layer, in its own fonts, places every line with offset 0.
 
 ### Unit 5 — matching (`inkcmp/match.h`)
 
@@ -161,9 +164,10 @@ Each pair (a, b) is matched glyph by glyph inside the two line crops. Labelling 
 is allowed: the rule against full-page labelling is GLYPHDRILL3's, and inkdrill's C works on crops
 (coordinator, 2026-11-16).
 
-1. Words: each line is cut at its fingerprint gaps. When A and B have the same number of words
-   and every pair of words has widths within 2 px, each word pair gets its own dx (the difference
-   of the word x0s). Otherwise the line's dx is used for every word.
+1. Words: each line is cut at white column runs >= ceil(lh/4). When A and B have the same number
+   of words, each B word is mapped onto its A word by its own x-offset and x-scale (A width / B
+   width): justification and font expansion (2207.03560: the original's words are ~2% wider at
+   the same height). Otherwise the line is compared without word mapping.
    - This answers the measured tail: in all 4 unchanged lines with nonzero XOR, a group of glyphs
      sat more than 3 px along the line from the line offset.
    - Following the drift glyph by glyph was tried twice and was worse (17 nonzero lines instead of 4).
@@ -187,8 +191,11 @@ rendered again in CM. If on such a page the t = 1 XOR flags most glyphs:
 - XOR is kept only for pairs inside one font (decided per pair by the XOR of matched glyphs);
 - across fonts, a component is compared by font-free features (GLYPHDRILL3's key16, ends/caps,
   holes, crossings, or the ffeat distance; T-0149's measurement).
-Which branch holds is decided by the experiment "original against rendered reading" before this
-unit is frozen.
+Measured (scratch): on a Times original (2209.02970 p1, NimbusRomNo9L) with the CM rendering, 0 of
+58 lines are at 0 and 5478 of 5628 glyphs differ, so XOR does not cross fonts. A first font-free
+check (each word's sequence of component hole counts) agrees on 181/229 words with equal text
+(79%), against 716/727 (98.5%) in CM against CM: too weak alone. The cross-font comparison
+is T-0149's feature work (key16, ends/caps, crossings, ffeat) and is not fixed here.
 
 ### Unit 6 — findings (`inkcmp/findings.h`)
 
