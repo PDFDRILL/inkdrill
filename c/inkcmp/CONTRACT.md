@@ -205,6 +205,31 @@ Guarantees
 - XOR at t = 1, the same-font route above, misses n→u in Times (10 px). Glyph labels and Reeb signatures across fonts
   were measured and do not carry: 68% label agreement, and Reeb is noisy under phase.
 
+**Threshold frozen at solid >= 7 per glyph** (2026-11-16, before the fresh-page run).
+Fresh plants (seed 11, 12 per page) on pages not used to find the threshold. Same run:
+- glyphs paired by position (x order plus text alignment);
+- each line set at the original's text size (content stream);
+- link annotations hidden;
+- a glyph whose original font class differs from the reading's counts as a style finding: bold, italic, mono, or
+  maths against text;
+- Euler maths mapped to eulervm.
+
+| page | equal-text glyphs | style findings | other flags | plants flagged |
+|---|---|---|---|---|
+| 2207.03560 p1, CM | 4095 | 132 | 0 | 16/17, missed n→u (solid 2, 9 pt) |
+| 1604.04795 p2, Times | 4829 | 303 | 0 | 15/15 |
+| 1407.4737 p2, URW Palladio + Euler | 2547 | 134 | 40 (37 maths: display layout, Euler glyph sources; 3 text in one heading) | 31/31* |
+
+\* The 32nd "plant" is φ against ϕ with identical ink (a codepoint label), not a swap.
+
+Open:
+- the 9 pt miss needs a measure that keeps 2-px strokes (solid 2x2 discards them), tested on new plants;
+- displayed maths needs its own comparison;
+- cost per page (1604.04795 p2, 100 lines): pdflatex 0.71 s, the reading's line pages at 8x in one poppler call 3.26 s,
+  the original's line crops at 8x, one call per line, 18.33 s. That is about 22 s against the board's 1 s, before the
+  sampling. A C judge would rasterise the original's glyphs from their embedded font programs at their origins
+  (U9's type1 → charstring → scan route), not render pages.
+
 **Scan branch (named, not measured).** A scan has no text layer, so the glyph positions come from the original's ink
 (GLYPHDRILL3 word boxes or blob centroids). Its noise floor has its own measurement before it gets a threshold.
 
