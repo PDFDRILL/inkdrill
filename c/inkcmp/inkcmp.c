@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 199309L
 #include "page.h"
 #include "white.h"
+#include "lines.h"
 #include "layout/blocks.h"
 #include <errno.h>
 #include <stdio.h>
@@ -20,6 +21,7 @@ static int usage(void) {
         "       inkcmp white  [--threshold T] < page.pgm\n"
         "       inkcmp space  [--threshold T] [--lh PX] [--vsep-w F] [--vsep-h F] [--hsep-w F] [--hsep-h F]\n"
         "                     [--overlap F] [--max-sep N] < page.pgm\n"
+        "       inkcmp lines  [--threshold T] < pages.pgm   (one or more concatenated pages; T default: automatic)\n"
         "       T: 1..256 (default 154), ink = pixel < T\n", stderr);
   return 2;
 }
@@ -43,9 +45,41 @@ static int load_error(int rc) {
   return rc;
 }
 
+/* unit 7: every page of the stream, INKLINES1 blocks (CONTRACT.md unit 7) */
+static int lines_main(int argc, char **argv) {
+  uint32_t t = 0;
+  for (int i = 2; i < argc; i++) {
+    if (!strcmp(argv[i], "--threshold") && i + 1 < argc && whole(argv[i + 1], 256, &t) && t > 0) i++;
+    else return usage();
+  }
+  static char obuf[1 << 16]; setvbuf(stdout, obuf, _IOFBF, sizeof obuf);
+  double t0 = now_ms();
+  for (unsigned page = 1;; page++) {
+    uint8_t *g; uint32_t w, h;
+    int rc = ic_grey_from_pgm(stdin, &g, &w, &h);
+    if (rc == 1 && page > 1) break;
+    if (rc) return load_error(rc == 1 ? 4 : rc);
+    IcLines L;
+    rc = ic_lines(g, w, h, t, &L);
+    free(g);
+    if (rc) return load_error(5);
+    printf("INKLINES1 page %u %u %u threshold %u lh %u m %u lines %zu\n", page, w, h, L.threshold, L.lh, L.m, L.n);
+    for (size_t i = 0; i < L.n; i++)
+      printf("%s %u %u %u %u\n", ic_line_type(L.l[i].type), L.l[i].x0, L.l[i].y0, L.l[i].x1, L.l[i].y1);
+    ic_lines_free(&L);
+    double t1 = now_ms();
+    fprintf(stderr, "inkcmp lines: page %u, %u x %u, %.1f ms\n", page, w, h, t1 - t0);
+    t0 = t1;
+  }
+  puts("end");
+  if (fflush(stdout) || ferror(stdout)) { fputs("inkcmp: write error\n", stderr); return 3; }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) return usage();
   const char *cmd = argv[1];
+  if (!strcmp(cmd, "lines")) return lines_main(argc, argv);
   int is_rle = !strcmp(cmd, "rle"), is_blocks = !strcmp(cmd, "blocks"), is_white = !strcmp(cmd, "white"),
       is_space = !strcmp(cmd, "space");
   if (!is_rle && !is_blocks && !is_white && !is_space) return usage();

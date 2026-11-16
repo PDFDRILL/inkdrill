@@ -272,15 +272,26 @@ In the library sample (299 documents, pp. 1-3), 72% of documents use only Type 1
 ## Unit 7 — lines (DRAFT, 2026-11-17): MathPix-shaped line geometry from ink, against YOLO
 
 The owner's question (2026-11-17): can a reduced blob/white-space detector give the line geometry of a MathPix
-lines.json faster than Gemma4's YOLO route, at the same accuracy? The prototype is scratch Python with PIL
-(`work/run-files/blob-lines/blob_lines.py`), and the C port as `inkcmp lines` is next. Per page:
+lines.json faster than Gemma4's YOLO route, at the same accuracy?
+
+    inkcmp lines [--threshold T] < pages.pgm        (one or more concatenated P5 pages, as gs -sOutputFile=%stdout)
+    INKLINES1 page <n> <W> <H> threshold <t> lh <lh> m <m> lines <k>
+    <text|math|equation_number|page_info|diagram> <x0> <y0> <x1> <y1>        (k rows, half-open page pixels)
+    ...
+    end
+
+`c/inkcmp/lines.c` (2026-11-17) is a port of the scratch prototype (`work/run-files/blob-lines/blob_lines.py`, PIL).
+It equalled the prototype on all 5501 lines of the three documents below, and then took two measured changes,
+marked "(C)" in the steps. Tests are in `tests-c/test_inkcmp_lines.py`: a pdflatex page against pdftotext's
+boxes, where every type fires, and the same page under a gutter shadow and dust gives the same lines. Per page:
 
 1. **Ink threshold, automatic per page.** Take the Otsu split t (paper against everything else) and the dark
    class's mean d. Ink is a pixel < (d + t)/2; a bilevel page uses 128. A grey shadow or fringe lies between the
    two and drops out.
-2. **Edge shadows.** Columns in the outer 8% with > 50% ink (rows: > 80%) are blanked out to the edge. Then, by
-   8-connected components: specks < 0.25 x the median component height go, so do components touching the left
-   or right page edge, and so do components taller than half the page.
+2. **Specks and shadows, by 8-connected components.** Specks < 0.25 x the median component height go, so do
+   components touching the left or right page edge (a gutter shadow's core), and so do components taller than
+   half the page. (C) The prototype's earlier step, blanking columns in the outer 8% with > 50% ink, is removed.
+   It changed nothing on Killing and 7 lines on Penev, and it cost Hilbert precision 0.857 -> 0.821.
 3. **Rows.** `inkcmp blocks` (gd3_blocks) gives the line bands. Each band is cut at white column runs
    >= 1.5 lh into pieces, and each piece is tightened to its ink.
 4. **Line height** m = the 20th percentile of the heights of pieces wider than 0.3 W. (The median failed: merged
@@ -291,7 +302,8 @@ lines.json faster than Gemma4's YOLO route, at the same accuracy? The prototype 
 6. **Types, from geometry only:**
    - `equation_number`: a piece <= 4 lh wide at either column edge, >= 2 lh from the rest;
    - `math`: a row indented >= 1.5 lh on both sides, or one that has an equation number; adjacent `math`
-     rows < 0.5 lh apart merge (MathPix boxes a display once);
+     rows < 0.5 lh apart merge (MathPix boxes a display once). (C) An equation number between two such rows
+     does not keep them apart: before this, a lower limit below the number's row became a second `math` box;
    - `page_info`: the first or last row in the outer 7%;
    - `text`: everything else.
 
@@ -305,14 +317,19 @@ sanitize_lines), on the same page images.
 | Hilbert 1902 (10, grey scan, gutter shadow) | 0.859 / 0.812 | 0.876 / 0.912 | developed on |
 | Penev thesis (88 pages from 22 4-up sheets), first run | **0.754 / 0.819** | 0.874 / 0.910 | held out until this run |
 | Penev, after the line-height fix (step 4) | 0.855 / 0.827 | 0.874 / 0.910 | now developed on |
+| **C, `inkcmp lines`:** Killing | 0.942 / 0.902 | 0.943 / 0.917 | developed on |
+| C: Hilbert | 0.859 / 0.857 | 0.876 / 0.912 | developed on |
+| C: Penev | 0.855 / 0.844 | 0.874 / 0.910 | developed on |
 
 Time on this machine (16 cores, CPU):
-- blob: 0.28 s per page for the whole process, Python and PIL, peak 64 MB. `inkcmp blocks` itself takes 9 ms. The
+- `inkcmp lines` (C): 19-49 ms per page (Penev, Hilbert, Killing; 1.2-5.6 Mpx), one process for the stream.
+- blob prototype: 0.28 s per page for the whole process, Python and PIL, peak 64 MB. `inkcmp blocks` itself takes 9 ms. The
   Python component pass is most of the rest.
 - YOLO: 4.9 s per page marginal plus 11 s model load, peak 1.8 GB, and that is before Gemma's OCR, which the YOLO
   route needs for its line boxes.
 
 Still wrong: list items "7. a+b" are split into an equation number and maths, where MathPix keeps one list_item.
 Tables and tables of contents are not modelled (simple_cell, table_of_contents_* are missed). Figures in
-halftone or with detached labels are only partly absorbed. There is no held-out document left: the next test
-needs a fresh one, a document with both a MathPix reading and a YOLO run.
+halftone or with detached labels are only partly absorbed. The held-out test is drillgroup
+`results/heldout-set.tsv` (30 pages with a MathPix lines.json, 6 of them scans; the coordinator, 2026-11-17). It
+is measured once, with this C version, and nothing is tuned on it.

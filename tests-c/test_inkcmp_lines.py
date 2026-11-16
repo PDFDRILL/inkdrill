@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""inkcmp unit 7 (inkcmp/CONTRACT.md unit 7): `inkcmp lines`, line geometry and types from ink. Standard library only.
+
+The page is real. pdflatex sets a paragraph of ten lines, a numbered display, a framed figure with a label inside it,
+and a page number; gs renders it at 300 dpi to PGM. The oracle is independent of the ink: pdftotext -bbox-layout
+gives each text line's box and the "(1)" word box, in pt, scaled to pixels. Every type must fire, each one on its
+own object. A second case puts a scanner's gutter shadow (a grey ramp with a black core at the right edge) and dust
+specks on the same page, and the lines must not change. Skips (prints SKIP) without pdflatex, gs or pdftotext.
+"""
+import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from inkcmp_util import INKCMP, run
+
+DPI = 300
+TEX = r"""\documentclass[11pt]{article}
+\usepackage[a5paper,margin=1.8cm]{geometry}
+\begin{document}
+\noindent The judge reads a page by its ink, not by its text layer. A line is a band of ink that the
+white between lines separates, and a word gap is far narrower than the white around a display. The
+first scan finds the line height, and everything after it is measured in that unit, so the same rules
+hold at any resolution. A display stands indented on both sides, and its number stands at the right
+edge of the column, far from the formula. A figure is one large drawn object, and the labels inside it
+belong to the figure rather than to the text. These eight lines are enough for the median of the line
+heights, and their width defines the column.
+\begin{equation}
+  E = \sum_{k=1}^{n} a_k x^k
+\end{equation}
+\begin{center}\framebox{\parbox[c][4cm][c]{7cm}{\centering Label}}\end{center}
+\end{document}
+"""
+TOOLS = ("pdflatex", "gs", "pdftotext")
+LINE = re.compile(r'<line xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</line>', re.S)
+WORD = re.compile(r'<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</word>')
+
+
+def iou(a, b):
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - ix * iy
+    return ix * iy / u if u else 0
+
+
+def make_page():
+    d = tempfile.mkdtemp(prefix="test-inkcmp-lines-")
+    (Path(d) / "p.tex").write_text(TEX)
+    subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "p.tex"], cwd=d, capture_output=True,
+                   check=True)
+    pdf = str(Path(d) / "p.pdf")
+    pg = subprocess.run(["gs", "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=pgmraw", f"-r{DPI}",
+                         "-sOutputFile=%stdout", pdf], capture_output=True, check=True).stdout
+    x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+    shutil.rmtree(d)
+    k = DPI / 72
+    lines = [(tuple(float(v) * k for v in m[:4]), re.sub(r"<[^>]+>", " ", m[4]).split())
+             for m in LINE.findall(x)]
+    words = [(tuple(float(v) * k for v in m[:4]), m[4]) for m in WORD.findall(x)]
+    return pg, lines, words
+
+
+def parse_pgm(b):
+    m = re.match(rb"P5\s+(?:#[^\n]*\n\s*)*(\d+)\s+(\d+)\s+255\s", b)      # gs writes a comment line
+    return int(m[1]), int(m[2]), bytearray(b[m.end():])
+
+
+def lines_of(pgm_bytes):
+    p = run([INKCMP, "lines"], pgm_bytes)
+    assert p.returncode == 0, p.stderr
+    out = p.stdout.decode().splitlines()
+    assert out[0].startswith("INKLINES1 page 1 ") and out[-1] == "end", out[:2]
+    return [(f[0], tuple(int(v) for v in f[1:])) for f in (ln.split() for ln in out[1:-1])]
+
+
+def shadowed(pgm_bytes):
+    """the same page with a gutter shadow at the right edge and dust specks in the margins"""
+    w, h, px = parse_pgm(pgm_bytes)
+    band = w // 20
+    for x in range(w - band, w):
+        t = (x - (w - band)) / band                       # 0 .. 1 towards the edge
+        v = 0 if t > 0.6 else int(235 - 200 * t / 0.6)    # grey ramp, then black
+        for y in range(h):
+            px[y * w + x] = min(px[y * w + x], v)
+    for i in range(40):                                   # 2x2 specks
+        x, y = 30 + (i * 97) % (w // 10), 40 + (i * 211) % (h - 80)
+        for dy in (0, 1):
+            for dx in (0, 1):
+                px[(y + dy) * w + x + dx] = 0
+    return b"P5\n%d %d\n255\n" % (w, h) + bytes(px)
+
+
+def check(got, lines, words):
+    types = {t for t, _ in got}
+    assert {"text", "math", "equation_number", "diagram", "page_info"} <= types, types
+    text = [b for t, b in got if t == "text"]
+    # pdftotext's paragraph lines (above the display): each one is a text line here, and nothing else is text
+    num = next(b for b, w in words if w == "(1)")
+    para = [b for b, ws in lines if b[3] < num[1] - 30]
+    assert len(para) >= 8, len(para)
+    for b in para:
+        best = max(iou(b, t) for t in text)
+        assert best >= 0.7, (b, best)
+    assert len(text) == len(para), (len(text), len(para))
+    # the number "(1)" and the display, one box from the upper limit to the lower one
+    eq = [b for t, b in got if t == "equation_number"]
+    assert len(eq) == 1 and iou(eq[0], num) >= 0.6, (eq, num)
+    disp = [b for t, b in got if t == "math"]
+    sigma = [b for b, w in lines if w == ["n"] or w == ["k=1"]]
+    assert len(disp) == 1 and disp[0][2] < eq[0][0], disp
+    tol = 0.3 * (para[0][3] - para[0][1])                 # pdftotext boxes are font boxes, the ink sits inside
+    assert len(sigma) == 2 and all(disp[0][1] <= b[1] + tol and b[3] - tol <= disp[0][3] for b in sigma), (disp, sigma)
+    # the figure holds its label: no text line inside the frame
+    fig = [b for t, b in got if t == "diagram"]
+    assert len(fig) == 1, fig
+    lab = next(b for b, w in words if w == "Label")
+    f = fig[0]
+    assert f[0] <= lab[0] and lab[2] <= f[2] and f[1] <= lab[1] and lab[3] <= f[3], (f, lab)
+    assert not [b for t, b in got if t != "diagram" and f[0] <= (b[0] + b[2]) / 2 <= f[2]
+                and f[1] <= (b[1] + b[3]) / 2 <= f[3]]
+    # the page number, at the bottom
+    pi = [b for t, b in got if t == "page_info"]
+    pnum = next(b for b, w in words if w == "1")
+    inside = lambda a, b, t: b[0] - t <= a[0] and a[2] <= b[2] + t and b[1] - t <= a[1] and a[3] <= b[3] + t
+    assert len(pi) == 1 and inside(pi[0], pnum, tol), (pi, pnum)       # a narrow digit: font box >> ink
+
+
+def test_L1_types_and_boxes_on_a_real_page(page):
+    pg, lines, words = page
+    check(lines_of(pg), lines, words)
+    return 1
+
+
+def test_L2_gutter_shadow_and_dust_change_nothing(page):
+    pg, lines, words = page
+    clean = lines_of(pg)
+    dirty = lines_of(shadowed(pg))
+    check(dirty, lines, words)
+    assert dirty == clean, (sorted(set(dirty) ^ set(clean)))[:8]
+    return 1
+
+
+def test_L3_two_pages_in_one_stream(page):
+    pg, _, _ = page
+    p = run([INKCMP, "lines"], pg + shadowed(pg))
+    out = p.stdout.decode().splitlines()
+    assert p.returncode == 0 and sum(ln.startswith("INKLINES1 page ") for ln in out) == 2 and out[-1] == "end"
+    p = run([INKCMP, "lines"], pg + b"P5\n10 10\n255\n" + b"\0" * 5)        # a short second page is an error
+    assert p.returncode == 4, p.returncode
+    return 1
+
+
+if __name__ == "__main__":
+    if not all(shutil.which(t) for t in TOOLS):
+        print("test_inkcmp_lines: SKIP (needs %s)" % ", ".join(TOOLS))
+    else:
+        page = make_page()
+        for name, f in sorted((k, v) for k, v in globals().items() if k.startswith("test_")):
+            print("test_inkcmp_lines %s: ok (%d cases)" % (name[5:], f(page)))

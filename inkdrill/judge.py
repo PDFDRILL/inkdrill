@@ -150,7 +150,8 @@ def leaves(page: dict) -> list[dict]:
 
 
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> collections.Counter:
-    doc = json.load(open(lines_json, encoding="utf-8"))
+    with open(lines_json, encoding="utf-8") as fh:
+        doc = json.load(fh)
     pg = next((p for p in doc["pages"] if p.get("page") == pno), None) or doc["pages"][pno - 1]
     pw_pt, _ = page_size(a_pdf, pno)
     k = pw_pt * S / pg["page_width"]                  # lines.json px -> 400-dpi px

@@ -31,8 +31,8 @@ repin:
 	@cat $(PIN)
 
 # inkcmp: the C judge (c/inkcmp/CONTRACT.md), moved from GLYPHDRILL3 d6bf588 byte-identical
-INKCMP = c/inkcmp/inkcmp.c c/inkcmp/page.c c/inkcmp/white.c $(GD3)/src/layout/blocks.c
-INKCMP_H = c/inkcmp/page.h c/inkcmp/white.h $(GD3)/src/layout/blocks.h
+INKCMP = c/inkcmp/inkcmp.c c/inkcmp/page.c c/inkcmp/white.c c/inkcmp/lines.c $(GD3)/src/layout/blocks.c
+INKCMP_H = c/inkcmp/page.h c/inkcmp/white.h c/inkcmp/lines.h $(GD3)/src/layout/blocks.h
 $(B)/inkcmp: $(INKCMP) $(INKCMP_H)
 	$(CC) $(CFLAGS) -I$(GD3)/src -Ic/inkcmp -o $@ $(INKCMP) -lm
 $(B)/inkcmp-selftest-two: c/inkcmp/selftest_two.c c/inkcmp/page.c c/inkcmp/page.h
@@ -50,6 +50,7 @@ test-c: all
 	python3 tests-c/test_inkcmp_load.py
 	python3 tests-c/test_inkcmp_blocks.py
 	python3 tests-c/test_inkcmp_white.py
+	python3 tests-c/test_inkcmp_lines.py
 	sh tests-c/test_pin.sh
 test-py:
 	python3 -m unittest discover -s tests -t .
