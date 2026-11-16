@@ -268,3 +268,51 @@ In the library sample (299 documents, pp. 1-3), 72% of documents use only Type 1
   - at most 1% of unchanged pairs have any finding;
   - A against A gives no finding.
 - Board: the judge residual column gets its first values, `residual_px` per page.
+
+## Unit 7 — lines (DRAFT, 2026-11-17): MathPix-shaped line geometry from ink, against YOLO
+
+The owner's question (2026-11-17): can a reduced blob/white-space detector give the line geometry of a MathPix
+lines.json faster than Gemma4's YOLO route, at the same accuracy? The prototype is scratch Python with PIL
+(`work/run-files/blob-lines/blob_lines.py`), and the C port as `inkcmp lines` is next. Per page:
+
+1. **Ink threshold, automatic per page.** Take the Otsu split t (paper against everything else) and the dark
+   class's mean d. Ink is a pixel < (d + t)/2; a bilevel page uses 128. A grey shadow or fringe lies between the
+   two and drops out.
+2. **Edge shadows.** Columns in the outer 8% with > 50% ink (rows: > 80%) are blanked out to the edge. Then, by
+   8-connected components: specks < 0.25 x the median component height go, so do components touching the left
+   or right page edge, and so do components taller than half the page.
+3. **Rows.** `inkcmp blocks` (gd3_blocks) gives the line bands. Each band is cut at white column runs
+   >= 1.5 lh into pieces, and each piece is tightened to its ink.
+4. **Line height** m = the 20th percentile of the heights of pieces wider than 0.3 W. (The median failed: merged
+   pairs raised it.) A piece taller than 1.6 m is cut at its least-ink row when that row holds < 25% of the
+   peak ink, recursively. Pieces are clipped at the column's right edge + 0.5 lh, and specks < 0.4 m are dropped.
+5. **Figures.** Components on a 4x reduced ink image that are > 3 m tall and > 4 m wide, not touching the edge,
+   become `diagram`, and they absorb the pieces whose centres they hold.
+6. **Types, from geometry only:**
+   - `equation_number`: a piece <= 4 lh wide at either column edge, >= 2 lh from the rest;
+   - `math`: a row indented >= 1.5 lh on both sides, or one that has an equation number; adjacent `math`
+     rows < 0.5 lh apart merge (MathPix boxes a display once);
+   - `page_info`: the first or last row in the outer 7%;
+   - `text`: everything else.
+
+Scored against the MathPix lines.json. Recall and precision are at IoU >= 0.5, matched one to one, with
+page_info left out of both. The YOLO route is Gemma4's lines.json (YOLO DocLayout + MFD + ink rows +
+sanitize_lines), on the same page images.
+
+| document (pages) | blob recall / precision | YOLO+Gemma (sane) recall / precision | role |
+|---|---|---|---|
+| Killing 1889 (48, bilevel scan) | 0.939 / 0.890 | 0.943 / 0.917 | developed on |
+| Hilbert 1902 (10, grey scan, gutter shadow) | 0.859 / 0.812 | 0.876 / 0.912 | developed on |
+| Penev thesis (88 pages from 22 4-up sheets), first run | **0.754 / 0.819** | 0.874 / 0.910 | held out until this run |
+| Penev, after the line-height fix (step 4) | 0.855 / 0.827 | 0.874 / 0.910 | now developed on |
+
+Time on this machine (16 cores, CPU):
+- blob: 0.28 s per page for the whole process, Python and PIL, peak 64 MB. `inkcmp blocks` itself takes 9 ms. The
+  Python component pass is most of the rest.
+- YOLO: 4.9 s per page marginal plus 11 s model load, peak 1.8 GB, and that is before Gemma's OCR, which the YOLO
+  route needs for its line boxes.
+
+Still wrong: list items "7. a+b" are split into an equation number and maths, where MathPix keeps one list_item.
+Tables and tables of contents are not modelled (simple_cell, table_of_contents_* are missed). Figures in
+halftone or with detached labels are only partly absorbed. There is no held-out document left: the next test
+needs a fresh one, a document with both a MathPix reading and a YOLO run.
