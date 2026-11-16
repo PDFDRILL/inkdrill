@@ -185,17 +185,28 @@ Guarantees
 - M2 XOR is symmetric under exchanging A and B (computed on both sides).
 - M3 A component whose box exceeds the window is never matched; it is reported, never dropped.
 
-**Open branch: a font-tolerant comparison.** The plants above keep the font and the renderer. The
-judge's real input is an original, possibly in Times with its own line breaks, against our reading
-rendered again in CM. If on such a page the t = 1 XOR flags most glyphs:
-- XOR is kept only for pairs inside one font (decided per pair by the XOR of matched glyphs);
-- across fonts, a component is compared by font-free features (GLYPHDRILL3's key16, ends/caps,
-  holes, crossings, or the ffeat distance; T-0149's measurement).
-Measured (scratch): on a Times original (2209.02970 p1, NimbusRomNo9L) with the CM rendering, 0 of
-58 lines are at 0 and 5478 of 5628 glyphs differ, so XOR does not cross fonts. A first font-free
-check (each word's sequence of component hole counts) agrees on 181/229 words with equal text
-(79%), against 716/727 (98.5%) in CM against CM: too weak alone. The cross-font comparison
-is T-0149's feature work (key16, ends/caps, crossings, ffeat) and is not fixed here.
+**Born-digital branch: phase-exact per glyph** (scratch, T-0148, 2026-11-16).
+- The snippet preamble takes the original's text family from pdffonts:
+  - Times/Nimbus → times;
+  - Helvetica → helvet;
+  - Palatino → newpxtext;
+  - CM/LM → default.
+  Unmapped families are reported.
+- Glyph origins come from both content streams (mutool stext `<char x y>`).
+- Both sides are rendered unhinted by poppler at 8 x 400 dpi; the original is rendered per line crop. Ghostscript hints
+  Type 1 stems at 400 dpi, and -dGridFitTT=0 does not stop it.
+- Each glyph is point-sampled onto the original's 400-dpi grid at its own fractional origin, with offset -0.5/8 px.
+- Score per glyph: "solid" residual, the differing pixels whose 2x2 block differs entirely, at t = 0. This removes the
+  1-px edge flips that remain from about 0.06 px of position difference.
+- Measured on 040123 p2 (pdfTeX, Times, MathPix lines.json):
+  - 2426 glyphs on lines without style loss: solid max 3;
+  - 12 planted single-letter swaps: solid 11-277 (n→u 11 and 14, e→c 17 and 18, r→t 23, h→b 25, all others ≥ 116);
+  - lines where MathPix lost italics or bold, or a mono URL (no family mapping): 168 glyphs ≥ 10, all real findings.
+- XOR at t = 1, the same-font route above, misses n→u in Times (10 px). Glyph labels and Reeb signatures across fonts
+  were measured and do not carry: 68% label agreement, and Reeb is noisy under phase.
+
+**Scan branch (named, not measured).** A scan has no text layer, so the glyph positions come from the original's ink
+(GLYPHDRILL3 word boxes or blob centroids). Its noise floor has its own measurement before it gets a threshold.
 
 ### Unit 6 — findings (`inkcmp/findings.h`)
 
