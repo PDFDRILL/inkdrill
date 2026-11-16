@@ -332,4 +332,29 @@ Still wrong: list items "7. a+b" are split into an equation number and maths, wh
 Tables and tables of contents are not modelled (simple_cell, table_of_contents_* are missed). Figures in
 halftone or with detached labels are only partly absorbed. The held-out test is drillgroup
 `results/heldout-set.tsv` (30 pages with a MathPix lines.json, 6 of them scans; the coordinator, 2026-11-17). It
-is measured once, with this C version, and nothing is tuned on it.
+is measured once, with this C version (7c245b2), and nothing is tuned on it.
+
+**Held-out result, 2026-11-17: gate failed.** Recall and precision are at IoU >= 0.5, one to one, against MathPix.
+The pages are rendered by gs at 300 dpi (CropBox):
+
+| stratum (pages) | truth | ours | matched | recall | precision |
+|---|---|---|---|---|---|
+| maths (8) | 286 | 300 | 271 | 0.948 | 0.903 |
+| german (5) | 201 | 197 | 134 | 0.667 | 0.680 |
+| two_column (6) | 534 | 354 | 217 | 0.406 | 0.613 |
+| table (5) | 835 | 398 | 133 | 0.159 | 0.334 |
+| scan (6) | 399 | 194 | 136 | 0.341 | 0.701 |
+| all born-digital (24) | 1856 | 1249 | 755 | 0.407 | 0.604 |
+| all (30) | 2255 | 1443 | 891 | 0.395 | 0.617 |
+
+Time: `inkcmp lines` takes a median of 66 ms per page (process included). The maximum is 875 ms, on a large scan.
+
+What it shows:
+- The design is a single-column one, and it holds on single-column maths pages.
+- Step 4's clip takes the column's right edge from the median line end. On a two-column page that is the left
+  column's edge, so the right column is cut away.
+- Tables: MathPix boxes each cell (simple_cell), and step 3 cuts only at gaps >= 1.5 lh.
+- The YOLO route's numbers on this set are still to come (gemma4-ee).
+
+The next version needs columns before lines (unit 3's white separators), developed on documents that are in
+neither this set nor the board set.
