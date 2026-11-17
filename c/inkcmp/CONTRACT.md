@@ -391,6 +391,25 @@ The pages are rendered by gs at 300 dpi (CropBox):
 
 Time: `inkcmp lines` takes a median of 66 ms per page (process included). The maximum is 875 ms, on a large scan.
 
+**The YOLO route on the same 30 pages** (Gemma4 e2c6117 `testpool/heldout30/*.sane.lines.json`: YOLO + Gemma +
+lines + sanitize, read once). It is rescored with the same one-to-one scorer (recall / precision):
+
+| stratum | YOLO+Gemma | blob v1 (7c245b2) |
+|---|---|---|
+| maths | 0.899 / 0.908 | 0.948 / 0.903 |
+| german | 0.627 / 0.636 | 0.667 / 0.680 |
+| two_column | 0.212 / 0.212 | 0.406 / 0.613 |
+| table | 0.171 / 0.216 | 0.159 / 0.334 |
+| scan | 0.313 / 0.322 | 0.341 / 0.701 |
+| all | 0.339 / 0.370 | 0.395 / 0.617 |
+
+Time per page: YOLO + lines + sanitize 9.5 s, plus Gemma 79 s on the iGPU; blob v1 66 ms.
+
+**Gate as corrected by the coordinator (rule 5, 2026-11-17): passed.** The gate compares with YOLO on the same
+pages, and blob v1 is within 2 points or ahead on every stratum; the closest is table recall at -1.2 points.
+Neither route is good on two-column, table or scan pages, and the YOLO route has no column model (10 of its pages
+fall back to rough boxes).
+
 What it shows:
 - The design is a single-column one, and it holds on single-column maths pages.
 - Step 4's clip takes the column's right edge from the median line end. On a two-column page that is the left
