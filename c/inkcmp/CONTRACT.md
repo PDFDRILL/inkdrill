@@ -545,6 +545,28 @@ as the refinement's measure.
    before it is added.
 8. Board change: none directly; the figure source of inkcmp lines (the Gemma inklines arm), T-0154 D.
 
+**Detector route, measured (2026-11-17).** ONNX exports of DocLayout-YOLO at a fixed portrait rectangle (as ultralytics
+letterboxes a page: about 256 x 320 at 320), onnxruntime on ONE thread, the page shrunk with cv2 INTER_LINEAR as
+ultralytics does (PIL's antialiased shrink found 14 of 30 figures instead of 28: the preprocessing, not the model).
+Development (the 12 figure pages of 0864, 1805.01788, 2312.11532):
+| model | figures | CPU s/page |
+|---|---|---|
+| 320 x 256 fp32 | 28/30 (93%) | 0.30-0.33 (load 6-12) |
+| 320 x 256 int8 (dynamic) | 28/30 | 0.332 (ConvInteger is not faster here; 19.4 MB) |
+| 288 x 224 fp32 | 27/30 (90%) | 0.270 |
+Held out (`tools/lines-audit/detector_set.py`, figure-set-9003 and -9004, 40 pages, 46 MathPix figures):
+| model | figures whole | body lines swallowed | CPU s/page |
+|---|---|---|---|
+| 288 x 224 | 34/46 (74%) | 14 | 0.240 |
+| 320 x 256 | 36/46 (78%) | 11 (10 on 1809.09528 p5, where MathPix splits a figure of example questions into text) | 0.286 |
+Neither passes the gate (>= 80%, 0 swallowed); 320 x 256 is the best pair.
+Licence and weights: the `doclayout_yolo` and `ultralytics` code is AGPL-3.0 (package metadata); the weights' copy used
+(pix2text's fork of juliozhao/DocLayout-YOLO-DocStructBench) states Apache-2.0 in its card -- the original card is not
+in the local cache, so the original's licence is NOT verified. The run path above needs no AGPL code: an exported ONNX
+graph, onnxruntime (MIT), OpenCV's resize (Apache-2.0), numpy; the export itself used the AGPL package once. Sizes:
+the .pt 40.7 MB (sha256 9a2ee022...), ONNX fp32 75.3 MB, int8 19.4 MB: fp32 needs a fetch script with its sha256
+(rule 7), int8 would fit in git.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
