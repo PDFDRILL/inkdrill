@@ -487,3 +487,39 @@ class JudgeBornDigitalGlyph(JudgeBornDigital):
 class JudgeAccentsGlyph(JudgeAccents):
     """the accent cases on the glyph-raster route: a bar over a drawn overline is measured on the page's ink"""
     ROUTE = "glyph"
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeBatch(unittest.TestCase):
+    """`inkcmp-judge --batch` sets several pages' readings in one pdflatex run (compile_group); each page's output
+    must equal its own run's, line for line -- also when one page holds a line that does not compile and a character
+    pdflatex cannot set, which must not leak into the other page (each job keeps its own failures and drops)."""
+
+    def test_batch_equals_one_page_at_a_time(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-batch-") as d:
+            cases = [("clean", "The mean value of the sample, and 70\\% of it.",
+                      "The mean value of the sample, and 70% of it."),
+                     ("broken", "A line \\textbf{bold} with a macro and a sign here.",
+                      "A line \\textbf{bold} with \\nosuchmacro and a sign ⟁ here."),
+                     ("accent", "The mean value $\\overline{M}$ of the sample in question.",
+                      "The mean value \\(\\bar{M}\\) of the sample in question.")]
+            single, jobs = {}, []
+            for name, page, read in cases:
+                _accent_case(d, name, page, read)
+                pdf, lj = os.path.join(d, name, "page.pdf"), os.path.join(d, name, "r.lines.json")
+                wd1, wd2 = os.path.join(d, name, "one"), os.path.join(d, name, "batch")
+                os.makedirs(wd1)
+                out = io.StringIO()
+                judge.judge(pdf, 1, lj, wd1, out=out)
+                single[name] = out.getvalue()
+                jobs.append((pdf, 1, lj, wd2))
+            st = judge.judge_batch(jobs, bwd=os.path.join(d, "b"))
+            self.assertEqual(st["batched"], 3)
+            self.assertEqual(st["groups"], 1, "one preamble, one pdflatex run")
+            for (name, _, _), job in zip(cases, jobs):
+                with open(os.path.join(job[3], "judge.out"), encoding="utf-8") as fh:
+                    self.assertEqual(fh.read(), single[name], name)
+            self.assertIn("NOT_COMPILED", single["broken"])
+            self.assertIn("D U+", single["broken"], "the character pdflatex cannot set is dropped there")
+            self.assertNotIn("NOT_COMPILED", single["clean"] + single["accent"])
+            self.assertNotIn("D U+", single["clean"] + single["accent"], "and nowhere else")

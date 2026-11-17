@@ -386,6 +386,12 @@ shapes.
 Gate as set ("same findings", median <= 1 s): the findings part corrected -- exact equality cannot hold by
 construction (the render route measures window ink at poppler positions); the time part FAILS.
 
+**Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
+scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
+not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
+rounding moves their glyphs is not measured; their A side is the scan's ink (no font program), so the judge pairs
+there at mutool's origins.
+
 **Scan branch (named, not measured).** A scan has no text layer, so the glyph positions come from the original's ink
 (GLYPHDRILL3 word boxes or blob centroids). Its noise floor has its own measurement before it gets a threshold.
 

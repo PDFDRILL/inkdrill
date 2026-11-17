@@ -1,6 +1,7 @@
 """inkcmp judge, born-digital branch: is a lines.json reading of a PDF page the same ink as the page?
 
-    inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR]
+    inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR] [--route glyph|render]
+    inkcmp-judge --batch <jobs.tsv> [--work DIR] [--route glyph|render]   (one pdflatex per preamble; judge_batch)
 
 Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per glyph). Steps:
 
@@ -85,10 +86,19 @@ def style(font: str) -> str:
 
 
 _STEXT = {}                                           # per judge() call: font_preamble and chars read one page
+_MEMO = None                                          # judge_batch: the original's side, kept between its two passes
+
+
+def memo(key, f, *a):
+    if _MEMO is None:
+        return f(*a)
+    if key not in _MEMO:
+        _MEMO[key] = f(*a)
+    return _MEMO[key]
 
 
 def stext(pdf: str, pages: str) -> str:
-    key = (os.path.abspath(pdf), pages)
+    key = (os.path.abspath(pdf), pages, os.stat(pdf).st_mtime_ns)
     if key not in _STEXT:
         _STEXT[key] = subprocess.run(["mutool", "draw", "-F", "stext", "-o", "-", pdf, pages],
                                      capture_output=True, text=True, check=True).stdout
@@ -274,14 +284,14 @@ def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec") -> tuple:
     return FA, TA, (aw, ah, ab), a400
 
 
-def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res) -> tuple:
+def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res, bo: int = 0) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
     font, an accent the page drew as a rule) is the page's own ink from one 400-dpi render. Also returns that render
     and the 400-dpi renders of the snippet pages the formula lines' rule comparison reads."""
     FA, TA, (aw, ah, ab), a400 = side_a
     FB, tb = side_b[0].result(), side_b[1].result()
-    need = [i + 1 for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs]
+    need = [bo + i + 1 for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs]
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     bjob = pool.submit(pgms, bpdf, need, DPI, wd) if need else None    # poppler renders while inkcmp rasterises
     # every glyph of the original as a placement, bucketed by its quad (+4 px): a pair's window sees its neighbours'
@@ -301,7 +311,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
     hit = lambda q, w: q[0] < w[2] and q[2] > w[0] and q[1] < w[3] and q[3] > w[1]
     jobs, keys = [], []
     for i, ln, b, ca, cb, pairs, _ in work:
-        TB = Origins(spec_b.traced(i + 1, tb.get(i + 1, [])))
+        TB = Origins(spec_b.traced(bo + i + 1, tb.get(bo + i + 1, [])))
         bg = [(q, TB.get(q[1], q[2], html.unescape(q[0]))) for q in cb]
         for k, (pa, pbb) in enumerate(pairs):
             X, Y = pa[1] * S + OX, pa[2] * S + OY
@@ -345,7 +355,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
         scores[key] = r[j]
     bp = bjob.result() if bjob else {}
     pool.shutdown()
-    return scores, (aw, ah, ab, a400), {p - 1: v for p, v in bp.items()}
+    return scores, (aw, ah, ab, a400), {p - 1 - bo: v for p, v in bp.items()}
 
 
 class Spec:
@@ -562,18 +572,34 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12)
     """All lines in one pdflatex run (one page per line). A character pdflatex reports it cannot set ("Unicode
     character ... (U+XXXX) not set up") is dropped from every line and the run is repeated; a line whose source raises
     any other LaTeX error is set aside (an empty page keeps the numbering) and the run is repeated.
-    Returns (pdf path, {line index: error}, dropped characters)."""
-    failed: dict = {}
-    drop: set = set()
-    for _ in range(passes):
-        body, starts, n = [], [], 4 + pre.count("\n") + 1     # documentclass, usepackage, pre, begin{document}
-        for i, (t, sz) in enumerate(zip(texts, sizes)):
-            src = "\\mbox{}" if i in failed else latex_text(t, frozenset(drop))
-            line = "\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}" % (sz * 72.27 / 72,
-                                                                                  sz * 72.27 / 72 * 1.2, src)
-            starts.append(n)
-            n += line.count("\n") + 1
-            body.append(line)
+    Returns (pdf path, {line index: error}, dropped characters). A group of one (`compile_group`)."""
+    pdf, got = compile_group([(texts, sizes)], pre, wd, passes)
+    return pdf, got[0][0], got[0][1]
+
+
+def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str, list]:
+    """Several pages' lines, all set in one preamble, in one pdflatex run per pass (`inkcmp-judge --batch`: pdflatex's
+    start-up is most of its time). Each job keeps its own rules: its own dropped characters (a character is dropped
+    from the job's lines whose line raised it), its own set-aside lines, its own pass count -- a job that has
+    settled, or used its passes, no longer changes. jobs: [(texts, sizes)]. Returns (pdf path, [(failed, dropped,
+    first page)]); job j's line i is page first + i + 1."""
+    failed = [dict() for _ in jobs]
+    drop = [set() for _ in jobs]
+    used = [0] * len(jobs)
+    live = [True] * len(jobs)
+    setas = [(dict(), set()) for _ in jobs]          # what each job's lines are set with: a job stopped by its pass
+    while any(live):                                  # limit keeps its last set lines (as a run of its own would)
+        body, starts, owner_of = [], [], []
+        n = 4 + pre.count("\n") + 1                       # documentclass, usepackage, pre, begin{document}
+        for j, (texts, sizes) in enumerate(jobs):
+            for i, (t, sz) in enumerate(zip(texts, sizes)):
+                src = "\\mbox{}" if i in setas[j][0] else latex_text(t, frozenset(setas[j][1]))
+                line = "\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}" % (sz * 72.27 / 72,
+                                                                                      sz * 72.27 / 72 * 1.2, src)
+                starts.append(n)
+                owner_of.append((j, i))
+                n += line.count("\n") + 1
+                body.append(line)
         with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
             fh.write("\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
                      "\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}\n" + pre + "\n\\begin{document}\n" + "\n".join(body)
@@ -582,33 +608,53 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12)
                        capture_output=True)
         with open(os.path.join(wd, "lines.log"), encoding="utf-8", errors="replace") as fh:
             log = fh.read().splitlines()
-        new, msg, newdrop = {}, None, set()
+        new = [dict() for _ in jobs]
+        newdrop = [set() for _ in jobs]
+        msg, uni = None, None
         for ln in log:
             m = LOGERR.match(ln)
             if m:
-                msg = m.group(1)
+                msg, uni = m.group(1), None
                 u = UNICODE_ERR.search(msg)
-                if u:                                # a character, not the line: drop it everywhere
-                    newdrop.add(chr(int(u.group(1), 16)))
-                    msg = None
+                if u:                                # a character, not the line: drop it from the job's lines
+                    uni, msg = chr(int(u.group(1), 16)), None
+                    if len(jobs) == 1:               # one job: no need to wait for the line it came from
+                        newdrop[0].add(uni)
+                        uni = None
                 continue
             m = LOGLINE.match(ln)
-            if m and msg is not None:
+            if m and (msg is not None or uni is not None):
                 tl = int(m.group(1))
-                src = INPUTLINE.search(msg)          # "\begin{pline} on input line 220 ended by ...": the culprit
+                src = INPUTLINE.search(msg) if msg is not None else None   # "\begin{pline} on input line 220 ..."
                 if src:
                     tl = int(src.group(1))
-                idx = max((j for j, st in enumerate(starts) if st <= tl), default=None)
-                if idx is not None and idx not in failed:
-                    new.setdefault(idx, msg)
-                msg = None
-        if newdrop - drop:                          # characters first: their lines may compile once they are gone
-            drop |= newdrop
-            continue
-        if not new:
-            break
-        failed.update(new)
-    return os.path.join(wd, "lines.pdf"), failed, drop
+                idx = max((k for k, st in enumerate(starts) if st <= tl), default=None)
+                if idx is not None:
+                    j, i = owner_of[idx]
+                    if uni is not None:
+                        newdrop[j].add(uni)
+                    elif i not in failed[j]:
+                        new[j].setdefault(i, msg)
+                msg, uni = None, None
+        for j in range(len(jobs)):
+            if not live[j]:
+                continue
+            used[j] += 1
+            if newdrop[j] - drop[j]:                # characters first: their lines may compile once they are gone
+                drop[j] |= newdrop[j]
+            elif new[j]:
+                failed[j].update(new[j])
+            else:
+                live[j] = False
+            if used[j] >= passes:
+                live[j] = False
+            if live[j]:
+                setas[j] = (dict(failed[j]), set(drop[j]))
+    first, out = 0, []
+    for j, (texts, _) in enumerate(jobs):
+        out.append((failed[j], drop[j], first))
+        first += len(texts)
+    return os.path.join(wd, "lines.pdf"), out
 
 
 def is_formula(ln: dict) -> bool:
@@ -895,17 +941,23 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
             xs, ys = [p[0] for p in comp], [p[1] for p in comp]
             print(f"R L{i} invented {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
 
-def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render") -> collections.Counter:
-    _STEXT.clear()
+def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render",
+          compiler=None) -> collections.Counter:
+    """one page. compiler(texts, sizes, preamble, wd) -> (snippet pdf, failed, dropped, first page) sets the
+    reading's lines; by default one pdflatex run of this page's lines alone (`judge_batch` sets many pages' lines
+    in one run and hands each page its part)"""
+    if _MEMO is None:
+        _STEXT.clear()
     with open(lines_json, encoding="utf-8") as fh:
         doc = json.load(fh)
     pg = next((p for p in doc["pages"] if p.get("page") == pno), None) or doc["pages"][pno - 1]
-    pw_pt, _ = page_size(a_pdf, pno)
+    pw_pt, _ = memo(("size", a_pdf, pno), page_size, a_pdf, pno)
     k = pw_pt * S / pg["page_width"]                  # lines.json px -> 400-dpi px
     lv = leaves(pg)
-    fam, pre = font_preamble(a_pdf, pno)
-    spec_a = Spec(a_pdf, pno, pno, os.path.join(wd, "specA"))
-    ac = spec_a.chars(pno, chars(a_pdf, pno, pno)[0])   # origins as the PDF places them, not as mutool rounds them
+    fam, pre = memo(("pre", a_pdf, pno), font_preamble, a_pdf, pno)
+    spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"))
+    ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
+    comp = compiler or (lambda texts, sizes, pre, wd: compile_lines(texts, sizes, pre, wd) + (0,))   # them
 
     def box(ln):
         r = ln["region"]
@@ -929,22 +981,22 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     side_a = None
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(compile_lines, [ln["text"] for ln in lv], sizes, pre, wd)
+            fut = pool.submit(comp, [ln["text"] for ln in lv], sizes, pre, wd)
             side_a = glyph_side_a(a_pdf, pno, wd, spec_a)
-            bpdf, failed, dropped = fut.result()
+            bpdf, failed, dropped, bo = fut.result()
     else:
-        bpdf, failed, dropped = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
+        bpdf, failed, dropped, bo = comp([ln["text"] for ln in lv], sizes, pre, wd)
     gone = UNMAPPABLE | dropped
     side_b = None
     if route == "glyph" and os.path.exists(bpdf):   # the reading's trace and fonts while its stext is read
         pool_b = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         side_b = (pool_b.submit(Fonts, bpdf, os.path.join(wd, "fontsB"), len(side_a[0].files)),
-                  pool_b.submit(trace, bpdf, 1, None))
+                  pool_b.submit(trace, bpdf, bo + 1, bo + len(lv)))
         pool_b.shutdown(wait=False)
-    bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
-    spec_b = Spec(bpdf, 1, None, os.path.join(wd, "specB")) if bc else None
+    bc = chars(bpdf, bo + 1, bo + len(lv)) if os.path.exists(bpdf) else []
+    spec_b = Spec(bpdf, bo + 1, bo + len(lv), os.path.join(wd, "specB")) if bc else None
     if spec_b:
-        bc = [spec_b.chars(n + 1, cs) for n, cs in enumerate(bc)]
+        bc = [spec_b.chars(bo + n + 1, cs) for n, cs in enumerate(bc)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
                               unpaired_B=0, accents_on_ink=0, unmappable=0, rules_a=0, rules_missing=0,
                               rules_invented=0)
@@ -1049,7 +1101,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     scores, page400, bpages = {}, None, {}
     glyph_owners = [(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner]
     if route == "glyph" and work:
-        scores, page400, bpages = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res)
+        scores, page400, bpages = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res, bo)
     stages = {}
     if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
         aw, ah, ab, a400 = page400                  # a first pass collects the requests, the second reads them
@@ -1093,7 +1145,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
                          glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i])
             continue
-        pw, ph, pb = pgm(bpdf, i + 1, DPI * UP)
+        pw, ph, pb = pgm(bpdf, bo + i + 1, DPI * UP)
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
         cx0, cy0 = max(0, int(b[0]) * UP - mg), max(0, int(b[1]) * UP - mg)
         aw, ah, ab = pgm(a_pdf, pno, DPI * UP, (cx0, cy0, int(b[2] - b[0]) * UP + 2 * mg, int(b[3] - b[1]) * UP + 2 * mg))
@@ -1135,9 +1187,83 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     return res
 
 
+class _Need(Exception):
+    """judge_batch's first pass: the page's lines are known, stop before setting them"""
+
+
+def judge_batch(jobs: list, route: str = "render", bwd: str | None = None) -> dict:
+    """Many pages in one process (`inkcmp-judge --batch`): the reading's lines of all pages that share a preamble are
+    set in ONE pdflatex run (compile_group); its start-up was most of the 0.40 s it cost per page. jobs:
+    [(original pdf, page, lines.json, work dir)]; each job's judge output goes to <work dir>/judge.out, as one
+    `inkcmp-judge ... --work <work dir>` would print it. A group whose PDF does not come out page for page is set again
+    page by page. Returns counts."""
+    global _MEMO
+    _MEMO = {}
+    stats = collections.Counter(jobs=len(jobs))
+    bwd = bwd or tempfile.mkdtemp(prefix="inkcmp-judge-batch-")
+    os.makedirs(bwd, exist_ok=True)
+
+    def finish(j, compiler):
+        a, p, lj, wd = jobs[j]
+        buf = io.StringIO()
+        err = ""
+        try:
+            judge(a, p, lj, wd, out=buf, route=route, compiler=compiler)
+        except _Need:
+            raise
+        except Exception:
+            import traceback
+            err = traceback.format_exc()
+            stats["errors"] += 1
+        with open(os.path.join(wd, "judge.out"), "w", encoding="utf-8") as fh:
+            fh.write(buf.getvalue())
+            if err:
+                fh.write("\n--- stderr ---\n" + err)
+    try:
+        reqs = {}
+        for j, (a, p, lj, wd) in enumerate(jobs):
+            os.makedirs(wd, exist_ok=True)
+
+            def collect(texts, sizes, pre, w, j=j):
+                reqs[j] = (texts, sizes, pre)
+                raise _Need()
+            try:
+                finish(j, collect)                   # pages that need no snippet (family unmapped) finish here
+            except _Need:
+                pass
+        groups = collections.defaultdict(list)
+        for j, (texts, sizes, pre) in reqs.items():
+            if texts:
+                groups[pre].append(j)
+        given = {}
+        for g, (pre, js) in enumerate(groups.items()):
+            gwd = os.path.join(bwd, "group-%d" % g)
+            os.makedirs(gwd, exist_ok=True)
+            pdf, got = compile_group([reqs[j][:2] for j in js], pre, gwd)
+            want = sum(len(reqs[j][0]) for j in js)
+            info = subprocess.run(["pdfinfo", pdf], capture_output=True, text=True).stdout if os.path.exists(pdf) else ""
+            m = re.search(r"Pages:\s+(\d+)", info)
+            if not m or int(m[1]) != want:           # one page's fatal error took the group down: page by page
+                stats["groups_set_again"] += 1
+                continue
+            stats["groups"] += 1
+            for j, (failed, dropped, first) in zip(js, got):
+                given[j] = (pdf, failed, dropped, first)
+        for j in reqs:
+            finish(j, (lambda *a, v=given[j]: v) if j in given else None)
+            stats["batched" if j in given else "alone"] += 1
+    finally:
+        _MEMO = None
+    return stats
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    wd, route = None, "render"
+    wd, route, batch = None, "render", None
+    if "--batch" in argv:
+        j = argv.index("--batch")
+        batch = argv[j + 1]
+        del argv[j:j + 2]
     if "--work" in argv:
         j = argv.index("--work")
         wd = argv[j + 1]
@@ -1149,6 +1275,17 @@ def main(argv=None) -> int:
         if route not in ("glyph", "render"):
             print("inkcmp-judge: --route glyph|render", file=sys.stderr)
             return 2
+    if batch is not None:
+        if argv:
+            print("inkcmp-judge --batch JOBS.tsv [--route glyph|render] [--work DIR]: one job per line,"
+                  " pdf<TAB>page<TAB>lines.json<TAB>work dir", file=sys.stderr)
+            return 2
+        with open(batch, encoding="utf-8") as fh:
+            jobs = [(f[0], int(f[1]), f[2], f[3]) for f in (l.rstrip("\n").split("\t") for l in fh)
+                    if len(f) == 4 and not f[0].startswith("#")]
+        st = judge_batch(jobs, route=route, bwd=wd)
+        print("BATCH1 " + " ".join(f"{k} {v}" for k, v in sorted(st.items())))
+        return 0
     if len(argv) != 3:
         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
         return 2
