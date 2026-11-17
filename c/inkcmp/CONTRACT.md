@@ -465,6 +465,28 @@ Oracle for the count: U9's nest() on the Python raster, 1056 placements (tests-c
    and 2312.11532 before any C.
 8. Board change: none directly (inkcmp lines is the Gemma inklines arm's line step, not the judge); T-0154 D turns green.
 
+**Step 2, measured (2026-11-17, `tools/lines-audit/vecfig.py <doc> 12`; gate: >= 5/6 on 0864 with no body line
+swallowed, then 1805.01788 and 2312.11532).** Candidates: the PDF's drawn paths clustered at 12 pt, AND its placed
+images (`fill_image`); panels side by side in one row are one figure unless each has a text line of its own just
+under it (a sub-caption: MathPix keeps those apart); labels are inkcmp's own line boxes within 12 pt, never one wider
+than a third of the figure (a body line). Against MathPix's figure regions (IoU >= 0.5), body lines swallowed
+(MathPix text lines outside every figure and caption whose centre falls in one):
+
+| document | figures matched | swallowed | the misses |
+|---|---|---|---|
+| 0864 | 5 of 6 | 0 | p3 drawn with glyphs only |
+| 1805.01788 | 16 of 16 | 0 | -- (14 are images: before images 0 of 16) |
+| 2312.11532 | 6 of 8 | 0 | p3, p4: text figures (framed text, 3 rules, no drawing) |
+
+Attempts on the way, each measured on the same pages: labels glyph by glyph (12 pt: 4/6 on 0864, at 20 pt half a page
+swallowed); labels as line boxes bounded by width (3/6, 0 swallowed: the p4 panels stayed apart); panels joined in
+a row (5/6 on 0864, but 4/16 and 27 swallowed on 1805.01788's sub-captioned image grid); the sub-caption exception
+(the table above).
+What this route cannot reach (they need the ink route or a learned detector): figures drawn with glyphs only (0864
+p3), text figures whose only drawing is a few rules (2312.11532 p3, p4), and every scan (no paths, no placed vector
+drawing -- a scan page is one image). Next: the same three documents through inkcmp lines with this as its figure
+source on born-digital pages, so T-0154 D is measured on inkcmp's own output, then the C port.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
