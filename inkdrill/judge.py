@@ -18,7 +18,13 @@ Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per
 
 Output, one line per paired glyph:
     G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font>
-Then `U L<i> A|B <char>` for unpaired glyphs, then a summary line `JUDGE1 lines .. glyphs .. flagged ..`.
+Then `U L<i> A|B <char>` for unpaired glyphs, `N L<i> NOT_COMPILED <LaTeX error>` for a line pdflatex could not set
+(the other lines still set and pair), a summary line `JUDGE1 lines .. glyphs .. flagged .. not_compiled ..`, and
+`STATUS OK|NOT_COMPILED|NO_TEXT|FONT_UNMAPPED`: a page with 0 paired glyphs has no residual. FONT_UNMAPPED: most of
+the page's text glyphs are in a family TeX cannot set (e.g. a commercial font), so same-font XOR does not apply.
+Line text goes through `latex_text` first: characters pdflatex cannot set (U+2212, Greek, arrows, ...) become LaTeX,
+compatibility forms (ligatures, full-width) are NFKC-normalised. The engine stays pdflatex: the phase-exact scoring
+was validated on its Type 1 fonts.
 A style is x (maths font), m (mono), b (bold), i (italic) or `-`. A flag where the two styles differ is a
 style finding (MathPix lost italic or bold). One where they are equal is a glyph finding.
 
@@ -35,6 +41,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 
 DPI, UP = 400, 8
 S = DPI / 72
@@ -50,6 +57,7 @@ FAMILIES = [  # (regex on the PDF font name, preamble, family)
      "helvetica"),
     (r"Palatino|Palladio|TeXGyrePagella|pplr|uplr", r"\renewcommand{\rmdefault}{ppl}", "palatino"),
     (r"^CM|^LM|SFRM|LMRoman", "", "cm"),
+    (r"LinLibertine|LinBiolinum|Libertine", r"\usepackage{libertine}", "libertine"),
 ]
 MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|txmi|TXMI", r"\usepackage{newtxmath}"),
            (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}")]
@@ -57,6 +65,10 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
 
 def style(font: str) -> str:
     f = font.lower()
+    lib = re.search(r"lin(?:libertine|biolinum)([a-z0-9]*)$", f)       # LinLibertineTI: T (Type 1), B bold, I italic
+    if lib:
+        suf = lib.group(1)
+        return ("b" if "b" in suf else "") + ("i" if "i" in suf else "")
     return (("x" if re.search(r"eurm|eusm|eufm|euex|cmmi|cmsy|cmex|msbm|msam", f) else "")
             + ("m" if re.search(r"mono|monl|courier|cmtt|inconsolata|typewriter|tt\d", f) else "")
             + ("b" if re.search(r"bold|medi|bx|black|semibold|demi", f) else "")
@@ -86,20 +98,25 @@ def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
 
 
 def font_preamble(pdf: str, page: int) -> tuple[str, str]:
-    """the page's text family, chosen by glyph count, plus any maths family it uses"""
+    """the page's text family, chosen by glyph count, plus any maths family it uses; "unmapped" when most text
+    glyphs are in fonts no FAMILIES entry sets (the judge then reports STATUS FONT_UNMAPPED, no residual)"""
     glyphs, font = collections.Counter(), ""
     for fn, c in re.findall(r'<font name="([^"]*)"|<char c="(.*?)"', stext(pdf, str(page))):
         if fn:
             font = fn.split("+")[-1]
         elif c.strip():
             glyphs[font] += 1
-    fams = collections.Counter()
+    fams, unmapped = collections.Counter(), 0
     for n, cnt in glyphs.items():
         if re.search(MATHFONT + r"|Inconsolata|Courier|CMTT|Mono|Symbol|Dingbat", n):
             continue
         hit = next((f for r, _, f in FAMILIES if re.search(r, n)), None)
         if hit:
             fams[hit] += cnt
+        else:
+            unmapped += cnt
+    if unmapped > sum(fams.values()):     # most text glyphs are in a family TeX cannot set: no same-font XOR
+        return "unmapped", ""
     fam = fams.most_common(1)[0][0] if fams else "cm"
     pre = [next(p for _, p, f in FAMILIES if f == fam)]
     pre += [p for r, p in MATHFAM if any(re.search(r, n) for n in glyphs)]
@@ -148,6 +165,107 @@ def leaves(page: dict) -> list[dict]:
     return [ln for ln in page["lines"]
             if ln.get("text") and not ln.get("children_ids") and ln["type"] not in ("page_info", "diagram")]
 
+#: characters pdflatex (utf8, OT1/T1) cannot set, as LaTeX: (in text mode, in maths mode). Found in the 30 board
+#: readings (2026-11-17): U+2212 alone dropped whole pages. Compatibility forms (ligatures, full-width) go through
+#: NFKC instead; scripts pdflatex has no fonts for (Cyrillic, Thai, CJK, ...) are left alone and fail per line.
+UNI_TEX = {
+    "\u2212": ("$-$", "-"), "\u00d7": ("$\\times$", "\\times"), "\u2192": ("$\\rightarrow$", "\\rightarrow"),
+    "\u2190": ("$\\leftarrow$", "\\leftarrow"), "\u2264": ("$\\leq$", "\\leq"), "\u2265": ("$\\geq$", "\\geq"),
+    "\u2260": ("$\\neq$", "\\neq"), "\u00b1": ("$\\pm$", "\\pm"), "\u2248": ("$\\approx$", "\\approx"),
+    "\u221e": ("$\\infty$", "\\infty"), "\u2208": ("$\\in$", "\\in"), "\u2211": ("$\\sum$", "\\sum"),
+    "\u2202": ("$\\partial$", "\\partial"), "\u00b7": ("$\\cdot$", "\\cdot"), "\u2026": ("\\dots{}", "\\dots"),
+    "\u2022": ("\\textbullet{}", "\\bullet"), "\u20ac": ("\\texteuro{}", "\\text{\\texteuro}"),
+    "\u2122": ("\\texttrademark{}", "\\text{\\texttrademark}"), "\u00ae": ("\\textregistered{}", "\\text{\\textregistered}"),
+    "\u00a7": ("\\S{}", "\\S"), "\u02c6": ("\\^{}", "\\hat{}"),
+}
+GREEK = {"alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3", "delta": "\u03b4", "epsilon": "\u03b5",
+         "zeta": "\u03b6", "eta": "\u03b7", "theta": "\u03b8", "iota": "\u03b9", "kappa": "\u03ba", "lambda": "\u03bb",
+         "mu": "\u03bc", "nu": "\u03bd", "xi": "\u03be", "pi": "\u03c0", "rho": "\u03c1", "sigma": "\u03c3",
+         "tau": "\u03c4", "upsilon": "\u03c5", "phi": "\u03c6", "chi": "\u03c7", "psi": "\u03c8", "omega": "\u03c9",
+         "Gamma": "\u0393", "Delta": "\u0394", "Theta": "\u0398", "Lambda": "\u039b", "Xi": "\u039e", "Pi": "\u03a0",
+         "Sigma": "\u03a3", "Phi": "\u03a6", "Psi": "\u03a8", "Omega": "\u03a9"}
+for _n, _c in GREEK.items():
+    UNI_TEX[_c] = ("$\\%s$" % _n, "\\%s" % _n)
+UNI_TEX["\u03bf"] = ("o", "o")                       # omicron has no command: it is an o
+
+
+def latex_text(s: str) -> str:
+    """A reading's line as pdflatex input: raw % and # (and & outside maths) escaped, mapped characters (maths mode
+    tracked through $, \\( \\), \\[ \\]), compatibility forms through NFKC, everything else unchanged."""
+    s = "".join(unicodedata.normalize("NFKC", ch)              # compatibility forms first, so a full-width ％
+                if ord(ch) > 126 and unicodedata.decomposition(ch).startswith(("<compat>", "<wide>", "<narrow>"))
+                else ch for ch in s)                           # is escaped like any %
+    out, math, i = [], False, 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and i + 1 < len(s):
+            nx = s[i + 1]
+            if nx in "([":
+                math = True
+            elif nx in ")]":
+                math = False
+            out.append(s[i:i + 2])
+            i += 2
+            continue
+        if ch == "$":
+            math = not math
+            out.append(ch)
+        elif ch in "%#" or (ch == "&" and not math):     # plain-text readers write these raw (MathPix escapes):
+            out.append("\\" + ch)                       # a raw % comments out the line's \end{pline}
+        elif ch in UNI_TEX:
+            out.append(UNI_TEX[ch][1] + " " if math else UNI_TEX[ch][0])
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+LOGERR = re.compile(r"^! (.*)$")
+LOGLINE = re.compile(r"^l\.(\d+)")
+INPUTLINE = re.compile(r"on input line (\d+)")
+
+
+def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 8) -> tuple[str, dict]:
+    """All lines in one pdflatex run (one page per line). A line whose source raises a LaTeX error is set aside
+    (an empty page keeps the numbering) and the run is repeated; returns (pdf path, {line index: error})."""
+    failed: dict = {}
+    for _ in range(passes):
+        body, starts, n = [], [], 4 + pre.count("\n") + 1     # documentclass, usepackage, pre, begin{document}
+        for i, (t, sz) in enumerate(zip(texts, sizes)):
+            src = "\\mbox{}" if i in failed else latex_text(t)
+            line = "\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}" % (sz * 72.27 / 72,
+                                                                                  sz * 72.27 / 72 * 1.2, src)
+            starts.append(n)
+            n += line.count("\n") + 1
+            body.append(line)
+        with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
+            fh.write("\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
+                     "\\usepackage{amsmath,amssymb,amsfonts}\n" + pre + "\n\\begin{document}\n" + "\n".join(body)
+                     + "\n\\end{document}\n")
+        subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
+                       capture_output=True)
+        log = open(os.path.join(wd, "lines.log"), encoding="utf-8", errors="replace").read().splitlines()
+        new, msg = {}, None
+        for ln in log:
+            m = LOGERR.match(ln)
+            if m:
+                msg = m.group(1)
+                continue
+            m = LOGLINE.match(ln)
+            if m and msg is not None:
+                tl = int(m.group(1))
+                src = INPUTLINE.search(msg)          # "\begin{pline} on input line 220 ended by ...": the culprit
+                if src:
+                    tl = int(src.group(1))
+                idx = max((j for j, st in enumerate(starts) if st <= tl), default=None)
+                if idx is not None and idx not in failed:
+                    new.setdefault(idx, msg)
+                msg = None
+        if not new:
+            break
+        failed.update(new)
+    return os.path.join(wd, "lines.pdf"), failed
+
 
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> collections.Counter:
     with open(lines_json, encoding="utf-8") as fh:
@@ -172,18 +290,24 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
         b = box(ln)
         cs = [c[8] for c in ac if inside(c, b) and not re.search(MATHFONT, c[7])]
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
-    body = "\n".join("\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}"
-                     % (sz * 72.27 / 72, sz * 72.27 / 72 * 1.2, ln["text"]) for sz, ln in zip(sizes, lv))
-    with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
-        fh.write("\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
-                 "\\usepackage{amsmath,amssymb,amsfonts}\n" + pre + "\n\\begin{document}\n" + body + "\n\\end{document}\n")
-    subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
-                   capture_output=True)
-    bpdf = os.path.join(wd, "lines.pdf")
+    if fam == "unmapped":
+        print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
+        print("JUDGE1 flagged 0 glyph 0 glyphs 0 lines 0 not_compiled 0 style 0", file=out)
+        print("STATUS FONT_UNMAPPED", file=out)
+        return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
+    bpdf, failed = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
-    res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0)
+    res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}", file=out)
+    if len(bc) != len(lv):            # the document itself did not come out page for page: no line is trusted
+        failed = {i: failed.get(i, "no snippet page (document failed)") for i in range(len(lv))}
+        bc = []
+    for i, e in sorted(failed.items()):
+        print(f"N L{i} NOT_COMPILED {e}", file=out)
+    res["not_compiled"] = len(failed)
     for i, ln in enumerate(lv[:len(bc)]):
+        if i in failed:
+            continue
         b = box(ln)
         ca = sorted((c for c in ac if inside(c, b)), key=lambda c: c[1])
         cb = sorted(bc[i], key=lambda c: c[1])
@@ -229,6 +353,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
                 res["flagged"] += 1
                 res["style" if sa != sb else "glyph"] += 1
     print("JUDGE1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())), file=out)
+    status = "OK" if res["glyphs"] else ("NOT_COMPILED" if res["not_compiled"] else "NO_TEXT")
+    print(f"STATUS {status}", file=out)          # a page with 0 pairs has no residual
     return res
 
 

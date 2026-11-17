@@ -132,3 +132,77 @@ class JudgeBornDigital(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+UNI = [
+    "The temperature fell to $-5$ degrees and rose to $-2$ again,",
+    "while this line has a macro no package defines: \\nosuchmacro here,",
+    "and this last line reads 70% of the plain text as written.",
+]
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeLinesThatDoNotCompile(unittest.TestCase):
+    """A reading's U+2212 is set as $-$ and pairs; a line pdflatex cannot set is NOT_COMPILED and the other lines
+    still typeset and pair (board pages 0864 p4 and lib:88d76967110e p170 had lost every line to one)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-uni-")
+        d = cls.tmp.name
+        src = [UNI[0], "while this line has a macro no package defines: here,", UNI[2].replace("%", "\\%")]
+        with open(os.path.join(d, "page.tex"), "w") as fh:
+            fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm]{geometry}\n\\pagestyle{empty}\n"
+                     "\\begin{document}\n\\noindent\\raggedright\n" + "\\\\\n".join(src) + "\n\\end{document}\n")
+        subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                       capture_output=True, check=True)
+        cls.pdf = os.path.join(d, "page.pdf")
+        x = subprocess.run(["pdftotext", "-bbox-layout", cls.pdf, "-"], capture_output=True, text=True,
+                           check=True).stdout
+        boxes = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+        assert len(boxes) == 3, boxes
+        wpt, hpt = judge.page_size(cls.pdf, 1)
+        k = 200 / 72
+        # the reading as a text-layer reader writes it: the real U+2212, a raw %, and one line that cannot compile
+        texts = ["The temperature fell to \u22125 degrees and rose to \u22122 again,", UNI[1], UNI[2]]
+        doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": [
+            {"type": "text", "text": t, "region": {"top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                                                  "width": int((b[2] - b[0]) * k) + 4,
+                                                  "height": int((b[3] - b[1]) * k) + 4}}
+            for t, b in zip(texts, boxes)]}]}
+        lj = os.path.join(d, "r.lines.json")
+        with open(lj, "w") as fh:
+            json.dump(doc, fh)
+        out = io.StringIO()
+        os.makedirs(os.path.join(d, "w"))
+        cls.res = judge.judge(cls.pdf, 1, lj, os.path.join(d, "w"), out=out)
+        cls.out = out.getvalue().splitlines()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_minus_pairs(self):
+        minus = [ln.split() for ln in self.out if ln.startswith("G L0 &#x2212; ")]   # mutool writes the entity
+        self.assertEqual(len(minus), 2, "both U+2212 glyphs pair")
+        self.assertTrue(all(r[8] == "0" for r in minus), minus)
+
+    def test_broken_line_is_reported_and_the_others_pair(self):
+        self.assertEqual([ln for ln in self.out if ln.startswith("N ")][:1][0].split()[:3], ["N", "L1", "NOT_COMPILED"])
+        self.assertEqual(self.res["not_compiled"], 1)
+        paired = {ln.split()[1] for ln in self.out if ln.startswith("G ")}
+        self.assertEqual(paired, {"L0", "L2"}, "lines 0 and 2 typeset and pair")
+        self.assertEqual(self.res["flagged"], 0)
+        self.assertIn("STATUS OK", self.out)
+
+    def test_latex_text(self):
+        self.assertEqual(judge.latex_text("70% of"), "70\\% of")
+        self.assertEqual(judge.latex_text("5\\% stays"), "5\\% stays")
+        self.assertEqual(judge.latex_text("\u22121 and $a\u2212b$"), "$-$1 and $a- b$")
+        self.assertEqual(judge.latex_text("\ufb01nd \uff05"), "find \\%")
+        self.assertEqual(judge.latex_text("\u03b1"), "$\\alpha$")
+
+    def test_style_of_libertine_names(self):
+        self.assertEqual(judge.style("ABCDEF+LinLibertineTI"), "i")
+        self.assertEqual(judge.style("ABCDEF+LinLibertineTB"), "b")
+        self.assertEqual(judge.style("ABCDEF+LinLibertineT"), "")

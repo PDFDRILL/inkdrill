@@ -237,6 +237,32 @@ flagged), in 7.5 s. `tests/test_judge.py` makes a CM page with pdflatex and plan
 reading gets 0 flags. 7 of 8 plants are flagged, and nothing else is. e->c at 10 pt (crossbar, solid 4) is the
 thin-stroke miss, and an expected-failure test holds it open.
 
+**Judge fixes from the first board run (2026-11-17, rule 4).**
+- **Unicode.** Line text goes through `latex_text` before pdflatex:
+  - characters pdflatex cannot set (U+2212, Greek, arrows, x, euro, ...) become LaTeX, with maths mode tracked;
+  - compatibility forms (ligatures, full-width) are NFKC-normalised;
+  - raw `%`, `#` (and `&` outside maths) are escaped.
+  - Text-layer readers write the real U+2212 and a raw `%` (MathPix writes LaTeX). One such line had ended the
+    whole snippet document: board pages 0864 p4 and lib:88d76967110e p170 paired 0 glyphs. They now pair 3738 and
+    5023 glyphs, with 0 lines not compiled.
+- **Isolation.** A line pdflatex still cannot set (e.g. Cyrillic, Thai) is reported as `N L<i> NOT_COMPILED
+  <error>`. It is set aside, an empty page keeps the numbering, and the run is repeated up to 12 times, so the
+  other lines still pair. The culprit is the line named in "on input line N" when the error gives one.
+- **Output.** JUDGE1 gains `not_compiled`, and a final line `STATUS OK|NOT_COMPILED|NO_TEXT|FONT_UNMAPPED` follows. A
+  page with 0 pairs has no residual.
+- **Fonts.**
+  - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
+  - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
+    measured, because same-font comparison does not apply.
+  - On the board's two-column pages that both readings had failed alike: lib:69bc5c71b881 p16 (CircularStd) is now
+    FONT_UNMAPPED, where it had been 0.97 for both readings.
+  - 1805.01788 p3 (Libertine): MathPix 0.569 -> 0.145 and ours 0.578 -> 0.188, now mostly style findings (lost
+    italic/bold: 550 and 591) rather than glyph findings.
+- **Engine.** It stays pdflatex. 040123 p2 gives identical G rows (176 of 2857).
+- **Tests.** `tests/test_judge.py` JudgeLinesThatDoNotCompile: two U+2212 pair with 0 flags; a line with an
+  undefined macro is NOT_COMPILED while the other two lines pair; `latex_text` and `style` unit cases. Removing the
+  minus mapping or the isolation fails them.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of
