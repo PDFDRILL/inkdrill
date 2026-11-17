@@ -40,11 +40,24 @@ def box(ln):
     return (r["top_left_x"], r["top_left_y"], r["top_left_x"] + r["width"], r["top_left_y"] + r["height"])
 
 
+FIGURE_MODELS = None                                   # --figure-models M320 M640: the cascade's boxes (--figures hint)
+
+
 def inkcmp_boxes(pdf, n, W, H):
+    cmd = [INKCMP, "lines"]
+    if FIGURE_MODELS:
+        sys.path.insert(0, os.path.join(ROOT, "tools", "detector"))
+        import figure_hint as FH
+        import layout_hint as LH
+        hf = os.path.join(os.environ.get("TMPDIR", "."), f"figure-hint-0864-p{n}.txt")
+        with open(hf, "w") as f:
+            for b in FH.figure_boxes(LH.session(FIGURE_MODELS[0]), LH.session(FIGURE_MODELS[1]), LH.page_image(pdf, n)):
+                f.write("1 figure %.5f %.5f %.5f %.5f\n" % b)
+        cmd += ["--hint", hf, "--figures", "hint"]
     pgm = subprocess.run(["gs", "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=pgmraw", "-r250", "-dUseCropBox",
                           f"-dFirstPage={n}", f"-dLastPage={n}", "-sOutputFile=%stdout", pdf],
                          capture_output=True, check=True).stdout
-    out = subprocess.run([INKCMP, "lines"], input=pgm, capture_output=True, check=True).stdout.decode().splitlines()
+    out = subprocess.run(cmd, input=pgm, capture_output=True, check=True).stdout.decode().splitlines()
     hd = out[0].split()
     sx, sy = W / int(hd[3]), H / int(hd[4])
     return [(f[0], (int(f[1]) * sx, int(f[2]) * sy, int(f[3]) * sx, int(f[4]) * sy))
@@ -54,7 +67,11 @@ def inkcmp_boxes(pdf, n, W, H):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--reading", help="a lines.json whose leaf regions are tested (L only); default: inkcmp lines")
+    ap.add_argument("--figure-models", nargs=2, metavar=("M320", "M640"),
+                    help="inkcmp lines with the detector cascade's figure boxes (tools/detector/figure_hint.py)")
     a = ap.parse_args()
+    global FIGURE_MODELS
+    FIGURE_MODELS = a.figure_models
     mp_path, pdf = os.path.join(LIB, "0864.lines.json"), os.path.join(LIB, "0864.pdf")
     if not (os.path.exists(mp_path) and os.path.exists(pdf)):
         print("NOT RUN: no 0864 in the library (LINES_AUDIT_LIB)")

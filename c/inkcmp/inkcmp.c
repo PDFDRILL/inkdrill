@@ -22,9 +22,10 @@ static int usage(void) {
         "       inkcmp white  [--threshold T] < page.pgm\n"
         "       inkcmp space  [--threshold T] [--lh PX] [--vsep-w F] [--vsep-h F] [--hsep-w F] [--hsep-h F]\n"
         "                     [--overlap F] [--max-sep N] < page.pgm\n"
-        "       inkcmp lines  [--threshold T] [--hint FILE] < pages.pgm   (one or more concatenated pages; T default:\n"
-        "                     automatic; FILE: lines 'page text|formula x0 y0 x1 y1', a layout detector's regions as\n"
-        "                     fractions of the page, for a document's page 1)\n"
+        "       inkcmp lines  [--threshold T] [--hint FILE] [--figures ink|hint] < pages.pgm   (one or more\n"
+        "                     concatenated pages; T default: automatic; FILE: lines 'page text|formula|figure x0 y0 x1\n"
+        "                     y1', a layout detector's regions as fractions of the page; --figures hint: its figure\n"
+        "                     boxes replace the ink figure step (default ink: figure lines are ignored))\n"
         "       inkcmp glyphs < job   (glyph rasters from font programs, scored per pair; glyphs.c)\n"
         "       inkcmp rules  < job   (rule-like ink no glyph covers; rules.c)\n"
         "       T: 1..256 (default 154), ink = pixel < T\n", stderr);
@@ -55,6 +56,7 @@ static int load_error(int rc) {
    (independent of the render's resolution); other classes and malformed lines are an error */
 typedef struct { unsigned page; int cls; double x0, y0, x1, y1; } HintIn;
 static HintIn *g_hint; static size_t g_nhint;
+static int g_fig_hints;                              /* --figures hint: figure lines replace step 5 (off: ignored) */
 static int read_hints(const char *path) {
   FILE *f = fopen(path, "r");
   if (!f) { perror(path); return 0; }
@@ -65,7 +67,8 @@ static int read_hints(const char *path) {
     h.y0 = h.y0 < 0 ? 0 : h.y0 > 1 ? 1 : h.y0; h.y1 = h.y1 < 0 ? 0 : h.y1 > 1 ? 1 : h.y1;   /* the page's edge */
     if (!strcmp(cls, "text")) h.cls = IC_HINT_TEXT;
     else if (!strcmp(cls, "formula")) h.cls = IC_HINT_FORMULA;
-    else { fprintf(stderr, "inkcmp lines: %s: class %s is neither text nor formula\n", path, cls); fclose(f); return 0; }
+    else if (!strcmp(cls, "figure")) { if (!g_fig_hints) continue; h.cls = IC_HINT_FIGURE; }   /* --figures hint */
+    else { fprintf(stderr, "inkcmp lines: %s: class %s is not text, formula or figure\n", path, cls); fclose(f); return 0; }
     if (g_nhint == cap) {
       cap = cap ? 2 * cap : 64;
       HintIn *q = realloc(g_hint, cap * sizeof *q);
@@ -82,11 +85,15 @@ static int read_hints(const char *path) {
 
 static int lines_main(int argc, char **argv) {
   uint32_t t = 0;
+  const char *hint_path = NULL;
   for (int i = 2; i < argc; i++) {
     if (!strcmp(argv[i], "--threshold") && i + 1 < argc && whole(argv[i + 1], 256, &t) && t > 0) i++;
-    else if (!strcmp(argv[i], "--hint") && i + 1 < argc) { if (!read_hints(argv[++i])) return 2; }
+    else if (!strcmp(argv[i], "--hint") && i + 1 < argc) hint_path = argv[++i];
+    else if (!strcmp(argv[i], "--figures") && i + 1 < argc && !strcmp(argv[i + 1], "hint")) { g_fig_hints = 1; i++; }
+    else if (!strcmp(argv[i], "--figures") && i + 1 < argc && !strcmp(argv[i + 1], "ink")) { g_fig_hints = 0; i++; }
     else return usage();
   }
+  if (hint_path && !read_hints(hint_path)) return 2;   /* after every flag: --figures decides what figure lines mean */
   static char obuf[1 << 16]; setvbuf(stdout, obuf, _IOFBF, sizeof obuf);
   double t0 = now_ms();
   for (unsigned page = 1;; page++) {

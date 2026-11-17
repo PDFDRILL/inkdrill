@@ -724,6 +724,18 @@ swallowed, 15 listings (3 boxed as figures); the 640 pass ran on 33 of 40; CPU 1
 the same yearbook series as e12s40, the same subtitle ("Tägliche Werte der Monate, ...") between the page title and
 the chart, in no drawn frame. The exclusion is per document, so a series with one layout can recur across seeds.
 
+**Coordinator's ruling on 9007 (2026-11-17): the gate counts the line; the cascade is NOT the default.** No subtitle
+definition (that would tune the definition to the failures). `figdraw.py` draws by document series from now on
+(416ffc3). The cascade is in inkcmp lines behind a flag, off by default (GLYPHDRILL3 9389ebf, pinned):
+`tools/detector/figure_hint.py <dly320x256.onnx> <dly640x512.onnx> <pdf> [first [last]]` writes `n figure x0 y0 x1 y1`
+lines; `inkcmp lines --hint FILE --figures hint` lets them replace step 5's ink figures; with `--figures ink` (the
+default) figure lines are ignored and the output is byte-identical to no hint (`tests-c/test_inkcmp_hint.py` H6; two
+mutants caught). Record of where each stands: **the held-out gate fails by one line** (seed 9007: 42 of 51 whole,
+1 swallowed, board 0.486 CPU s/page); **the current ink figure step keeps 0 of 6 figures whole on 0864**
+(`redtests_0864.py`: D RED), **the cascade 6 of 6** (`redtests_0864.py --figure-models M320 M640`: D green; L 40 of 40
+either way). gemma4-ee may try it for the inklines arm's caption and figure boxes as an experiment, measured by
+pagecheck. Option (2) (one 640 pass per page) still waits for the C reader's speed budget.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

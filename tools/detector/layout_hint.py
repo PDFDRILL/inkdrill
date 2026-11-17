@@ -15,21 +15,34 @@ H, W = 640, 512
 NAMES = {0: "text", 1: "text", 2: "text", 8: "formula"}     # title, plain text, abandon; isolate_formula
 
 
-def hints(model, pdf, page=1):
+def session(model):
     so = ort.SessionOptions(); so.intra_op_num_threads = 1; so.inter_op_num_threads = 1
-    sess = ort.InferenceSession(model, so, providers=["CPUExecutionProvider"])
+    return ort.InferenceSession(model, so, providers=["CPUExecutionProvider"])
+
+
+def page_image(pdf, page):
+    """the page at 150 dpi (pdftoppm, CropBox) as an RGB array"""
     png = subprocess.run(["pdftoppm", "-r", "150", "-cropbox", "-png", "-singlefile", "-f", str(page), "-l", str(page), pdf],
                          capture_output=True, check=True).stdout
-    img = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+    return np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+
+
+def run_graph(sess, img, h_in, w_in, conf=0.2):
+    """one detector pass at h_in x w_in: [(class id, x0, y0, x1, y1)] as fractions of the page; the shrink is cv2's
+    INTER_LINEAR as ultralytics does (no antialiasing), letterboxed grey 114, centred"""
     h, w = img.shape[:2]
-    r = min(W / w, H / h)
+    r = min(w_in / w, h_in / h)
     nw, nh = round(w * r), round(h * r)
-    canvas = np.full((H, W, 3), 114, np.uint8)
-    dx, dy = (W - nw) // 2, (H - nh) // 2
+    canvas = np.full((h_in, w_in, 3), 114, np.uint8)
+    dx, dy = (w_in - nw) // 2, (h_in - nh) // 2
     canvas[dy:dy + nh, dx:dx + nw] = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
     out = sess.run(None, {"images": canvas.astype(np.float32).transpose(2, 0, 1)[None] / 255.0})[0][0]
-    return [(NAMES[int(b[5])], (b[0] - dx) / r / w, (b[1] - dy) / r / h, (b[2] - dx) / r / w, (b[3] - dy) / r / h)
-            for b in out if b[4] >= 0.2 and int(b[5]) in NAMES]
+    return [(int(b[5]), (b[0] - dx) / r / w, (b[1] - dy) / r / h, (b[2] - dx) / r / w, (b[3] - dy) / r / h)
+            for b in out if b[4] >= conf]
+
+
+def hints(model, pdf, page=1):
+    return [(NAMES[c],) + tuple(b) for c, *b in run_graph(session(model), page_image(pdf, page), H, W) if c in NAMES]
 
 
 if __name__ == "__main__":

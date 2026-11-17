@@ -69,8 +69,33 @@ def test_H4_hint_for_another_page_changes_nothing():
     return 1
 
 
+def lines_with(hint_text, *flags):
+    with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+        hf = os.path.join(d, "hint.txt")
+        open(hf, "w").write(hint_text)
+        r = run([INKCMP, "lines", "--hint", hf, *flags], page())
+    assert r.returncode == 0, r.stderr
+    return r.stdout.decode().splitlines()
+
+
+FIG = "1 figure %.5f %.5f %.5f %.5f\n" % (150 / W, 395 / H, 1960 / W, 790 / H)   # over the ten body lines above
+
+
+def test_H6_figure_hints_only_with_the_flag():
+    plain = run([INKCMP, "lines"], page()).stdout.decode().splitlines()
+    assert lines_with(FIG) == plain                                  # default --figures ink: figure lines ignored
+    assert lines_with(FIG, "--figures", "ink") == plain
+    recs = [ln.split() for ln in lines_with(FIG, "--figures", "hint")[1:-1]]
+    figs = [f for f in recs if f[0] == "diagram"]
+    assert len(figs) == 1 and abs(int(figs[0][1]) - 150) <= 1 and abs(int(figs[0][4]) - 790) <= 1, figs
+    inside = [f for f in recs if f[0] != "diagram" and 395 <= (int(f[2]) + int(f[4])) / 2 <= 790]
+    assert not inside, inside                                         # the lines inside the figure belong to it
+    assert any(f[0] == "text" and int(f[2]) > 900 for f in recs)      # the body below stays
+    return 4
+
+
 def test_H5_refusals_and_acceptance():
-    for bad in ("1 figure 0 0 1 1\n", "1 text 0 0 1\n", "one text 0 0 1 1\n"):
+    for bad in ("1 table 0 0 1 1\n", "1 text 0 0 1\n", "one text 0 0 1 1\n"):
         hit, r = centred_type(bad)
         assert hit is None and r.returncode == 2, (bad, r.returncode, r.stderr)
     hit, r = centred_type("")                         # an empty file is accepted: no hints
