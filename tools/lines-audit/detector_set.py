@@ -4,7 +4,8 @@
 rendered at 150 dpi, shrunk as ultralytics does (cv2 INTER_LINEAR, no antialiasing: PIL's antialiased shrink lost
 half the figures), letterboxed (grey 114, centred). Per page and in total: MathPix figures with a detected figure at
 IoU >= 0.5; body lines swallowed (MathPix text lines outside every MathPix figure and caption whose centre falls in a
-detected figure); CPU s per page for the detector (resize included).
+detected figure, and not inside the figure's own drawn frame -- see figure_frames; the old count is printed beside);
+CPU s per page for the detector (resize included).
 --cascade=<dly640x512.onnx> (coordinator, 2026-11-17): the first graph runs on every page; where it finds a figure or a
 table box, the 640 x 512 graph runs too and its figure boxes replace the first's. --board=<dir> adds the mean CPU
 s/page and the share of pages that trigger the second pass over the board's one-page PDFs (no reference needed).
@@ -121,7 +122,30 @@ def free_of(d, lines):
     return (d[0], lo, d[2], hi)
 
 
-hit = n = sw = pages = lhit = ln_ = triggered = 0
+def figure_frames(pdf, page, pg, figs):
+    """the drawn frames of the page's MathPix figures (gate corrected by the coordinator, 2026-11-17: a line printed
+    inside its figure's own drawn frame -- a chart's title inside the chart's box, e12s40 p1 -- is part of the figure,
+    not a swallowed body line). A frame is a drawn path, or the hull of the vector step's cluster of paths and images
+    (vecfig.cluster at 12 pt), that covers >= 90% of a MathPix figure's area and is smaller than 90% of the page."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import vecfig as V
+    info = subprocess.run(["pdfinfo", "-box", "-f", str(page), "-l", str(page), pdf], capture_output=True, text=True).stdout
+    m = re.search(r"Page\s+%d CropBox:\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)" % page, info)
+    k = pg["page_width"] / ((float(m[3]) - float(m[1])) if m else 612.0)
+    raw, imgs = V.paths_of(pdf, page, with_images=True)
+    boxes = [tuple(v * k for v in b) for b in raw]
+    big = 0.9 * pg["page_width"] * pg["page_height"]
+    cands = [b for b in boxes + V.cluster(boxes, 12 * k) if (b[2] - b[0]) * (b[3] - b[1]) < big]
+    out = []
+    for f in figs:
+        fa = (f[2] - f[0]) * (f[3] - f[1])
+        own = [c for c in cands if fa > 0 and max(0, min(c[2], f[2]) - max(c[0], f[0])) * max(0, min(c[3], f[3]) - max(c[1], f[1])) >= 0.9 * fa]
+        if own:
+            out.append(min(own, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])))   # the tightest frame around it
+    return out
+
+
+hit = n = sw = sw_old = pages = lhit = ln_ = triggered = 0
 cpu = 0.0
 if BOARD:                                          # cost only: the board's one-page PDFs, no reference needed
     bc, bt, bn = 0.0, 0, 0
@@ -170,22 +194,34 @@ for tsv in sys.argv[4:]:
         figs = [f for f in figs if f not in lst]
         h_ = sum(max((iou(f, d) for d in det), default=0) >= 0.5 for f in figs)
         capt = {c for l in pg["lines"] if l["type"] in ("figure_label", "caption", "table_label") for c in l.get("children_ids") or []}
-        s_ = 0
+        s_ = s_old = 0
+        frames = None
         for l in pg["lines"]:
             if l["type"] != "text" or l.get("children_ids") or not isinstance(l.get("region"), dict) or l.get("id") in capt:
                 continue
             b = box(l); cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
             if any(f[0] <= cx <= f[2] and f[1] <= cy <= f[3] for f in allfigs):
                 continue
-            s_ += any(d[0] <= cx <= d[2] and d[1] <= cy <= d[3] for d in det)
-        hit += h_; n += len(figs); sw += s_
-        print(f"ROW {doc[:40]:40} p{page:<4} figures {h_}/{len(figs)} swallowed {s_}" + (f" listings {lh_}/{len(lst)}" if lst else ""))
+            if not any(d[0] <= cx <= d[2] and d[1] <= cy <= d[3] for d in det):
+                continue
+            s_old += 1
+            if frames is None:
+                frames = figure_frames(pdf, page, pg, allfigs)
+            if any(f[0] <= cx <= f[2] and f[1] <= cy <= f[3] for f in frames):
+                if VERBOSE:
+                    print(f"     inside its figure's drawn frame, not swallowed: {l.get('text', '')[:50]!r}")
+                continue
+            s_ += 1
+        hit += h_; n += len(figs); sw += s_; sw_old += s_old
+        print(f"ROW {doc[:40]:40} p{page:<4} figures {h_}/{len(figs)} swallowed {s_}" + (f" (outside MathPix figures {s_old})" if s_old != s_ else "")
+              + (f" listings {lh_}/{len(lst)}" if lst else ""))
         if VERBOSE and (h_ < len(figs) or s_):
             for f in figs:
                 bi = max(((iou(f, d), d) for d in det), default=(0, None))
                 print(f"     MathPix {[int(v) for v in f]} best IoU {bi[0]:.2f} {[int(v) for v in bi[1]] if bi[1] else '-'}")
             print(f"     detector figures {[[int(v) for v in d] for d in det]}")
-print(f"TOTAL {pages} pages: figures whole {hit} of {n} = {hit / max(1, n):.0%}; body lines swallowed {sw}; "
+print(f"TOTAL {pages} pages: figures whole {hit} of {n} = {hit / max(1, n):.0%}; body lines swallowed {sw} "
+      f"(outside every MathPix figure, the old count: {sw_old}); "
       f"CPU {cpu / max(1, pages):.3f} s/page (1 thread)")
 if CASCADE:
     print(f"CASCADE: the 640 pass ran on {triggered} of {pages} pages")
