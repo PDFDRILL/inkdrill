@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """resolve.py <set.tsv>... : print 'doc<TAB>folder' and write the library paths needed (pathspec, NUL-separated)."""
+from paths import LIB, WORK, GEMMA, DRILLGROUP  # noqa: F401
 import csv, hashlib, os, subprocess, sys
-LIB = "/home/claude/pdfdrill-library"
 names = subprocess.run(["git", "-C", LIB, "ls-tree", "-z", "--name-only", "HEAD"], capture_output=True).stdout.split(b"\0")
 names = [n for n in names if n]
 ids = {"lib:" + hashlib.sha256(n).hexdigest()[:12]: n for n in names}
@@ -18,7 +18,7 @@ for tsv in sys.argv[1:]:
         seen[doc] = f
         paths += [f + b"/" + f + b".lines.json", f + b"/" + f + b".pdf", f + b"/inspect/pages/page-%04d.png" % page,
                   f + b"/probe-pdffonts.txt"]
-open("/home/claude/work/sets/paths.bin", "wb").write(b"\0".join(dict.fromkeys(paths)))
+open(f"{WORK}/sets/paths.bin", "wb").write(b"\0".join(dict.fromkeys(paths)))
 import json
-json.dump({d: f.decode("utf-8", "surrogateescape") for d, f in seen.items()}, open("/home/claude/work/sets/folders.json", "w"))
+json.dump({d: f.decode("utf-8", "surrogateescape") for d, f in seen.items()}, open(f"{WORK}/sets/folders.json", "w"))
 print(len(seen), "docs", len(set(paths)), "paths")

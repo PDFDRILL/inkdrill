@@ -3,8 +3,9 @@
   raw  = the committed scorer (every MathPix node is a 'line', containers included)
   leaf = truth without containers: nodes with children_ids, and column/table/table_row/table_column, are dropped.
 YOLO's files come from gemma4/testpool/<heldoutN>/<stem>.sane.lines.json."""
+from paths import LIB, WORK, GEMMA, DRILLGROUP  # noqa: F401
 import json, os, sys
-sys.path.insert(0, "/home/claude/gemma4/testpool/heldout30")
+sys.path.insert(0, f"{GEMMA}/testpool/heldout30")
 from score1to1 import score
 YD = {"heldout": "heldout30", "heldout2": "heldout2", "heldout3": "heldout3", "heldout4": "heldout4"}
 CONT = {"column", "table", "table_row", "table_column"}
@@ -17,8 +18,8 @@ for sd in sys.argv[2:]:
     name = os.path.basename(sd.rstrip("/"))
     for m in json.load(open(os.path.join(sd, "meta.json"))):
         truth = json.load(open(os.path.join(sd, m["stem"] + ".truth.json")))
-        f = (os.path.join("/home/claude/gemma4/testpool", YD[name], m["stem"] + ".sane.lines.json") if label == "yolo"
-             else f"/home/claude/work/runs/{label}/{name}/{m['stem']}.lines.json")
+        f = (os.path.join(f"{GEMMA}/testpool", YD[name], m["stem"] + ".sane.lines.json") if label == "yolo"
+             else f"{WORK}/runs/{label}/{name}/{m['stem']}.lines.json")
         ours = json.load(open(f)) if os.path.exists(f) else {"pages": []}
         for p in ours["pages"]: p["page"] = m["page"]
         for kind, T in (("raw", truth), ("leaf", leaf(truth))):

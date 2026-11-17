@@ -774,6 +774,39 @@ Ghostscript. Only library documents whose PDF is in git could be rendered: 76 of
 New tests: L10 (the two-column page inverted gives the same 88 lines; committed code: 19) and L11 (an align block of
 three rows is one display with three equation numbers; committed code: three displays).
 
+**v7 re-measured here (2026-11-17, inkdrill CLI session; fast-forwarded main to it).** Ghostscript route
+(`tools/lines-audit/gsrun.py`: gs pgmraw, crop box, 300 dpi, longer side <= 3500 px; a folder without its PDF uses its
+inspect render), so all 176 held-out pages ran, 32 scans among them. Binaries built from 8fe82b8 and cf15e65.
+Leaf recall / precision (raw in brackets for ALL):
+
+| set | stratum | v6 | v7 |
+|---|---|---|---|
+| held-out 1-4 (176) | german (30) | 0.851 / 0.811 | 0.921 / 0.844 |
+| | maths (48) | 0.961 / 0.850 | 0.969 / 0.852 |
+| | scan (32) | 0.665 / 0.497 | 0.745 / 0.522 |
+| | table (30) | 0.654 / 0.714 | 0.748 / 0.742 |
+| | two_column (36) | 0.924 / 0.873 | 0.957 / 0.898 |
+| | ALL | 0.808 / 0.758 (raw 0.705 / 0.764) | 0.866 / 0.778 (raw 0.753 / 0.782) |
+| confirm (85) | maths (30) | 0.965 / 0.887 | 0.969 / 0.893 |
+| | table (25) | 0.725 / 0.837 | 0.744 / 0.849 |
+| | two_column (30) | 0.941 / 0.837 | 0.963 / 0.877 |
+| | ALL | 0.848 / 0.845 (raw 0.742 / 0.848) | 0.866 / 0.869 (raw 0.758 / 0.872) |
+
+inkcmp ms/page median: held-out v6 145 -> v7 82; confirm 155 -> 91. Gate (fixed before the run): v7 leaf ALL recall and
+precision >= v6 on both sets, no stratum's precision > 2 points below v6, tests green: **holds** (every stratum's
+precision rises, +0.2 to +4.0). 2110.13883 p8: the 3 text lines that crossed the gutter under v6 are 0 under v7.
+
+One change at a time taken back out of v7 (leaf, held-out 1-4 ALL; v7 0.866 / 0.778):
+- no polarity (1b): 0.860 / 0.772; one page differs (the dark German page: german 0.921/0.844 -> 0.876/0.795);
+  confirm unchanged.
+- full-resolution white scan instead of 2 x 2: 0.868 / 0.778, 20 of 176 pages differ (scan precision 0.522 -> 0.517,
+  table 0.748/0.742 -> 0.755/0.746); confirm 7 pages differ, ALL 0.866/0.868; 106 ms instead of 81. The audit's
+  "equal to the full-resolution scan" holds on its dev set, not here; the net is within 0.002.
+- no ink-on-both-sides test (3a): 0.871 / 0.764, 75 pages differ: precision -1.4 (scan -3.1, two_column -0.9,
+  german -1.6), recall +0.5; confirm 0.871 / 0.865.
+- candidates by area instead of height (3a): 0.860 / 0.779, 28 pages differ: two_column recall 0.957 -> 0.950, table
+  0.748 -> 0.736; confirm 0.855 / 0.867.
+
 **ours+ink on the board (T-0148, 2026-11-17, scratch `work/run-files/board-ink/`).** The question: does
 regrouping `pdfdrill glyphlines` lines by `inkcmp lines` boxes move the board's ours column? The gate: the ink
 residual is lower on >= 4 of the 5 table rows, and no maths row is worse.

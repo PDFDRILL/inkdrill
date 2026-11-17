@@ -3,8 +3,9 @@
 truth side: MERGED (an our-box covers >=80% of it and also >=80% of another truth line), WIDE (covered >=80% by an our-box
 that is larger, alone), SPLIT (>=2 of our boxes lie >=80% inside it), SHIFT (best IoU 0.2..0.5), NONE (best IoU < 0.2).
 ours side: EXTRA_IN_TRUTH (>=80% inside a truth line), EXTRA_COVERS (covers truth lines), EXTRA_EMPTY (IoU<0.05 with all)."""
+from paths import LIB, WORK, GEMMA, DRILLGROUP  # noqa: F401
 import json, os, sys, collections
-sys.path.insert(0, "/home/claude/gemma4/testpool/heldout30")
+sys.path.insert(0, f"{GEMMA}/testpool/heldout30")
 from score1to1 import iou
 def box(l): r = l["region"]; return (r["top_left_x"], r["top_left_y"], r["top_left_x"] + r["width"], r["top_left_y"] + r["height"])
 def area(a): return max(0, a[2] - a[0]) * max(0, a[3] - a[1])
@@ -14,7 +15,7 @@ for sd in sys.argv[2:]:
     name = os.path.basename(sd.rstrip("/"))
     for m in json.load(open(os.path.join(sd, "meta.json"))):
         tl = [l for l in json.load(open(os.path.join(sd, m["stem"] + ".truth.json")))["pages"][0]["lines"] if l["type"] != "page_info" and not l.get("children_ids") and l["type"] not in ("column","table","table_row","table_column")]
-        ol = [l for l in json.load(open(f"/home/claude/work/runs/{label}/{name}/{m['stem']}.lines.json"))["pages"][0]["lines"] if l["type"] != "page_info"]
+        ol = [l for l in json.load(open(f"{WORK}/runs/{label}/{name}/{m['stem']}.lines.json"))["pages"][0]["lines"] if l["type"] != "page_info"]
         t = [box(l) for l in tl]; o = [box(l) for l in ol]
         pairs = sorted(((iou(a, b), i, j) for i, a in enumerate(t) for j, b in enumerate(o)), reverse=True)
         ui, uj = set(), set()

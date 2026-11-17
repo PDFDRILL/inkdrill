@@ -1,6 +1,11 @@
 # lines-audit: the harness of the 2026-11-17 audit of `inkcmp lines` (CONTRACT.md unit 7, v7)
 
-Written in an audit sandbox; paths are that sandbox's (`/home/claude/...`), change `LIB` and the work paths to rerun.
+Written in an audit sandbox; its `/home/claude/...` paths are now `paths.py` (library `~/pdfdrill-library`, outputs
+under `~/inkdrill/work/run-files/lines-audit`, Gemma4 testpool `~/Gemma4`; each overridable by `LINES_AUDIT_*`).
+
+- `gsrun.py`, `gsscore.py`: inkdrill's own route, Ghostscript (`gs pgmraw`, crop box, 300 dpi, longer side <= 3500
+  px; the inspect render where a folder has no PDF), several binaries per page, raw and leaf per stratum, ms/page.
+  `gsrun.py <set.tsv> <name> v6=<binary> v7=<binary>`, then `gsscore.py v6,v7 <name>[,<name>...]`.
 
 - `resolve.py`, `prep.py`: resolve a set TSV against pdfdrill-library and render each page at MathPix's page size
   (poppler `pdftoppm -cropbox -gray`; the sandbox had no Ghostscript) to PGM, with the page's MathPix lines as truth.

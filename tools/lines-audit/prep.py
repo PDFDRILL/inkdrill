@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """prep.py <set.tsv> <outdir>: render each page of a set at MathPix's page size (poppler, crop box, gray) to
 <outdir>/<stem>.pgm and write its MathPix page to <outdir>/<stem>.truth.json. arXiv ids without a library PDF are
-downloaded once to /home/claude/work/arxiv. Prints one status row per page; pages without any PDF are SKIPPED."""
+downloaded once to <WORK>/arxiv. Prints one status row per page; pages without any PDF are SKIPPED."""
+from paths import LIB, WORK, GEMMA, DRILLGROUP  # noqa: F401
 import csv, json, os, re, subprocess, sys
 from PIL import Image
-LIB = "/home/claude/pdfdrill-library"; AX = "/home/claude/work/arxiv"
-fold = json.load(open("/home/claude/work/sets/folders.json"))
+AX = f"{WORK}/arxiv"
+fold = json.load(open(f"{WORK}/sets/folders.json"))
 os.makedirs(AX, exist_ok=True)
 tsv, out = sys.argv[1], sys.argv[2]; os.makedirs(out, exist_ok=True)
 ARX = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|\d{7}(v\d+)?)$")

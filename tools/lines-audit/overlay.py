@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """overlay.py <label> <setdir> <stem> [out.png] [crop x0 y0 x1 y1 as fractions]: truth leaf boxes green (unmatched: blue fill), ours red (unmatched: thick orange)."""
+from paths import LIB, WORK, GEMMA, DRILLGROUP  # noqa: F401
 import json, sys, os
 from PIL import Image, ImageDraw
-sys.path.insert(0, "/home/claude/gemma4/testpool/heldout30")
+sys.path.insert(0, f"{GEMMA}/testpool/heldout30")
 from score1to1 import iou
 label, sd, stem = sys.argv[1:4]
-out = sys.argv[4] if len(sys.argv) > 4 else f"/home/claude/work/ov/{label}-{stem}.png"
+out = sys.argv[4] if len(sys.argv) > 4 else f"{WORK}/ov/{label}-{stem}.png"
 os.makedirs(os.path.dirname(out), exist_ok=True)
 name = os.path.basename(sd.rstrip("/"))
 CONT = {"column", "table", "table_row", "table_column"}
 tl = [l for l in json.load(open(f"{sd}/{stem}.truth.json"))["pages"][0]["lines"] if l["type"] != "page_info" and not l.get("children_ids") and l["type"] not in CONT]
-ol = [l for l in json.load(open(f"/home/claude/work/runs/{label}/{name}/{stem}.lines.json"))["pages"][0]["lines"] if l["type"] != "page_info"]
+ol = [l for l in json.load(open(f"{WORK}/runs/{label}/{name}/{stem}.lines.json"))["pages"][0]["lines"] if l["type"] != "page_info"]
 bx = lambda l: (l["region"]["top_left_x"], l["region"]["top_left_y"], l["region"]["top_left_x"] + l["region"]["width"], l["region"]["top_left_y"] + l["region"]["height"])
 t = [bx(l) for l in tl]; o = [bx(l) for l in ol]
 pairs = sorted(((iou(a, b), i, j) for i, a in enumerate(t) for j, b in enumerate(o)), reverse=True)

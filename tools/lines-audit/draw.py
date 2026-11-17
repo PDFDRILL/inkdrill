@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """draw.py <seed> <exclude.tsv>... > set.tsv : drillgroup board_draw.py's strata over the library documents that
 have a PDF in git; scan = pdffonts lists no embedded font (board_draw reads probe-pdffonts.txt, which is not in git)."""
+from paths import LIB, WORK, GEMMA, DRILLGROUP  # noqa: F401
 import importlib.util, json, os, random, subprocess, sys
-spec = importlib.util.spec_from_file_location("bd", "/home/claude/work/sets/board_draw.py"); bd = importlib.util.module_from_spec(spec); spec.loader.exec_module(bd)
-LIB = "/home/claude/pdfdrill-library"
+spec = importlib.util.spec_from_file_location("bd", f"{DRILLGROUP}/scripts/board_draw.py"); bd = importlib.util.module_from_spec(spec); spec.loader.exec_module(bd)
 QUOTA = {"scan": 20, "two_column": 30, "maths": 30, "table": 25, "german": 20}
 seed = int(sys.argv[1]); exclude = set()
 for f in sys.argv[2:]:
     exclude |= {l.split("\t")[1] for l in open(f) if l.strip() and not l.startswith(("#", "stratum"))}
-cache = "/home/claude/work/sets/cands.json"
+cache = f"{WORK}/sets/cands.json"
 if os.path.exists(cache): cands = json.load(open(cache))
 else:
     cands = {k: [] for k in QUOTA}
