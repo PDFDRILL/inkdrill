@@ -190,6 +190,9 @@ def score(diff: set) -> tuple[int, int, int]:
     return len(diff), solid, piece
 
 
+HOLE_MIN = 3                                    # inkcmp glyphs: a white region is a hole from this many px
+# (board, 89131 pairs of one glyph name on the glyph route: at 1 px 77 pairs differ in holes without a flag -- raster
+# pinholes where an arm meets a stem; from 3 px none does)
 INKCMP = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "build", "inkcmp")
 TR = re.compile(r'<page number="(\d+)"|<fill_text [^>]*transform="([^"]+)"|<span font="([^"]+)"[^>]*trm="([^"]+)"|'
                 r'<g unicode="([^"]*)" glyph="([^"]*)" x="([^"]+)" y="([^"]+)"|</fill_text>|'
@@ -467,6 +470,8 @@ def glyph_job(fonts: list, pairs: list, page_pgm: str | None) -> tuple[list, dic
         job += [f"font {i} {f}" for i, f in fs.ids().items()]
     if page_pgm:
         job.append(f"page {page_pgm} {INK}")
+    if HOLE_MIN != 1:                              # (the C default is 1)
+        job.append(f"holes {HOLE_MIN}")
     def place(s):
         if s == "none":
             return "none - 0 0 0 0 0 0"
@@ -488,7 +493,8 @@ def glyph_job(fonts: list, pairs: list, page_pgm: str | None) -> tuple[list, dic
             if f[2] == "ok":
                 names[int(f[1])] = f[3]
         elif f[0] == "P":
-            res.append((int(f[1]), int(f[2]), int(f[3])))
+            v = f[3].split()
+            res.append((int(f[1]), int(f[2]), int(v[0])) + tuple(int(x) for x in v[1:3]))   # + holes A, B
         elif f[0] == "O":
             res.append(f[1] + " " + (f[2] if len(f) > 2 else "") + (" " + f[3] if len(f) > 3 else ""))
     return res, names
@@ -1241,8 +1247,11 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                     res["no_outline"] += 1
                     print(f"O L{i} {t} {tb} {r}", file=out)
                     continue
-                xo, so, pc = r
-                flag = so >= THRESHOLD
+                xo, so, pc = r[:3]
+                holes = r[3:5] if len(r) >= 5 and min(r[3:5]) >= 0 else None
+                # a glyph whose outline has another number of holes is another glyph, however thin the stroke that
+                # makes the difference (e -> c: the crossbar, solid 4 at 10 pt)
+                flag = so >= THRESHOLD or (holes is not None and holes[0] != holes[1])
                 sa, sb = style(fa) or "-", style(fb) or "-"
                 print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
                 res["glyphs"] += 1

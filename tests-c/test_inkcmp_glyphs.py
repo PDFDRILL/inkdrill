@@ -9,6 +9,8 @@ G2 the CFF half: pdflatex embeds Type 1, Ghostscript's pdfwrite re-embeds the sa
    from the CFF must rasterise exactly as read from the Type 1 (two parsers, two charstring languages, one outline).
 G3 the score: xor, solid and largest piece of two DIFFERENT glyphs equal judge.score() on the Python rasters' XOR.
 G4 both sides of each refusal: a missing glyph, an unloaded font, the page side without a page, a candidate list.
+G5 the hole counts `inkcmp glyphs` reports per side equal U9's nest() (HOLE regions of at least the minimum area) on
+   the Python raster of every glyph of cmr10 and cmbx10, at minimum areas 1 and 3 (the judge's), and the two differ.
 R1 `inkcmp rules` equals judge.rule_pixels (the Python it replaces) on a real page with fractions, overlines and a
    radical, rendered at 400 dpi, with its glyph quads as cover, sampled at 1x and from an 8x render.
 Skips (prints SKIP) without kpsewhich and the TeX fonts (G1, G3), or pdflatex, gs and mutool (G2).
@@ -22,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from inkdrill import charstring, judge, scan, type1  # noqa: E402
+from inkdrill import charstring, judge, nest, raster, scan, type1  # noqa: E402
 
 INKCMP = ROOT / "build" / "inkcmp"
 CELL = 160
@@ -90,7 +92,7 @@ def test_G1_type1_equals_u9(tmp):
         Path(f"{tmp}/g1-{fi}.pgm").write_bytes(b"P5\n%d %d\n255\n" % (W, H) + bytes(page))
         out = [l for l in glyphs(job) if l[:2] in ("P ", "O ")]
         assert len(out) == len(place)
-        bad = [(n, r) for (n, _), r in zip(place, out) if r != "P 0 0 0"]
+        bad = [(n, r) for (n, _), r in zip(place, out) if " ".join(r.split()[:4]) != "P 0 0 0"]
         assert not bad, (fname, bad[:5])
         assert inked > 0.9 * len(place), (fname, inked, len(place))     # the oracle compares ink, not two blanks
         cases += len(place)
@@ -133,7 +135,7 @@ $\alpha\beta\gamma\int_0^\infty \sum_{i=1}^n x_i^2 \sqrt{y} \leq \partial\nabla\
     out = glyphs(job)
     assert sum(l.startswith("font ") and " ok " in l for l in out) == len(files)
     res = [l for l in out if l[:2] in ("P ", "O ")]
-    bad = [(b, r) for b, r in zip(names, res) if r != "P 0 0 0"]
+    bad = [(b, r) for b, r in zip(names, res) if " ".join(r.split()[:4]) != "P 0 0 0"]
     assert not bad, bad[:5]
     assert len(names) > 300
     return len(names)
@@ -162,7 +164,7 @@ def test_G3_score_equals_judge_score(tmp):
         want.append("P %d %d %d" % judge.score(diff))
         job.append(f"pair -1 - 0 0 0 0 0 0 {side(0, b, m, X + (0.5 if a == b else 0), Y)} 0 {y0} {W} {y0 + H}")
     Path(f"{tmp}/g3.pgm").write_bytes(b"P5\n%d %d\n255\n" % (W, H * len(pairs)) + bytes(page))
-    got = [l for l in glyphs(job) if l[:2] in ("P ", "O ")]
+    got = [" ".join(l.split()[:4]) for l in glyphs(job) if l[:2] in ("P ", "O ")]
     assert got == want, list(zip(pairs, got, want))
     assert all(int(w.split()[1]) > 0 for w in want)            # every case has a residual to score
     assert any(int(w.split()[2]) >= judge.THRESHOLD for w in want) and any(int(w.split()[2]) < judge.THRESHOLD for w in want)
@@ -185,6 +187,7 @@ def test_G4_refusals_both_sides(tmp):
     assert out[0].startswith("font 0 ok CMR10") and out[1].startswith("font 1 ok CMSY10"), out[:2]
     assert out[2].startswith("font 2 fail"), out[2]
     res = [l for l in out if l[:2] in ("P ", "O ")]
+    res = [" ".join(r.split()[:4]) if r.startswith("P ") else r for r in res]
     assert res[0] == "P 0 0 0" and res[1].startswith("O A") and res[2].startswith("O B"), res
     assert res[3].startswith("O A") and res[4] == "P 0 0 0" and res[5].startswith("O A"), res
     out = glyphs(["INKGLYPHS1", f"font 0 {r10}", f"page {tmp}/g4.pgm 128",
@@ -192,6 +195,35 @@ def test_G4_refusals_both_sides(tmp):
     p = [l for l in out if l[:2] in ("P ", "O ")][0].split()
     assert p[0] == "P" and int(p[1]) > 100, p                      # the glyph's whole ink is residual
     return 8
+
+
+def test_G5_holes_equal_nest(tmp):
+    cases, differ = 0, 0
+    Path(f"{tmp}/white.pgm").write_bytes(b"P5\n%d %d\n255\n" % (CELL, CELL) + b"\xff" * (CELL * CELL))
+    for fname in ("cmr10.pfb", "cmbx10.pfb"):
+        path = kpse(fname)
+        ft = type1.load(path)
+        for size in (10 * 400 / 72, 6 * 400 / 72):
+            m = (size, 0.0, 0.0, -size)
+            names = sorted(ft.charstrings)
+            for hmin in (1, 3):
+                job = ["INKGLYPHS1", f"font 0 {path}", f"page {tmp}/white.pgm 128", f"holes {hmin}"]
+                want = []
+                for n in names:
+                    X, Y = 50.3125, 110.71875
+                    d = py_mask(ft, n, m, X, Y, 0, 0, CELL, CELL)
+                    ns = nest.nest(raster.InkMask(bytes(255 if v else 0 for v in d), CELL, CELL))
+                    want.append(sum(1 for r in ns.regions.values() if r.kind is nest.Kind.HOLE and r.area >= hmin))
+                    job.append(f"pair {side(0, n, m, X, Y)} -1 - 0 0 0 0 0 0 0 0 {CELL} {CELL}")
+                got = [int(l.split()[4]) for l in glyphs(job) if l.startswith("P ")]
+                assert got == want, (fname, size, hmin, [(n, a, b) for n, a, b in zip(names, got, want) if a != b][:5])
+                cases += len(names)
+                if hmin == 1:
+                    one = got
+                else:
+                    differ += sum(a != b for a, b in zip(one, got))
+    assert differ > 0, "the minimum area changes some count (pinholes exist at 6 pt)"
+    return cases
 
 
 def test_R1_rules_equal_python(tmp):

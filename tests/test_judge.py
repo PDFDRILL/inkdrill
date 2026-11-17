@@ -479,7 +479,17 @@ class JudgeBornDigitalGlyph(JudgeBornDigital):
         out = io.StringIO()
         judge.judge(self.pdf, 1, lj, os.path.join(self.tmp.name, "routes"), out=out, route="render")
         render = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ")]
-        self.assertEqual([r[1:5] + [r[8]] for r in rows], [r[1:5] + [r[8]] for r in render])
+        # the routes differ where only the glyph route can see it: a plant whose outline has another number of
+        # holes (e -> c), flagged here by the hole count, not reached by the render route's solid residual
+        holes = {("e", "c")}
+        self.assertEqual([r[1:5] + [r[8]] for r in rows if (r[2], r[3]) not in holes],
+                         [r[1:5] + [r[8]] for r in render if (r[2], r[3]) not in holes])
+        self.assertEqual([r[8] for r in rows if (r[2], r[3]) in holes], ["1"] * sum((r[2], r[3]) in holes for r in rows))
+
+    def test_every_plant_is_flagged(self):
+        """the goal the render route still misses (e -> c): the glyph route reaches it by the hole count"""
+        _, _, rows = self.planted_run()
+        self.assertEqual([(r[2], r[3], r[6]) for r in rows if r[4] == "0" and r[8] != "1"], [])
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and os.path.exists(judge.INKCMP),

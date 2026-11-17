@@ -431,6 +431,17 @@ the target, 1 CPU s/page, does not). CPU of a median page: pdflatex 0.6, Python 
 - So neither reaches 1 CPU s/page on the board's median page: B's port is a rewrite, A removes pdflatex on text-only
   pages only (about 1 in 4) and needs a fallback (the TeX tree's Type 1 of the same font) for subset gaps.
 
+**The thin-stroke miss, closed on the glyph route (2026-11-17).** e -> c at 10 pt reaches solid 4 (the crossbar is
+2-3 px at 400 dpi), below 7; a lower solid or largest-piece threshold is no way out: on the board's glyph route,
+pairs of one glyph name reach piece >= 23 (e -> c's) in 2.6% (1013 of 39230 unflagged). The measure that separates
+them is topology, not area: `inkcmp glyphs` now reports the holes of each side's own glyph raster (4-connected white
+regions enclosed by its ink, before any neighbour is added; >= 3 px), and the glyph route flags a pair whose counts
+differ. Measured on the 30 board pages (MathPix and ours, glyph route, pdflatex), 89131 pairs of one glyph name:
+counted from 1 px, 77 differ without a flag (raster pinholes where an arm meets a stem, mostly r); from 3 px, none.
+On different glyphs it adds 4 flags (f against the ligature fl). The planted CM page now flags every plant on the
+glyph route (test_every_plant_is_flagged passes there); the render route has no outlines and keeps the miss.
+Oracle for the count: U9's nest() on the Python raster, 1056 placements (tests-c G5).
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

@@ -1055,6 +1055,7 @@ void ig_score(const uint8_t *a, const uint8_t *b, int w, int h, long *xor_px, lo
      INKGLYPHS1
      font <id> <path>                      ids 0.., a Type 1 or CFF program
      page <path.pgm> <ink>                 optional: the original page at 400 dpi; ink = grey < <ink>
+     holes <min area>                      optional: a white region counts as a hole from this many pixels (default 1)
      pair <fa> <ga> <a b c d> <X> <Y> <fb> <gb> <a b c d> <X> <Y> <x0> <y0> <x1> <y1>
      (a font field may list candidate ids, comma-separated: the first whose program holds the glyph is used)
      add A|B <ids> <glyph> <a b c d> <X> <Y>   more ink on one side of the pair above (a neighbour's glyph in the
@@ -1062,7 +1063,8 @@ void ig_score(const uint8_t *a, const uint8_t *b, int w, int h, long *xor_px, lo
      end
    A side is a glyph (font id, glyph name, 2x2 matrix in device px per em, origin), or, with font id -1, the page's
    ink, or, with font id `none`, no ink but what its `add` lines bring (name and matrix ignored for both). The window [x0, x1) x [y0, y1) is page px.
-   stdout: `font <id> ok <name>` or `font <id> fail <reason>`, then per pair `P <xor> <solid> <piece>` or
+   stdout: `font <id> ok <name>` or `font <id> fail <reason>`, then per pair `P <xor> <solid> <piece> <holes A> <holes B>`
+   (holes of the two sides' own ink before any `add`) or
    `O A|B <reason>` (no outline), then `end <pairs> <no outline>`. */
 typedef struct { int w, h; uint8_t *g; int ink; } Pg;
 static int read_pgm(const char *path, Pg *pg) {
@@ -1100,7 +1102,38 @@ static int place(IgFont **F, size_t nf, char *ids, const char *name, const doubl
   return -1;
 }
 
-typedef struct { int live, bad, w, h, x0, y0; char why[300]; } Pending;
+/* holes of a mask: 4-connected background regions that do not touch the window's edge (8-connected ink) */
+static long hole_min = 1;                            /* `holes <min area>`: smaller white regions are not holes */
+static long holes_of(const uint8_t *m, int w, int h) {
+  size_t N = (size_t)w * h;
+  uint8_t *seen = calloc(N ? N : 1, 1);
+  int *st = malloc((N ? N : 1) * sizeof *st);
+  long holes = 0;
+  if (!seen || !st) { free(seen); free(st); return -1; }
+  for (size_t i = 0; i < N; i++) {
+    if (m[i] || seen[i]) continue;
+    int sp = 0, edge = 0;
+    long area = 0;
+    st[sp++] = (int)i; seen[i] = 1;
+    while (sp) {
+      int k = st[--sp], x = k % w, y = k / w;
+      area++;
+      if (x == 0 || y == 0 || x == w - 1 || y == h - 1) edge = 1;
+      static const int D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (int d = 0; d < 4; d++) {
+        int nx = x + D[d][0], ny = y + D[d][1];
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        int q = ny * w + nx;
+        if (!m[q] && !seen[q]) { seen[q] = 1; st[sp++] = q; }
+      }
+    }
+    holes += !edge && area >= hole_min;
+  }
+  free(seen); free(st);
+  return holes;
+}
+
+typedef struct { int live, bad, w, h, x0, y0; long ha, hb; char why[300]; } Pending;
 static int flush(Pending *q, const uint8_t *ma, const uint8_t *mb, FILE *out, long *none) {
   if (!q->live) return 1;
   q->live = 0;
@@ -1108,7 +1141,7 @@ static int flush(Pending *q, const uint8_t *ma, const uint8_t *mb, FILE *out, lo
   long xo, so, pc;
   ig_score(ma, mb, q->w, q->h, &xo, &so, &pc);
   if (xo < 0) return 0;
-  fprintf(out, "P %ld %ld %ld\n", xo, so, pc);
+  fprintf(out, "P %ld %ld %ld %ld %ld\n", xo, so, pc, q->ha, q->hb);
   return 1;
 }
 
@@ -1119,7 +1152,7 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
   uint8_t *ma = NULL, *mb = NULL, *mt = NULL; size_t mcap = 0;
   long pairs = 0, none = 0;
   int rc = 2;
-  Pending q = {0, -1, 0, 0, 0, 0, ""};
+  Pending q = {0, -1, 0, 0, 0, 0, -1, -1, ""};
   if (!fgets(line, sizeof line, in) || strncmp(line, "INKGLYPHS1", 10)) { fprintf(errf, "inkcmp glyphs: no INKGLYPHS1 header\n"); return 2; }
   while (fgets(line, sizeof line, in)) {
     if (!strncmp(line, "end", 3)) { if (!flush(&q, ma, mb, out, &none)) goto done; rc = 0; break; }
@@ -1136,6 +1169,10 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
       F[id] = ig_font_load(path, err, sizeof err);
       if (F[id]) fprintf(out, "font %ld ok %s\n", id, ig_font_name(F[id]));
       else fprintf(out, "font %ld fail %s\n", id, err);
+      continue;
+    }
+    if (!strncmp(line, "holes ", 6)) {
+      if (sscanf(line + 6, "%ld", &hole_min) != 1 || hole_min < 1) { fprintf(errf, "inkcmp glyphs: bad holes line\n"); goto done; }
       continue;
     }
     if (!strncmp(line, "page ", 5)) {
@@ -1173,7 +1210,7 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
       mcap = N;
     }
     pairs++;
-    q.live = 1; q.bad = -1; q.w = w; q.h = h; q.x0 = x0; q.y0 = y0; q.why[0] = 0;
+    q.live = 1; q.bad = -1; q.w = w; q.h = h; q.x0 = x0; q.y0 = y0; q.why[0] = 0; q.ha = q.hb = -1;
     uint8_t *mk[2] = {ma, mb};
     for (int sd = 0; sd < 2 && q.bad < 0; sd++) {
       if (!strcmp(ids[sd], "-1")) {
@@ -1188,6 +1225,7 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
       if (!strcmp(ids[sd], "none")) { memset(mk[sd], 0, N); continue; }      /* no glyph of its own: adds only */
       if (place(F, nf, ids[sd], nm[sd], m[sd], O[sd][0], O[sd][1], x0, y0, w, h, mk[sd], q.why, sizeof q.why) < 0) q.bad = sd;
     }
+    if (q.bad < 0) { q.ha = holes_of(ma, w, h); q.hb = holes_of(mb, w, h); }   /* the pair's own glyphs, no neighbours */
   }
   if (rc) fprintf(errf, "inkcmp glyphs: no end line\n");
   else fprintf(out, "end %ld %ld\n", pairs, none);
