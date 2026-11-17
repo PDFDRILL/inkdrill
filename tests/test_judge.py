@@ -237,7 +237,8 @@ def _accent_case(tmp, name, page_line, read_line):
                    capture_output=True, check=True)
     pdf = os.path.join(d, "page.pdf")
     x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
-    b = [tuple(float(v) for v in m) for m in WORD.findall(x)][0]
+    bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]          # pdftotext splits tall maths into "lines":
+    b = (min(v[0] for v in bs), min(v[1] for v in bs), max(v[2] for v in bs), max(v[3] for v in bs))   # one line
     wpt, hpt = judge.page_size(pdf, 1)
     k = 200 / 72
     doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": [
@@ -314,3 +315,128 @@ class JudgeUnmappable(unittest.TestCase):
         self.assertIn("D U+0436 dropped (pdflatex cannot set it)", out)
         self.assertEqual(res["unmappable"], 1)
         self.assertEqual(res["flagged"], 0)
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeRuleInk(unittest.TestCase):
+    """Non-glyph ink in formula lines (rules, fraction bars, vincula): a page rule the reading does not draw is
+    MISSING, a rendered rule the page does not have is INVENTED (board 2103.01507 p118: \\overline, fractions)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-rule-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def case(self, name, page, read):
+        res, _ = _accent_case(self.tmp.name, name, page, read)
+        return res["rules_a"], res["rules_missing"], res["rules_invented"]
+
+    def test_overline_dropped_loses(self):
+        self.assertEqual(self.case("o1", "The mean value $\\overline{M}$ of the sample in question.",
+                                   "The mean value \\(M\\) of the sample in question."), (1, 1, 0))
+
+    def test_overline_read_is_clean(self):
+        self.assertEqual(self.case("o2", "The mean value $\\overline{M}$ of the sample in question.",
+                                   "The mean value \\(\\overline{M}\\) of the sample in question."), (1, 0, 0))
+
+    def test_fraction_bar(self):
+        self.assertEqual(self.case("f1", "The ratio $\\frac{a+b}{c}$ of the sample in question.",
+                                   "The ratio \\(\\frac{a+b}{c}\\) of the sample in question."), (1, 0, 0))
+        self.assertEqual(self.case("s1", "The root $\\sqrt{x+y}$ of the sample in question.",
+                                   "The root \\(x+y\\) of the sample in question.")[1], 1)
+
+    def test_invented_overline(self):
+        self.assertEqual(self.case("i1", "The mean value $M$ of the sample in question.",
+                                   "The mean value \\(\\overline{M}\\) of the sample in question."), (0, 0, 1))
+
+    def test_text_lines_are_not_examined(self):
+        self.assertEqual(self.case("t1", "The mean value of the sample in question.",
+                                   "The mean value of the sample in question."), (0, 0, 0))
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeRuleOwner(unittest.TestCase):
+    """A page rule belongs to one line: an overline just under the line above is that lower line's (board
+    2103.01507 p118 ours L26/L27)."""
+
+    def test_overline_of_the_next_line(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-own-") as d:
+            lines = ["The value $x+y$ is the sum of the two given parts here,",
+                     "and $\\overline{M}$ is its closure in the space we use."]
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm]{geometry}\n\\pagestyle{empty}\n"
+                         "\\begin{document}\n\\noindent\\raggedright\\baselineskip=10.5pt\n"
+                         + "\\\\\n".join(lines) + "\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            # tight boxes from the glyphs themselves (mutool quads), as a MathPix-like reader draws them
+            cs = judge.chars(pdf, 1, 1)[0]
+            rows = {}
+            for c in cs:
+                rows.setdefault(round(c[2]), []).append(c)
+            ys = sorted(rows)
+            self.assertEqual(len(ys), 2, ys)
+            wpt, hpt = judge.page_size(pdf, 1)
+            k = 200 / 72
+            reads = ["The value \\(x+y\\) is the sum of the two given parts here,",
+                     "and \\(\\overline{M}\\) is its closure in the space we use."]
+            doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": []}]}
+            for y, t in zip(ys, reads):
+                g = rows[y]
+                x0, y0 = min(c[3] for c in g), min(c[4] for c in g)
+                x1, y1 = max(c[5] for c in g), max(c[6] for c in g)
+                doc["pages"][0]["lines"].append({"type": "text", "text": t, "region": {
+                    "top_left_x": int(x0 * k), "top_left_y": int(y0 * k), "width": int((x1 - x0) * k) + 1,
+                    "height": int((y1 - y0) * k) + 1}})
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            os.makedirs(os.path.join(d, "w"))
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out)
+            self.assertEqual((res["rules_a"], res["rules_missing"]), (1, 0), out.getvalue()[-400:])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeRuleNotMaths(unittest.TestCase):
+    """The footnote rule above a footnote line read as "\\(^{1}\\) ..." is not a formula's rule (040123 p2 had it as
+    one missing rule): inline maths only counts rules over a maths-font glyph."""
+
+    def test_footnote_rule(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-fn-") as d:
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm,paperheight=8cm]{geometry}\n"
+                         "\\pagestyle{empty}\n\\begin{document}\n\\noindent A plain line of text with a note."
+                         "\\footnote{The note text in the footer of the page.}\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            cs = judge.chars(pdf, 1, 1)[0]
+            rows = {}
+            for c in cs:
+                rows.setdefault(round(c[2] / 3), []).append(c)          # baselines; the superscripts join their row
+            keys = sorted(rows, key=lambda r: min(c[2] for c in rows[r]))
+            body = [c for c in cs if c[2] < 100]
+            foot = [c for c in cs if c[2] >= 100]
+            self.assertTrue(body and foot)
+            wpt, hpt = judge.page_size(pdf, 1)
+            k = 200 / 72
+            def region(g):
+                x0, y0 = min(c[3] for c in g), min(c[4] for c in g)
+                x1, y1 = max(c[5] for c in g), max(c[6] for c in g)
+                return {"top_left_x": int(x0 * k), "top_left_y": int(y0 * k), "width": int((x1 - x0) * k) + 1,
+                        "height": int((y1 - y0) * k) + 1}
+            doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": [
+                {"type": "text", "text": "A plain line of text with a note.\\(^{1}\\)", "region": region(body)},
+                {"type": "text", "text": "\\(^{1}\\)The note text in the footer of the page.", "region": region(foot)}]}]}
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            os.makedirs(os.path.join(d, "w"))
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out)
+            self.assertEqual(res["rules_missing"], 0, [l for l in out.getvalue().splitlines() if l.startswith("R ")])

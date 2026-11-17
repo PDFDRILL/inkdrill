@@ -307,6 +307,34 @@ the whole line was NOT_COMPILED: 6 of 30 lines on lib:3c16fac66fdd p370.
   letter is dropped through pdflatex's own error. Removing the error path fails them. The static U+FFFD entry is
   an equivalent mutant: pdflatex reports U+FFFD too, so it only saves a pass.
 
+**Rule ink in formula lines (coordinator's decision, 2026-11-17).** The judge measured glyphs only, so a reading
+that dropped an overline, fraction bar or radical vinculum passed clean. Formula lines are those of type
+math/equation or with inline maths in their text.
+- **Page rules:** the page's ink that none of the page's glyph quads covers.
+- **Rendered rules:** the rendering's ink that no glyph covers. A paired glyph's cover is its partner's page quad
+  mapped back by that pair's own offset: TeX's M quad reaches up over an `\overline`, and the page's does not.
+- **What counts as a rule:** horizontal, >= 8 px long, >= 3x as long as thick, at most 6 px thick (400-dpi grid).
+  It stands free: at most 30% of its pixels border glyph ink, so a glyph edge outside its quad is not one. On
+  inline-maths lines it must lie over a maths-font glyph in x, so a footnote rule over a `^1` line is not one.
+- **Registration:** each rendered rule moves into the page's frame by the offset of the nearest paired glyph in x.
+  Displayed maths is spaced differently, so one offset per line misplaced its parts.
+- **Ownership:** a page rule belongs to one line: the box that holds its centre, else the line of the glyph under
+  it (an overline above a tight box), else the nearest box. The scan window reaches 0.6 box heights above and below.
+- **Accents:** a page rule over an accent already measured on ink (`\bar` over a drawn `\overline`) is that accent's
+  partner and is skipped.
+- **Scoring:** a page rule less than half explained by rendered rule ink within 2 px is MISSING (`R L<i> missing`).
+  A rendered rule with no partner is INVENTED. JUDGE1 gains `rules_a`, `rules_missing` and `rules_invented`; how
+  they enter the residual is the board's call.
+- **Results.** 040123 p2: G rows unchanged, rules 0/0/0. Board 2103.01507 p118: MathPix 0 page rules (its overlines
+  are measured as accents on ink); ours 26 page rules, 0 missing, 0 invented. ours' "4/7" is not in the current
+  ours or MathPix reading of p118.
+- **Tests:**
+  - JudgeRuleInk: `\overline{M}` read as M is missing, read as `\overline{M}` clean; fraction bar clean;
+    dropped vinculum missing; invented overline; text lines never examined.
+  - JudgeRuleOwner: the next line's overline under tight boxes.
+  - JudgeRuleNotMaths: footnote rule.
+  - Removing the call, the ownership or the maths filter fails them.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of

@@ -299,6 +299,154 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12)
     return os.path.join(wd, "lines.pdf"), failed, drop
 
 
+def is_formula(ln: dict) -> bool:
+    """a line the rule-ink comparison applies to: maths by type, or inline maths in its text"""
+    return ln.get("type") in ("math", "equation") or bool(re.search(r"\$|\\\(|\\\[", ln.get("text", "")))
+
+
+def components(px: set) -> list:
+    """8-connected components of a pixel set"""
+    seen, out = set(), []
+    for p in px:
+        if p in seen:
+            continue
+        stack, comp = [p], []
+        seen.add(p)
+        while stack:
+            x, y = stack.pop()
+            comp.append((x, y))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    q = (x + dx, y + dy)
+                    if q in px and q not in seen:
+                        seen.add(q)
+                        stack.append(q)
+        out.append(comp)
+    return out
+
+
+def rule_like(comp: list) -> bool:
+    """a horizontal rule -- fraction bar, overline, radical vinculum, underline: >= 8 px long, >= 3x as long as thick,
+    at most 6 px thick (400-dpi grid). Vertical pieces are left out: in formulas they are almost always the edges of
+    tall glyphs (parentheses, brackets) whose quads differ between the two fonts' metrics."""
+    xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+    w, h = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+    return w >= 8 and w >= 3 * h and h <= 6
+
+
+def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False):
+    """Non-glyph ink of a formula line (rules, fraction bars, radical vincula), page against rendering.
+    - page rules: the page's ink in the line box (+4 px) that none of the page's own glyph quads covers;
+    - rendered rules: the snippet page's ink that no glyph covers, where a paired glyph's cover is its PARTNER's page
+      quad mapped back by that pair's own offset (TeX's quads differ: its M reaches up over an \\overline) and an
+      unpaired rendered glyph's cover is its own quad;
+    - each rendered rule moves into the page's frame by the offset of the paired glyph nearest it in x (displayed
+      maths is spaced differently, so one offset for the line misplaces its parts);
+    - a page rule less than half explained by rendered rule ink within `tol` px is MISSING, a rendered rule with no
+      page partner INVENTED. Rules are horizontal (`rule_like`). 400-dpi grid. A page rule over an accent already
+      measured on ink (\\bar over a drawn \\overline) is that accent's partner and is skipped."""
+    aw, ah, ab, cx0, cy0 = acrop
+    pw, ph, pb = bpage
+    ids_a = {(c[0], c[1]) for c in ca}
+    real = [(pa, pbb) for pa, pbb in pairs if (pa[0], pa[1]) in ids_a]
+    if not real:
+        return
+    offs = sorted(((pbb[3] + pbb[5]) / 2 * S, pa[1] * S - pbb[1] * S, pa[2] * S - pbb[2] * S) for pa, pbb in real)
+    def offset_at(xb):                                   # the offset of the paired glyph nearest in x (B frame)
+        return min(offs, key=lambda o: abs(o[0] - xb))[1:]
+    covered = lambda q, x, y: any(r[0] <= x + 0.5 <= r[2] and r[1] <= y + 0.5 <= r[3] for r in q)
+    acov = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in ca]
+    accq = []
+    for pa, _ in pairs:
+        if (pa[0], pa[1]) in ids_a:
+            continue
+        gh = max((pa[6] - pa[4]) * S, 4.0)
+        acov.append((pa[3] * S - pad, pa[4] * S - pad, pa[5] * S + pad, pa[6] * S + pad))
+        accq.append((pa[3] * S - tol, pa[4] * S - 1.5 * gh, pa[5] * S + tol, pa[6] * S + 1.5 * gh))
+    used_b = {id(pbb) for _, pbb in pairs}
+    bcov = []
+    for pa, pbb in pairs:                                 # the partner's quad, in B's frame
+        ox, oy = pa[1] * S - pbb[1] * S, pa[2] * S - pbb[2] * S
+        bcov.append((pa[3] * S - ox - pad, pa[4] * S - oy - pad, pa[5] * S - ox + pad, pa[6] * S - oy + pad))
+    bcov += [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in cb if id(c) not in used_b]
+    a_ng, a_cov = set(), set()
+    ext = max(4, int(0.6 * (b[3] - b[1])))     # an overline over a tight box lies above it; owner() keeps the
+    for y in range(int(b[1]) - ext, int(b[3]) + ext + 1):   # neighbours' rules out
+        ty = y * UP + UP // 2 - cy0
+        for x in range(int(b[0]) - 4, int(b[2]) + 5):
+            tx = x * UP + UP // 2 - cx0
+            if 0 <= ty < ah and 0 <= tx < aw and ab[ty * aw + tx] < INK:
+                (a_cov if covered(acov, x, y) else a_ng).add((x, y))
+    b_ng, b_cov = set(), set()                            # the whole snippet page, B's 400 grid
+    for y in range(0, ph // UP):
+        sy = y * UP + UP // 2
+        for x in range(0, pw // UP):
+            sx = x * UP + UP // 2
+            if pb[sy * pw + sx] < INK:
+                (b_cov if covered(bcov, x, y) else b_ng).add((x, y))
+    def free(comp, cov):
+        """a rule stands free: a glyph's edge outside its quad (TeX's CM under a page's Times) borders glyph ink
+        along its length, a vinculum touches its radical sign only at one end"""
+        touch = sum(1 for x, y in comp if any((x + dx, y + dy) in cov for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))))
+        return touch <= 0.3 * len(comp)
+    # inline maths: only rules over the maths -- overlapping a maths-font glyph in x (a footnote rule above a
+    # "^3" line is not part of a formula); in display lines every rule counts
+    mx_a = [(c[3] * S, c[5] * S) for c in ca if re.search(MATHFONT + r"|MSBM|MSAM|EUF|EUS", c[7])]
+    mx_b = [(c[3] * S, c[5] * S) for c in cb if re.search(MATHFONT + r"|MSBM|MSAM|EUF|EUS", c[7])]
+    over_maths = lambda comp, mx: display or any(r[0] < max(p[0] for p in comp) + 1 and r[1] > min(p[0] for p in comp)
+                                                for r in mx)
+    b_rules = []
+    for comp in components(b_ng):
+        if rule_like(comp) and free(comp, b_cov) and over_maths(comp, mx_b):
+            xs = [p[0] for p in comp]
+            dx, dy = offset_at((min(xs) + max(xs)) / 2)
+            b_rules.append([(round(x + dx), round(y + dy)) for x, y in comp])
+    b_map = {p for comp in b_rules for p in comp}
+    near = lambda pts, x, y: any((x + ddx, y + ddy) in pts for ddx in range(-tol, tol + 1) for ddy in range(-tol, tol + 1))
+    a_rules = [c for c in components(a_ng) if rule_like(c) and free(c, a_cov) and over_maths(c, mx_a)]
+    a_map = {p for comp in a_rules for p in comp}
+    def owner(comp):
+        xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+        cx, cy = (min(xs) + max(xs) + 1) / 2, (min(ys) + max(ys) + 1) / 2
+        inside = [((q[2] - q[0]) * (q[3] - q[1]), li) for li, q in enumerate(boxes or [b])
+                  if q[0] <= cx <= q[2] and q[1] <= cy <= q[3]]
+        if inside:
+            return min(inside)[1]
+        below = []                                         # an overline/vinculum: the line of the glyph under it
+        for (c, li) in glyphs or []:
+            gx0, gy0, gx1, gy1 = c[3] * S, c[4] * S, c[5] * S, c[6] * S
+            if gx1 <= min(xs) or gx0 >= max(xs) + 1:
+                continue
+            gap = gy0 - (max(ys) + 1)
+            if -2 <= gap <= 1.5 * max(gy1 - gy0, 4.0):
+                below.append((gap, li))
+        if below:
+            return min(below)[1]
+        best = None
+        for li, q in enumerate(boxes or [b]):
+            if q[2] <= min(xs) or q[0] >= max(xs) + 1:
+                continue
+            d = max(q[1] - cy, 0, cy - q[3])
+            key = (d, (q[2] - q[0]) * (q[3] - q[1]))
+            if best is None or key < best[0]:
+                best = (key, li)
+        return best[1] if best else None
+    for comp in a_rules:
+        if boxes is not None and owner(comp) != i:
+            continue                                       # another line's rule
+        if any(covered(accq, x, y) for x, y in comp):
+            continue                                       # the partner of an accent measured on ink
+        res["rules_a"] += 1
+        if sum(1 for x, y in comp if near(b_map, x, y)) < 0.5 * len(comp):
+            res["rules_missing"] += 1
+            xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+            print(f"R L{i} missing {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
+    for comp in b_rules:
+        if sum(1 for x, y in comp if near(a_map, x, y)) < 0.5 * len(comp):
+            res["rules_invented"] += 1
+            xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+            print(f"R L{i} invented {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
+
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> collections.Counter:
     with open(lines_json, encoding="utf-8") as fh:
         doc = json.load(fh)
@@ -324,7 +472,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
-        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 "
+        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
               f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unpaired_A 0 unpaired_B 0", file=out)
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
@@ -332,7 +480,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     gone = UNMAPPABLE | dropped
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
-                              unpaired_B=0, accents_on_ink=0, unmappable=0)
+                              unpaired_B=0, accents_on_ink=0, unmappable=0, rules_a=0, rules_missing=0,
+                              rules_invented=0)
     b_total = 0                                     # rendered glyphs of the lines that typeset
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}", file=out)
     if len(bc) != len(lv):            # the document itself did not come out page for page: no line is trusted
@@ -446,6 +595,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
             if flag:
                 res["flagged"] += 1
                 res["style" if sa != sb else "glyph"] += 1
+        if is_formula(ln) and pairs:
+            rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
+                     glyphs=[(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner],
+                     display=ln.get("type") in ("math", "equation"))
     # page-wide counts for the board's ink residual (coordinator, 2026-11-17): every original glyph that paired
     # with nothing (outside any line, in an empty or uncompiled line, or skipped by the alignment) and every
     # rendered glyph with no partner
