@@ -553,6 +553,23 @@ Time: median 142 ms per page, max 320 ms.
   and tables most of all.
 - The YOLO route on these pages comes from gemma4-ee; the gate waits for it.
 
+**The YOLO route on held-out 4** (Gemma4 ba6b443, gemma_lines 1db2059, `testpool/heldout4`, 86 pages, read once,
+rescored one to one; equal to gemma4-ee's and the coordinator's numbers):
+
+| stratum | YOLO+Gemma | blob v4 (input-corrected) | gate |
+|---|---|---|---|
+| maths | 0.903 / 0.851 | 0.887 / 0.862 | passes (within 2) |
+| german | 0.597 / 0.690 | 0.708 / 0.805 | passes |
+| two_column | 0.852 / 0.918 | 0.826 / 0.852 | **fails** (-2.6 / -6.6) |
+| table | 0.264 / 0.282 | 0.580 / 0.710 | passes |
+| scan | 0.485 / 0.446 | 0.564 / 0.468 | passes |
+| all | 0.599 / 0.623 | 0.712 / 0.753 | ahead |
+
+- The page reported apart, lib:f96282ec0392 p1 (inspect render for both routes), matched lines: YOLO 21/24, blob 18/24.
+- Without that page: german YOLO 0.588/0.699 against blob 0.706/0.816; all 0.598/0.624 against 0.712/0.754.
+- **v4 is closed.** The gate fails on two-column only.
+- Line tuning stops here (the coordinator). Line IoU is a regression measure, and the board decides.
+
 **Input correction for held-out 3 and 4 (2026-11-17).** In each set, one German page's folder has no source
 PDF. The measurement runner took the folder's only other PDF, pdfdrill's `report.pdf`, and so measured a different
 document.
