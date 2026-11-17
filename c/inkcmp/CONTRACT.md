@@ -522,6 +522,29 @@ changes (coordinator, 2026-11-17): figure regions come from a learned layout det
 paths only refine its boxes. The vector harness stays (`vecfig.py`, `vecfig_set.py`, `figdraw.py`) as the record and
 as the refinement's measure.
 
+**Rule 6, the detector route for figure regions (2026-11-17; budget <= 0.3 CPU s/page, the loop's 1 page/s).**
+1. What exists (from knowledge, figures not re-checked): DocLayout-YOLO (YOLOv10, DocStructBench weights; Gemma4's
+   layout arm at 1024) reports about 0.79 mAP on DocStructBench at ~85 FPS on a GPU; PP-DocLayout-S / -M (PaddleX) are
+   built for CPU (the S model in the tens of ms per page on a server CPU at about 0.70 mAP@0.5, M at about 0.75); any
+   YOLO detector trades input size for speed roughly with its square. Gemma4's YOLO costs 6-7 s/page on CPU because it
+   also runs a formula detector at 1888 px.
+2. Idea: one detector pass at a small input size gives every page its figure regions (scans, glyph-only figures and
+   images of text included, which the vector route could not reach); the PDF's paths only trim its boxes.
+3. Cheapest experiment, run (`tools/lines-audit/detector_dly.py`: DocLayout-YOLO, figure class, the 12 pages with
+   MathPix figures of the 3 development documents, IoU >= 0.5, ONE thread, PyTorch CPU):
+   input 1024: 27/30 (90%) 4.19 CPU s/page; 768: 26/30 2.52; 640: 26/30 1.62; 512: 26/30 1.12; 416: 26/30 0.81;
+   320: 28/30 (93%) 0.48; 256: 21/30 (70%) 0.39.
+4. ONNX Runtime at a fixed 320 x 320 square (`detector_ort.py`): 0.40 CPU s/page but 20/30 (67%) -- the square
+   letterbox is not what ultralytics feeds (a rectangle with minimal padding): the preprocessing, not the runtime.
+5. So the quality holds down to 320 (93% on pages it was not tuned on, better than any vector attempt held out), and
+   the speed misses the budget by 0.1-0.2 s: 0.40-0.48 against 0.3.
+6. Next experiment, hours: the ONNX model with ultralytics' rectangular letterbox (a portrait page at 320 is about
+   256 x 320, 20% fewer pixels) and int8 dynamic quantisation (onnxruntime's quantize_dynamic); gate: >= 90% on these
+   12 pages at <= 0.3 CPU s/page, then the 40 held-out figure pages (seeds 9003, 9004) at >= 80% whole, 0 swallowed.
+7. If that misses, PP-DocLayout-S is the next candidate (built for CPU); it needs PaddlePaddle, a dependency to name
+   before it is added.
+8. Board change: none directly; the figure source of inkcmp lines (the Gemma inklines arm), T-0154 D.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
