@@ -195,6 +195,14 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
         self.assertEqual(self.res["flagged"], 0)
         self.assertIn("STATUS OK", self.out)
 
+    def test_unpaired_ink_is_counted(self):
+        """the board's ink residual needs every original glyph that paired with nothing: the broken line's own"""
+        r = self.res
+        self.assertEqual(r["a_glyphs"], r["glyphs"] + r["a_unpaired"])
+        line1 = len("whilethislinehasamacronopackagedefines:here,")        # its glyphs on the page, no spaces
+        self.assertGreaterEqual(r["a_unpaired"], line1)
+        self.assertGreaterEqual(r["b_unpaired"], 0)
+
     def test_latex_text(self):
         self.assertEqual(judge.latex_text("70% of"), "70\\% of")
         self.assertEqual(judge.latex_text("5\\% stays"), "5\\% stays")

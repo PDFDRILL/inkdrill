@@ -19,7 +19,10 @@ Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per
 Output, one line per paired glyph:
     G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font>
 Then `U L<i> A|B <char>` for unpaired glyphs, `N L<i> NOT_COMPILED <LaTeX error>` for a line pdflatex could not set
-(the other lines still set and pair), a summary line `JUDGE1 lines .. glyphs .. flagged .. not_compiled ..`, and
+(the other lines still set and pair), a summary line `JUDGE1 lines .. glyphs .. flagged .. not_compiled ..
+a_glyphs .. a_unpaired .. b_unpaired ..` (a_glyphs: all glyphs of the original page; a_unpaired: those that paired
+with nothing; b_unpaired: rendered glyphs with no partner; the board's ink residual is
+(findings + a_unpaired + b_unpaired) / a_glyphs), and
 `STATUS OK|NOT_COMPILED|NO_TEXT|FONT_UNMAPPED`: a page with 0 paired glyphs has no residual. FONT_UNMAPPED: most of
 the page's text glyphs are in a family TeX cannot set (e.g. a commercial font), so same-font XOR does not apply.
 Line text goes through `latex_text` first: characters pdflatex cannot set (U+2212, Greek, arrows, ...) become LaTeX,
@@ -292,12 +295,15 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
-        print("JUDGE1 flagged 0 glyph 0 glyphs 0 lines 0 not_compiled 0 style 0", file=out)
+        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} b_unpaired 0 flagged 0 glyph 0 glyphs 0 lines 0 "
+              f"not_compiled 0 style 0 unpaired_A 0 unpaired_B 0", file=out)
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     bpdf, failed = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
-    res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
+    res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
+                              unpaired_B=0)
+    b_total = 0                                     # rendered glyphs of the lines that typeset
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}", file=out)
     if len(bc) != len(lv):            # the document itself did not come out page for page: no line is trusted
         failed = {i: failed.get(i, "no snippet page (document failed)") for i in range(len(lv))}
@@ -308,6 +314,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     for i, ln in enumerate(lv[:len(bc)]):
         if i in failed:
             continue
+        b_total += len(bc[i])
         b = box(ln)
         ca = sorted((c for c in ac if inside(c, b)), key=lambda c: c[1])
         cb = sorted(bc[i], key=lambda c: c[1])
@@ -352,6 +359,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
             if flag:
                 res["flagged"] += 1
                 res["style" if sa != sb else "glyph"] += 1
+    # page-wide counts for the board's ink residual (coordinator, 2026-11-17): every original glyph that paired
+    # with nothing (outside any line, in an empty or uncompiled line, or skipped by the alignment) and every
+    # rendered glyph with no partner
+    res["a_glyphs"] = len(ac)
+    res["a_unpaired"] = len(ac) - res["glyphs"]
+    res["b_unpaired"] = b_total - res["glyphs"]
     print("JUDGE1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())), file=out)
     status = "OK" if res["glyphs"] else ("NOT_COMPILED" if res["not_compiled"] else "NO_TEXT")
     print(f"STATUS {status}", file=out)          # a page with 0 pairs has no residual

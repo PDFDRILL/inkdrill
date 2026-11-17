@@ -263,6 +263,16 @@ thin-stroke miss, and an expected-failure test holds it open.
   undefined macro is NOT_COMPILED while the other two lines pair; `latex_text` and `style` unit cases. Removing the
   minus mapping or the isolation fails them.
 
+**Unpaired ink (coordinator's decision, 2026-11-17, rule 1).** JUDGE1 now always prints `unpaired_A`/`unpaired_B`
+(line-level, from the alignment) and the page-wide `a_glyphs` (every glyph of the original page), `a_unpaired`
+(original glyphs that paired with nothing: outside any judged line, in an empty or uncompiled line, or skipped by
+the alignment) and `b_unpaired` (rendered glyphs with no partner).
+- The board's ink residual = (findings + a_unpaired + b_unpaired) / a_glyphs. flagged/paired stays beside it as
+  "residual among paired".
+- The reason: a reading that merges lines leaves glyphs unpaired, and flagged/paired did not see them (dev2 tables:
+  ours 4732 unpaired original glyphs, ours+ink 661).
+- 040123 p2: G rows unchanged; a_glyphs 3133, a_unpaired 276, b_unpaired 0.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of
