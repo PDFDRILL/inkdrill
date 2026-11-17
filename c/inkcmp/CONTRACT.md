@@ -604,6 +604,25 @@ swallowed, 0.310 CPU s/page (one thread, machine load 5-7). Looked at by eye:
 The gate counts all of these. Whether a code listing is a figure (MathPix: yes; this reading: text) is the coordinator's
 call; it decides 13 points of this number.
 
+**Side stamps, step 2a (T-0154, 2026-11-17; GLYPHDRILL3 b0b24bf, pinned).** The owner's case: on 2312.11532 p1 the
+rotated arXiv stamp sits inside every left-column line box of both Gemma arms (x 64 instead of MathPix's 185).
+inkcmp lines' own boxes never took it: the stamp is grey 127, lighter than the page's threshold (97; 2209.02970: 68),
+so its ink was gone after step 1 -- and it was no record at all. The Gemma arms' x 64 comes from outside inkcmp lines
+(the text layer they align to holds the stamp's characters merged into the lines: 2209.02970's pdfminer lines.json
+starts 30 lines at 16 pt). Step 2a looks for a lane on the grey page (< 224) in the outer 12% of the width: the first
+inked column run from the edge, <= 4 med wide, then white >= 1.5 med on the whole page height; its ink >= 30 med tall,
+>= 8x its width, ink on >= 50% of its rows (stamps 74.5% / 78.7%; a line-number column, lib:9c3ed0f761c9 p2, 22.5%).
+The lane's ink is erased (a dark stamp cannot join a line) and it is one `page_info` record with `rot 90` (read
+bottom-to-top) or `rot 270`, from the densest column across the lane, which lies on the baseline's side (the
+centroid said 270 on both stamps: capitals and digits pull it to the ascenders). INKLINES1 gains an optional
+` rot N` after the box, on that record only; five-field readers (gd3-bands before b0b24bf, inklines_layout) are
+unaffected. Red tests `tools/lines-audit/redtests_stamp.py` (S1 2312.11532 p1 against MathPix, S2 2209.02970 p1
+against the text layer): before, the stamp is no record on either page (RED, RED; left edges green 40/40, 33/33);
+after, one rotated record each at IoU >= 0.5, nothing else reaching into it, left edges unchanged -- exit 0. Every
+other record on both pages is byte-identical. `tests-c/test_inkcmp_stamp.py`: each class fires (90, 270, right edge,
+a dark stamp erased, none for line numbers or a plain page); four mutants (no erase, rotation constant, coverage
+0.2, no gap check) each fail it.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

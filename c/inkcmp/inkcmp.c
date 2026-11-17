@@ -68,7 +68,10 @@ static int lines_main(int argc, char **argv) {
     if (rc) return load_error(5);
     printf("INKLINES1 page %u %u %u threshold %u lh %u m %u lines %zu\n", page, w, h, L.threshold, L.lh, L.m, L.n);
     for (size_t i = 0; i < L.n; i++)
-      printf("%s %u %u %u %u\n", ic_line_type(L.l[i].type), L.l[i].x0, L.l[i].y0, L.l[i].x1, L.l[i].y1);
+      if (L.l[i].rot)                  /* a side stamp (step 2a): page_info with its rotation; 5-field readers skip it */
+        printf("%s %u %u %u %u rot %d\n", ic_line_type(L.l[i].type), L.l[i].x0, L.l[i].y0, L.l[i].x1, L.l[i].y1, L.l[i].rot);
+      else
+        printf("%s %u %u %u %u\n", ic_line_type(L.l[i].type), L.l[i].x0, L.l[i].y0, L.l[i].x1, L.l[i].y1);
     ic_lines_free(&L);
     double t1 = now_ms();
     fprintf(stderr, "inkcmp lines: page %u, %u x %u, %.1f ms\n", page, w, h, t1 - t0);
