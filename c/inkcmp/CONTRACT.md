@@ -501,6 +501,18 @@ swallowed. My selection let one scan in (lib:651638b87560 p4, a page-size image 
 - partly found (marx19a p7, entropy-23-01195-v2 p7, lib:6060cf21fa3a p4): not yet looked at.
 So the sub-caption and width rules were fitted to the three development documents; it is not inkcmp's figure source.
 
+**Held out, attempt 2, gate FAILED on swallowing (2026-11-17).** Rules fixed and committed before the run (9cbeb75):
+a label is an unclaimed line box (no line of a text block: a neighbour above or below with nearly the same left
+edge); framed text (<= 6 paths, >= 3 text lines inside, no image) is not a figure. Development documents: 26 of 30,
+0 swallowed. The confirm set's 20 figure pages being used up by attempt 1, a fresh set was drawn and committed first
+(`figdraw.py`, seed 9003: 20 born-digital pages with MathPix figures, no document of the board, held-out 1-4, the
+audit sets or the development documents). Result (`vecfig_set.py figure-set-9003.tsv 20 --born-digital --framed`):
+18 of 22 figures whole (82%: passes), 20 body lines swallowed on 4 pages (fails). Causes:
+- 2306.02572 p12 (7 lines): three page-wide shaded text boxes -- framed text with more paths than the framed rule allows;
+- 1706.08746 p2 (7 lines): text set as images (MathPix reads them as text): out of reach of a vector route;
+- CM2526_exercises_08 p1 (5 lines): a header logo image and the page-wide rule under it make one figure with the
+  header lines; 1807.03656 p4 (1 line).
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
