@@ -422,7 +422,7 @@ lines.json faster than Gemma4's YOLO route, at the same accuracy?
     ...
     end
 
-`c/inkcmp/lines.c` (2026-11-17) is a port of the scratch prototype (`work/run-files/blob-lines/blob_lines.py`, PIL).
+`lines.c` (GLYPHDRILL3 inkcmp/ since its 7941726; inkdrill pins it) (2026-11-17) is a port of the scratch prototype (`work/run-files/blob-lines/blob_lines.py`, PIL).
 It equalled the prototype on all 5501 lines of the three documents below, and then took two measured changes,
 marked "(C)" in the steps. Tests are in `tests-c/test_inkcmp_lines.py`: a pdflatex page against pdftotext's
 boxes, where every type fires, and the same page under a gutter shadow and dust gives the same lines. Per page:

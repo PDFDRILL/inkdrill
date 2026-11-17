@@ -12,7 +12,8 @@ CFLAGS ?= -O3 -std=c17 -Wall -Wextra -Wpedantic -Werror
 B = build
 GD3 ?= ../GLYPHDRILL3
 PIN ?= gd3.pin
-GD3_FILES = src/gd3_adapter.c src/gd3_white.c src/gd3_blocks.c src/gd3_rle.h src/layout/blocks.c src/layout/blocks.h
+GD3_FILES = src/gd3_adapter.c src/gd3_white.c src/gd3_blocks.c src/gd3_rle.h src/layout/blocks.c src/layout/blocks.h \
+            inkcmp/lines.c inkcmp/lines.h inkcmp/white.c inkcmp/white.h inkcmp/page.c inkcmp/page.h
 PROGRAMS = $(B)/inkcmp $(B)/inkcmp-selftest-two $(B)/gd3-adapter $(B)/gd3-blocks $(B)/gd3-white
 all: $(PROGRAMS)
 $(B):
@@ -30,13 +31,16 @@ repin:
 	   (cd $(GD3) && sha256sum $(GD3_FILES)); } > $(PIN).new && mv $(PIN).new $(PIN)
 	@cat $(PIN)
 
-# inkcmp: the C judge (c/inkcmp/CONTRACT.md), moved from GLYPHDRILL3 d6bf588 byte-identical
-INKCMP = c/inkcmp/inkcmp.c c/inkcmp/page.c c/inkcmp/white.c c/inkcmp/lines.c c/inkcmp/glyphs.c c/inkcmp/glyphtab.c c/inkcmp/rules.c $(GD3)/src/layout/blocks.c
-INKCMP_H = c/inkcmp/page.h c/inkcmp/white.h c/inkcmp/lines.h c/inkcmp/glyphs.h c/inkcmp/glyphtab.h $(GD3)/src/layout/blocks.h
+# inkcmp: the C judge (c/inkcmp/CONTRACT.md). Units 1, 3 and 7 (page, white, lines) live in GLYPHDRILL3's inkcmp/
+# since its 7941726 (coordinator decision (d), 2026-11-17) and are pinned; glyphs, rules and the CLI live here
+GD3INK = $(GD3)/inkcmp
+INKCMP = c/inkcmp/inkcmp.c $(GD3INK)/page.c $(GD3INK)/white.c $(GD3INK)/lines.c c/inkcmp/glyphs.c c/inkcmp/glyphtab.c \
+         c/inkcmp/rules.c $(GD3)/src/layout/blocks.c
+INKCMP_H = $(GD3INK)/page.h $(GD3INK)/white.h $(GD3INK)/lines.h c/inkcmp/glyphs.h c/inkcmp/glyphtab.h $(GD3)/src/layout/blocks.h
 $(B)/inkcmp: $(INKCMP) $(INKCMP_H)
-	$(CC) $(CFLAGS) -I$(GD3)/src -Ic/inkcmp -o $@ $(INKCMP) -lm
-$(B)/inkcmp-selftest-two: c/inkcmp/selftest_two.c c/inkcmp/page.c c/inkcmp/page.h
-	$(CC) $(CFLAGS) -Ic/inkcmp -o $@ c/inkcmp/selftest_two.c c/inkcmp/page.c
+	$(CC) $(CFLAGS) -I$(GD3)/src -I$(GD3INK) -Ic/inkcmp -o $@ $(INKCMP) -lm
+$(B)/inkcmp-selftest-two: c/inkcmp/selftest_two.c $(GD3INK)/page.c $(GD3INK)/page.h
+	$(CC) $(CFLAGS) -I$(GD3INK) -o $@ c/inkcmp/selftest_two.c $(GD3INK)/page.c
 # the three GLYPHDRILL3 programs inkcmp's byte-identity tests compare with, built from the pinned sources
 $(B)/gd3-adapter: $(GD3)/src/gd3_adapter.c
 	$(CC) $(CFLAGS) -o $@ $<

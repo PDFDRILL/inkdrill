@@ -1,8 +1,14 @@
 # GLYPHDRILL3 files the inkdrill build compiles from GD3 (default ../GLYPHDRILL3); written by make repin.
-# commit 90a94e8bc08505ccd8ca0b534f6457f5a49cb8df 2026-11-17 "T-0152: inkcmp lines v7 polarity in gd3 lines (default); v7 column gutters as gd3-bands --gutters on (opt-in)"
-ee9a4cd687bc5acaed3595ce8111e7f4b92581340fe1a1fa5644f241642474d4  src/gd3_adapter.c
+# commit ba35e9bcbc032aec511a9c6fdb0d5bbfc9f267d6 2026-11-17 "T-0148 match: units are matched against the page's 8 best-ranked fonts + CMMI/CMTI first; lines over the limit against every font"
+857364213afe22ed9df6b41c4b95bf551fccaee37911413adb0277ca0ee762d3  src/gd3_adapter.c
 c2cd059c6d91290ce523b4f6596beddaef8b2119f45ddf320b27982f5fe64f02  src/gd3_white.c
 3801246822bcbe440203225e2541348a4a650ea7382de58a57e460d2c4ae97c3  src/gd3_blocks.c
 0dc033313d4c269a9fbc515dc9d4615aeee5a71cc5f73718862a90c88902aa39  src/gd3_rle.h
 8447786100ef90cf1dce7c9c43a43bc57ff6af8e4ebe9603c91bc0e7139e9c69  src/layout/blocks.c
 74d84981f090af0e5f903cf4f96737f756a642adf1ad632c51a0a25d06a208ba  src/layout/blocks.h
+6a05f7dc79cda6ff2937eca92559924fc06cd832130adb789781dee47c3e9532  inkcmp/lines.c
+237c26ce7c894424f695495f82cb04ed3b78f0c38ad526cde188db9c5adc22c3  inkcmp/lines.h
+501d1975d70c575e3ee127204c57e779262f99bf3aa065fad4d1c3a20cb2fea2  inkcmp/white.c
+ad37128d1a08fb3e46dc7bc7749ce417c936aa4f60bbc91938aaf2e2ea0487cd  inkcmp/white.h
+7eb0efc3d57e9b535a8010e46cad1c31fce5c4989bec8fa1f910a8c45a9d5cb2  inkcmp/page.c
+d2919493a2e690c298ef90b7c1d5f2e2464e93995879db674784abfe5c901427  inkcmp/page.h
