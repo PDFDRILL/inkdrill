@@ -622,6 +622,28 @@ New tests:
 - L7: the L1 page in three grey levels (text 35, paper 255, a black frame) gives the same 12 text lines as in black
   and white. Taking the first Otsu maximum fails it (0 lines).
 
+**ours+ink on the board (T-0148, 2026-11-17, scratch `work/run-files/board-ink/`).** The question: does
+regrouping `pdfdrill glyphlines` lines by `inkcmp lines` boxes move the board's ours column? The gate: the ink
+residual is lower on >= 4 of the 5 table rows, and no maths row is worse.
+- **Attempt 1** (one-page extracts; re-cut lines rebuilt from text-layer characters): it failed. Table rows were
+  3 lower and 2 equal, and 4 maths rows were worse, because re-cut display lines lost their LaTeX.
+- **Attempt 2.** Maths/equation lines and lines with inline maths are never re-cut (variant B, chosen on dev2: maths
+  rows worse 1/24, against 7/24 for maths/equation lines only).
+  - Set-up: pdfdrill 27455713+ and judge db1e766, through board_run.py's own `row()`: three-page extracts, the
+    judged page n, the corrected residual.
+  - A first run is invalid: my harness's copy dropped `judged-page.txt`, so ours+ink was judged on page 1 of the
+    extract. Rerun with a check that both columns judge the same page.
+  - Table rows, residual (covered), ours -> ours+ink:
+    - 1511.08771 p2709: 0.0186 (0.985) -> 0.0139 (0.987);
+    - lib:d68e0271bd4d p334: 1.443 (0.119) -> 1.372 (0.083);
+    - 2312.11532 p7: 0.537 (0.714) -> 0.157 (0.952), but CER 0.105 -> 0.286;
+    - RE4B-DE p559 (FONT_UNMAPPED) and lib:025faeafae2f p153 (scan, NOT RUN): not measurable for either column.
+  - Maths rows: none worse; lib:c57ac038ae5f p293 goes 0.2315 -> 0.2298, and the others are equal.
+  - Cells matched against MathPix (IoU >= 0.5), ours -> ours+ink: 0 -> 2 of 33, 0 -> 0 of 155, 0 -> 10 of 356,
+    1 -> 5 of 10, 5 -> 5 of 24. The regrouper splits a little, and it is not cell segmentation.
+  - **Gate by its letter: FAIL.** 3 of 5 table rows are lower, 0 higher, and the other 2 cannot move for any
+    reading. Maths: 0 worse.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.
