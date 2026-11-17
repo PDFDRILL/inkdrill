@@ -193,12 +193,17 @@ for _n, _c in GREEK.items():
 UNI_TEX["\u03bf"] = ("o", "o")                       # omicron has no command: it is an o
 
 
-def latex_text(s: str) -> str:
+UNMAPPABLE = {"\ufffd"}             # always dropped: a reader's "glyph I cannot name" (pdfdrill 660ea83c)
+
+
+def latex_text(s: str, drop: frozenset = frozenset()) -> str:
     """A reading's line as pdflatex input: raw % and # (and & outside maths) escaped, mapped characters (maths mode
-    tracked through $, \\( \\), \\[ \\]), compatibility forms through NFKC, everything else unchanged."""
+    tracked through $, \\( \\), \\[ \\]), compatibility forms through NFKC, characters in UNMAPPABLE or `drop`
+    (those pdflatex reported it cannot set) removed, everything else unchanged."""
     s = "".join(unicodedata.normalize("NFKC", ch)              # compatibility forms first, so a full-width ％
                 if ord(ch) > 126 and unicodedata.decomposition(ch).startswith(("<compat>", "<wide>", "<narrow>"))
                 else ch for ch in s)                           # is escaped like any %
+    s = "".join(ch for ch in s if ch not in UNMAPPABLE and ch not in drop)
     out, math, i = [], False, 0
     while i < len(s):
         ch = s[i]
@@ -238,14 +243,20 @@ LOGLINE = re.compile(r"^l\.(\d+)")
 INPUTLINE = re.compile(r"on input line (\d+)")
 
 
-def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 8) -> tuple[str, dict]:
-    """All lines in one pdflatex run (one page per line). A line whose source raises a LaTeX error is set aside
-    (an empty page keeps the numbering) and the run is repeated; returns (pdf path, {line index: error})."""
+UNICODE_ERR = re.compile(r"Unicode character .* \(U\+([0-9A-Fa-f]{4,6})\)")
+
+
+def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12) -> tuple[str, dict, set]:
+    """All lines in one pdflatex run (one page per line). A character pdflatex reports it cannot set ("Unicode
+    character ... (U+XXXX) not set up") is dropped from every line and the run is repeated; a line whose source raises
+    any other LaTeX error is set aside (an empty page keeps the numbering) and the run is repeated.
+    Returns (pdf path, {line index: error}, dropped characters)."""
     failed: dict = {}
+    drop: set = set()
     for _ in range(passes):
         body, starts, n = [], [], 4 + pre.count("\n") + 1     # documentclass, usepackage, pre, begin{document}
         for i, (t, sz) in enumerate(zip(texts, sizes)):
-            src = "\\mbox{}" if i in failed else latex_text(t)
+            src = "\\mbox{}" if i in failed else latex_text(t, frozenset(drop))
             line = "\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}" % (sz * 72.27 / 72,
                                                                                   sz * 72.27 / 72 * 1.2, src)
             starts.append(n)
@@ -259,11 +270,15 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 8) 
                        capture_output=True)
         with open(os.path.join(wd, "lines.log"), encoding="utf-8", errors="replace") as fh:
             log = fh.read().splitlines()
-        new, msg = {}, None
+        new, msg, newdrop = {}, None, set()
         for ln in log:
             m = LOGERR.match(ln)
             if m:
                 msg = m.group(1)
+                u = UNICODE_ERR.search(msg)
+                if u:                                # a character, not the line: drop it everywhere
+                    newdrop.add(chr(int(u.group(1), 16)))
+                    msg = None
                 continue
             m = LOGLINE.match(ln)
             if m and msg is not None:
@@ -275,10 +290,13 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 8) 
                 if idx is not None and idx not in failed:
                     new.setdefault(idx, msg)
                 msg = None
+        if newdrop - drop:                          # characters first: their lines may compile once they are gone
+            drop |= newdrop
+            continue
         if not new:
             break
         failed.update(new)
-    return os.path.join(wd, "lines.pdf"), failed
+    return os.path.join(wd, "lines.pdf"), failed, drop
 
 
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> collections.Counter:
@@ -306,14 +324,15 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
-        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} b_unpaired 0 flagged 0 glyph 0 glyphs 0 lines 0 "
-              f"not_compiled 0 style 0 unpaired_A 0 unpaired_B 0", file=out)
+        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 "
+              f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unpaired_A 0 unpaired_B 0", file=out)
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
-    bpdf, failed = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
+    bpdf, failed, dropped = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
+    gone = UNMAPPABLE | dropped
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
-                              unpaired_B=0, accents_on_ink=0)
+                              unpaired_B=0, accents_on_ink=0, unmappable=0)
     b_total = 0                                     # rendered glyphs of the lines that typeset
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}", file=out)
     if len(bc) != len(lv):            # the document itself did not come out page for page: no line is trusted
@@ -322,6 +341,11 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     for i, e in sorted(failed.items()):
         print(f"N L{i} NOT_COMPILED {e}", file=out)
     res["not_compiled"] = len(failed)
+    # characters dropped from the snippets (U+FFFD, and any pdflatex said it cannot set): the page's glyphs there
+    # stay unpaired original ink, counted once
+    res["unmappable"] = sum(1 for i, ln in enumerate(lv) if i not in failed for ch in ln["text"] if ch in gone)
+    for ch in sorted(dropped):
+        print(f"D U+{ord(ch):04X} dropped (pdflatex cannot set it)", file=out)
     # each original glyph belongs to ONE line: the smallest box that holds its centre. Where a reading's boxes
     # overlap, a glyph was paired once per box (board 2312.11532 p7: 3396 pairs of 3325 glyphs)
     boxes = [box(ln) for ln in lv]

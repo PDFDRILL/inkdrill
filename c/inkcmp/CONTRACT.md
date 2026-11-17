@@ -296,6 +296,17 @@ clean reading. Pairing per box fails it.
 - Tests (JudgeAccents): `\bar{M}` read as `\bar{M}` pairs clean; read as `M`, the page's macron is unpaired;
   `\overline{M}` read as `\bar{M}` gives accents_on_ink 1 and b_unpaired 0. Dropping either mechanism fails them.
 
+**Unmappable characters (2026-11-17, rule 4).** pdfdrill 660ea83c writes U+FFFD for a glyph it cannot name, and
+the whole line was NOT_COMPILED: 6 of 30 lines on lib:3c16fac66fdd p370.
+- A character pdflatex reports it cannot set ("Unicode character ... (U+XXXX) not set up") is now dropped from
+  every snippet, and the run repeats. U+FFFD is dropped from the start.
+- The line compiles and its other glyphs pair. The page's glyph there stays unpaired original ink, counted once.
+- JUDGE1 `unmappable` counts the dropped occurrences, and `D U+XXXX dropped` names each character found this way.
+- lib:3c16fac66fdd p370 (ours): 30 lines, 0 not compiled, unmappable 6, 1517 of 1546 glyphs paired.
+- Tests (JudgeUnmappable): "4\ufffd" for "42" pairs the rest of the line, with the page's "2" unpaired; a Cyrillic
+  letter is dropped through pdflatex's own error. Removing the error path fails them. The static U+FFFD entry is
+  an equivalent mutant: pdflatex reports U+FFFD too, so it only saves a pass.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of

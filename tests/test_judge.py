@@ -283,3 +283,34 @@ class JudgeAccents(unittest.TestCase):
                                 "The mean value \\(\\bar{M}\\) of the sample in question.")
         self.assertEqual(res["accents_on_ink"], 1)
         self.assertEqual(res["b_unpaired"], 0, "the rendered bar is not invented ink")
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeUnmappable(unittest.TestCase):
+    """A character the judge cannot set is dropped from the snippet and counted (`unmappable`); the line compiles,
+    its other glyphs pair, and the page's glyph stays unpaired original ink (pdfdrill 660ea83c writes U+FFFD)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-fffd-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_replacement_character(self):
+        res, out = _accent_case(self.tmp.name, "fffd", "The total of the sample is 42 units in all.",
+                                "The total of the sample is 4� units in all.")
+        self.assertEqual(res["not_compiled"], 0)
+        self.assertEqual(res["unmappable"], 1)
+        self.assertIn("U L0 A 2", out)                      # the page's glyph, unpaired, once
+        self.assertEqual(res["flagged"], 0)
+        self.assertGreaterEqual(res["glyphs"], 30)
+
+    def test_character_pdflatex_cannot_set(self):
+        res, out = _accent_case(self.tmp.name, "cyr", "The total of the sample is 42 units in all.",
+                                "The total of the sample is 42 units in all ж.")
+        self.assertEqual(res["not_compiled"], 0)
+        self.assertIn("D U+0436 dropped (pdflatex cannot set it)", out)
+        self.assertEqual(res["unmappable"], 1)
+        self.assertEqual(res["flagged"], 0)
