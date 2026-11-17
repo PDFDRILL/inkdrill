@@ -356,6 +356,26 @@ Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, bo
 400 dpi page render for the ink that is not glyphs, 0.08 s. That is about 3 s against the route above's 7.5 to 22 s.
 In the library sample (299 documents, pp. 1-3), 72% of documents use only Type 1 and Type 1C fonts.
 
+**Glyph-raster route in C (2026-11-17, `inkcmp-judge --route glyph`, opt-in).** `inkcmp glyphs` (glyphs.c: U9's
+Type 1 parser and charstrings ported operation for operation, a CFF/Type 2 reader, scan.py's raster, the per-pair
+score) and `inkcmp rules` (rules.c: rule_ink's pixel stage). The Python keeps the text side (pdflatex, stext, the
+pairing). Glyph names, origins and matrices come from `mutool trace`; neighbours' glyphs in a pair's window are added
+on both sides; an A glyph without an outline (no program, Type 3, an OCR layer over a scan) is the page's 400-dpi ink.
+Oracles: C = U9 Python on 1324 TeX placements; CFF = Type 1 on 370; C = fontTools on all 5192 glyphs of the 109 board
+CFF fonts (scratch); `inkcmp rules` = rule_pixels; the planted CM page flags the same glyphs on both routes.
+Found on the way (rule 4, both fixed in the render route too): poppler rendered the MediaBox while stext is CropBox
+(lib_d68e0271bd4d p334 flagged 1374 of 1380 glyphs; 1096 after); and poppler/Ghostscript place glyphs up to 0.75 px
+left of mutool's origins at the end of a long snippet line (1511.08771 p2709, line 11), which the render route,
+sampling poppler pixels at mutool origins, reads as residual.
+Board, 30 pages, MathPix column, against the render route (CropBox fixed):
+- text side (lines, glyphs, unpaired A/B, a_unpaired, b_unpaired, not compiled, accents on ink): equal on 30 of 30;
+- flags: 50235 of 50671 pairs agree (99.14%); 17 pages >= 99.8%; lowest 1511.08771 92.7% (the drift), lib_6d90 93.0%;
+- board residual (findings + unpaired) / glyphs: within 0.01 on 19 of 22 judged pages, max |d| 0.068 (1511.08771);
+- rules: rules_a/missing equal except BH1 (OCR layer); rules_invented differs on 6 pages;
+- time: 6-231 s -> 0.9-1.9 s per page; median 1.05 s in process (load ~5), CLI 1.50 s wall at load 8-11, CPU 1.98 s.
+Gate as set ("same findings", median <= 1 s): the findings part corrected -- exact equality cannot hold by
+construction (the render route measures window ink at poppler positions); the time part FAILS.
+
 **Scan branch (named, not measured).** A scan has no text layer, so the glyph positions come from the original's ink
 (GLYPHDRILL3 word boxes or blob centroids). Its noise floor has its own measurement before it gets a threshold.
 

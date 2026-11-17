@@ -182,10 +182,11 @@ TR = re.compile(r'<page number="(\d+)"|<fill_text [^>]*transform="([^"]+)"|<span
                 r'<(?:stroke_text|clip_text|clip_stroke_text|ignore_text)\b')
 
 
-def trace(pdf: str, first: int, last: int) -> dict:
+def trace(pdf: str, first: int, last) -> dict:
     """page -> [(char, glyph name, origin x pt, origin y pt, font, (a, b, c, d) pt per em)] of the filled text,
     from `mutool trace`: the glyph names and matrices stext does not give"""
-    x = subprocess.run(["mutool", "trace", pdf, f"{first}-{last}"], capture_output=True, text=True, check=True).stdout
+    x = subprocess.run(["mutool", "trace", pdf, f"{first}-{'N' if last is None else last}"], capture_output=True,
+                       text=True, check=True).stdout
     out, cur, M, T, font, live = {}, None, None, None, None, False
     for m in TR.finditer(x):
         if m[1]:
@@ -271,18 +272,16 @@ def glyph_side_a(a_pdf: str, pno: int, wd: str) -> tuple:
     return FA, TA, (aw, ah, ab), a400
 
 
-def glyph_scores(side_a: tuple, bpdf: str, ac: list, work: list, wd: str, res) -> tuple:
+def glyph_scores(side_a: tuple, side_b, bpdf: str, ac: list, work: list, wd: str, res) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
     font, an accent the page drew as a rule) is the page's own ink from one 400-dpi render. Also returns that render
     and the 400-dpi renders of the snippet pages the formula lines' rule comparison reads."""
     FA, TA, (aw, ah, ab), a400 = side_a
-    FB = Fonts(bpdf, os.path.join(wd, "fontsB"), len(FA.files))
-    nb = max(w[0] for w in work) + 1
+    FB, tb = side_b[0].result(), side_b[1].result()
     need = [i + 1 for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs]
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     bjob = pool.submit(pgms, bpdf, need, DPI, wd) if need else None    # poppler renders while inkcmp rasterises
-    tb = trace(bpdf, 1, nb)
     # every glyph of the original as a placement, bucketed by its quad (+4 px): a pair's window sees its neighbours'
     # ink on both sides, as the rendered crops of the reference route do
     G = 64
@@ -896,6 +895,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     else:
         bpdf, failed, dropped = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
     gone = UNMAPPABLE | dropped
+    side_b = None
+    if route == "glyph" and os.path.exists(bpdf):   # the reading's trace and fonts while its stext is read
+        pool_b = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        side_b = (pool_b.submit(Fonts, bpdf, os.path.join(wd, "fontsB"), len(side_a[0].files)),
+                  pool_b.submit(trace, bpdf, 1, None))
+        pool_b.shutdown(wait=False)
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
                               unpaired_B=0, accents_on_ink=0, unmappable=0, rules_a=0, rules_missing=0,
@@ -1001,7 +1006,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     scores, page400, bpages = {}, None, {}
     glyph_owners = [(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner]
     if route == "glyph" and work:
-        scores, page400, bpages = glyph_scores(side_a, bpdf, ac, work, wd, res)
+        scores, page400, bpages = glyph_scores(side_a, side_b, bpdf, ac, work, wd, res)
     stages = {}
     if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
         aw, ah, ab, a400 = page400                  # a first pass collects the requests, the second reads them
