@@ -664,6 +664,53 @@ New tests:
 - L7: the L1 page in three grey levels (text 35, paper 255, a black frame) gives the same 12 text lines as in black
   and white. Taking the first Otsu maximum fails it (0 lines).
 
+**v6, columns before lines (2026-11-17, `inkcmp lines` now; the owner: "go on with columns before lines").**
+v4 failed held-out 4 on two-column only. On dev2 the largest miss class on two-column pages was "our box wider than
+the truth line" (66). The cause: a gutter narrower than the piece gap (1.5 lh) and step 6's join separator (1 lh).
+dev2 2110.13883 p8 has a 40 px gutter at lh 43 (0.93 lh); there gd3_blocks lines and pieces ran across both columns
+and took the other column's offset baseline (29 of 87 lines matched).
+- **Step 3a** finds gutters before any line is found:
+  - a gutter is a unit 3 vertical separator, >= 0.75 lh wide and >= 10 lh tall, strictly inside the ink's x-range,
+    with a column >= 10 lh wide on each side;
+  - its ends move to the nearest white row within 1 lh;
+  - the page is cut at the gutter ends into bands, and each band into cells at the middles of the gutters that
+    cover it (neighbouring bands with the same cuts are one band);
+  - gd3_blocks runs on each cell alone, at the page's lh;
+  - step 6 also takes the gutters as join separators.
+- Widths: 0.75 lh sits between a table's word gap (0.5 lh, dev2 2307.03122) and the narrowest real gutter
+  (0.93 lh). With 1 lh the 2110 gutter is lost (52 matched instead of 72).
+- The 10 lh column width keeps out a scanner bed's noise strip (dev1 scan_20260530_205842: 87 -> 162 boxes, 40
+  matched either way) and the narrow columns of tables. Without it: dev1 all 0.784/0.748, dev2 0.743/0.789.
+  Table cells are the table step's work (pdfdrill-a2), not this one's.
+- **Tried and not taken:**
+  - bridging gutter pieces less than 2 lh apart: it carried a "gutter" through whole text lines;
+  - requiring ink within 2-4 lh on both sides of a gutter on >= 1/4 to 1/2 of its rows: this test was redundant
+    beside the width test, equal or slightly worse on both sets, and is gone.
+
+| version | set | maths | german | two_column | table | scan | all |
+|---|---|---|---|---|---|---|---|
+| v5 | dev2 (64) | 0.889 / 0.809 | 0.475 / 0.559 | 0.841 / 0.779 | 0.585 / 0.810 | - | 0.725 / 0.783 |
+| v6 | dev2 (64) | 0.889 / 0.809 | 0.475 / 0.559 | 0.875 / 0.798 | 0.585 / 0.810 | - | 0.737 / 0.791 |
+| v5 | dev1 (90) | 0.919 / 0.895 | 0.752 / 0.779 | 0.885 / 0.807 | 0.752 / 0.789 | 0.632 / 0.554 | 0.782 / 0.766 |
+| v6 | dev1 (90) | 0.919 / 0.895 | 0.755 / 0.781 | 0.886 / 0.805 | 0.752 / 0.789 | 0.634 / 0.556 | 0.783 / 0.766 |
+| v5 | held-out 4 (86) | 0.927 / 0.823 | 0.721 / 0.807 | 0.828 / 0.844 | 0.590 / 0.708 | 0.564 / 0.466 | 0.723 / 0.744 |
+| v6 | held-out 4 (86) | 0.927 / 0.823 | 0.722 / 0.807 | 0.856 / 0.862 | 0.590 / 0.708 | 0.564 / 0.466 | 0.732 / 0.750 |
+
+- Held-out 4 was measured before (v4, and YOLO). v5 was rerun on it from HEAD 5600508 so the column step's own
+  share shows: it is the v5 -> v6 row. The lib:f96282ec0392 p1 inspect-render page is unchanged (18/24).
+- **Against YOLO on held-out 4, two-column** (0.852 / 0.918): recall now passes (+0.4), precision still fails (-5.6).
+  Every other stratum keeps v4's result against YOLO.
+- Single-column documents: Killing 0.930/0.894 and Penev 0.860/0.817, unchanged; Hilbert 0.873/0.853 ->
+  0.889/0.863.
+- Time: held-out 4 median 117 -> 150 ms, max 147 -> 191 ms per page (the second unit 3 call).
+
+New tests:
+- L8: the L4 page with an 8 pt gutter at 10 pt type (0.88 lh). No line crosses it, and every pdftotext line is
+  found (IoU >= 0.7). It fails when the cells are dropped (23 lines cross), when the gutters are not join separators
+  (22), and when gutter ends are not moved to white rows.
+- L9: a table of eight columns 2-4 lh wide and 0.8 lh apart; every box over it spans the table, as in v5. It fails
+  without the 10 lh column width.
+
 **ours+ink on the board (T-0148, 2026-11-17, scratch `work/run-files/board-ink/`).** The question: does
 regrouping `pdfdrill glyphlines` lines by `inkcmp lines` boxes move the board's ours column? The gate: the ink
 residual is lower on >= 4 of the 5 table rows, and no maths row is worse.

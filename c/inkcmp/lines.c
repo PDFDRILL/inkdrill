@@ -289,6 +289,93 @@ static int figures(const uint8_t *ink, uint32_t W, uint32_t H, double m, Boxes *
   return 1;
 }
 
+/* step 3a: columns before lines. A gutter is a vertical white separator of unit 3, >= 0.75 lh wide and >= 10 lh
+   tall, strictly inside the ink's x-range, with a column >= 10 lh wide on each side. Its ends move to the nearest
+   white row within 1 lh. The page is cut at the gutters' ends into bands; in each band the gutters that cover it all
+   cut it at their middles into cells, and neighbouring bands with the same cuts are one band. gd3_blocks finds lines
+   in each cell alone, and step 6 never joins across a gutter, so a line never crosses one, however narrow.
+   (A test for ink on both sides of a gutter was redundant beside the width test on both development sets.) */
+static int cmp_u32(const void *a, const void *b) {
+  uint32_t p = *(const uint32_t *)a, q = *(const uint32_t *)b;
+  return (p > q) - (p < q);
+}
+static int column_cells(const Runs *r, uint32_t W, uint32_t H, double lh, Boxes *cells, Boxes *gutters) {
+  IcPage pg = {W, H, r->row_start, r->rs, r->nrun};
+  IcSpaceParams sp; ic_space_defaults(&sp);
+  sp.vsep_w = 0.75; sp.vsep_h = 10; sp.max_sep = 1024;
+  IcSpace S;
+  if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) return 0;
+  int ok = 0;
+  IcRect *g = malloc((S.nvsep ? S.nvsep : 1) * sizeof *g);
+  uint32_t *ys = malloc((2 * S.nvsep + 2) * sizeof *ys), *cut = NULL, *pcut = NULL;
+  size_t ng = 0;
+  if (!g || !ys) goto out;
+  if (!S.blank)
+    for (size_t i = 0; i < S.nvsep; i++)
+      if (S.vsep[i].x0 > S.content.x0 && S.vsep[i].x1 < S.content.x1) g[ng++] = S.vsep[i];
+  size_t k = 0;
+  /* a column is >= 10 lh wide: from each gutter to the next gutter beside it (overlapping in y), or to the edge of
+     the ink, on both sides (not the narrow strips of a scanner bed's noise or a table's columns) */
+  int *keep = malloc((ng ? ng : 1) * sizeof *keep);
+  if (!keep) goto out;
+  for (size_t i = 0; i < ng; i++) {
+    int32_t lx = (int32_t)S.content.x0, rx = (int32_t)S.content.x1;
+    for (size_t j = 0; j < ng; j++) {
+      if (j == i || g[j].y1 <= g[i].y0 || g[j].y0 >= g[i].y1) continue;
+      if (g[j].x1 <= g[i].x0 && (int32_t)g[j].x1 > lx) lx = (int32_t)g[j].x1;
+      if (g[j].x0 >= g[i].x1 && (int32_t)g[j].x0 < rx) rx = (int32_t)g[j].x0;
+    }
+    keep[i] = (int32_t)g[i].x0 - lx >= 10 * lh && rx - (int32_t)g[i].x1 >= 10 * lh;
+  }
+  k = 0;
+  for (size_t i = 0; i < ng; i++) if (keep[i]) g[k++] = g[i];
+  ng = k;
+  free(keep);
+  for (size_t i = 0; i < 2 * ng; i++) {             /* a gutter's end moves to the nearest white row within 1 lh */
+    uint32_t *e = i % 2 ? &g[i / 2].y1 : &g[i / 2].y0, y = *e;
+    for (uint32_t d = 0; d <= (uint32_t)lh; d++) {
+      if (y >= d && y - d < H && r->row_start[y - d] == r->row_start[y - d + 1]) { *e = y - d; break; }
+      if (y + d < H && r->row_start[y + d] == r->row_start[y + d + 1]) { *e = y + d; break; }
+    }
+  }
+  for (size_t i = 0; i < ng; i++) {
+    Box b = {(int32_t)g[i].x0, (int32_t)g[i].y0, (int32_t)g[i].x1, (int32_t)g[i].y1};
+    if (!push(gutters, b)) goto out;
+  }
+  size_t ny = 0;
+  ys[ny++] = 0; ys[ny++] = H;
+  for (size_t i = 0; i < ng; i++) { ys[ny++] = g[i].y0; ys[ny++] = g[i].y1; }
+  qsort(ys, ny, sizeof *ys, cmp_u32);
+  cut = malloc((ng + 2) * sizeof *cut); pcut = malloc((ng + 2) * sizeof *pcut);
+  if (!cut || !pcut) goto out;
+  size_t npc = (size_t)-1;
+  uint32_t band0 = 0;
+  for (size_t a = 0; a + 1 <= ny; a++) {
+    size_t nc = 0;
+    int last = a + 1 == ny;
+    uint32_t y0 = ys[a], y1 = last ? H : ys[a + 1];
+    if (!last && y1 <= y0) continue;
+    if (!last)
+      for (size_t i = 0; i < ng; i++)
+        if (g[i].y0 <= y0 && g[i].y1 >= y1) cut[nc++] = (g[i].x0 + g[i].x1) / 2;
+    qsort(cut, nc, sizeof *cut, cmp_u32);
+    int same = !last && npc == nc && (nc == 0 || !memcmp(cut, pcut, nc * sizeof *cut));
+    if (same) continue;
+    if (npc != (size_t)-1 && y0 > band0)             /* close the previous band [band0, y0) at its cuts */
+      for (size_t c = 0; c <= npc; c++) {
+        Box b = {c ? (int32_t)pcut[c - 1] : 0, (int32_t)band0, c < npc ? (int32_t)pcut[c] : (int32_t)W, (int32_t)y0};
+        if (!push(cells, b)) goto out;
+      }
+    if (last) break;
+    memcpy(pcut, cut, nc * sizeof *cut); npc = nc; band0 = y0;
+  }
+  ok = 1;
+out:
+  free(g); free(ys); free(cut); free(pcut);
+  ic_space_free(&S);
+  return ok;
+}
+
 static int cmp_box_yx(const void *a, const void *b) {
   const Box *p = a, *q = b;
   if (p->y0 != q->y0) return (p->y0 > q->y0) - (p->y0 < q->y0);
@@ -468,7 +555,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->threshold = th;
   uint8_t *ink = malloc(N);
   Runs r = {0}; Box *cb = NULL;
-  Boxes vrules = {0}, pcs = {0}, kept = {0}, figs = {0}, fin = {0};
+  Boxes vrules = {0}, pcs = {0}, kept = {0}, figs = {0}, fin = {0}, cells = {0}, gutters = {0};
   int32_t *hv = NULL;
   double hv_med = 10;
   GD3Blocks B; int have_b = 0;
@@ -565,11 +652,41 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->lh = B.lh;
   double lh = B.lh;
   uint32_t need = (uint32_t)(1.5 * lh) > 1 ? (uint32_t)(1.5 * lh) : 1;
-  for (size_t p = 0; p < B.npara; p++) {
-    const GD3BPara *P = &B.para[p];
-    for (uint32_t l = P->first_line; l < P->first_line + P->nlines; l++) {
-      Box b = {(int32_t)B.line[l].x0, (int32_t)B.line[l].y0, (int32_t)B.line[l].x1, (int32_t)B.line[l].y1};
-      if (!pieces_of(ink, W, b, need, lh, &vrules, &pcs)) goto done;
+  if (!column_cells(&r, W, H, lh, &cells, &gutters)) goto done;
+  if (cells.n <= 1) {
+    for (size_t p = 0; p < B.npara; p++) {
+      const GD3BPara *P = &B.para[p];
+      for (uint32_t l = P->first_line; l < P->first_line + P->nlines; l++) {
+        Box b = {(int32_t)B.line[l].x0, (int32_t)B.line[l].y0, (int32_t)B.line[l].x1, (int32_t)B.line[l].y1};
+        if (!pieces_of(ink, W, b, need, lh, &vrules, &pcs)) goto done;
+      }
+    }
+  } else {
+    for (size_t c = 0; c < cells.n; c++) {           /* lines of each cell alone, at the page's lh */
+      Box cb0 = cells.b[c];
+      uint32_t cw = (uint32_t)(cb0.x1 - cb0.x0), ch = (uint32_t)(cb0.y1 - cb0.y0);
+      uint8_t *sub = malloc((size_t)cw * ch);
+      if (!sub) goto done;
+      for (uint32_t y = 0; y < ch; y++) memcpy(sub + (size_t)y * cw, ink + (size_t)(cb0.y0 + y) * W + cb0.x0, cw);
+      Runs rc;
+      GD3Blocks C;
+      int okc = runs_of(sub, cw, ch, &rc);
+      free(sub);
+      if (!okc) { runs_free(&rc); goto done; }
+      if (!rc.nrun) { runs_free(&rc); continue; }
+      uint32_t lq = (uint32_t)lh ? (uint32_t)lh : 1;
+      if (gd3_blocks_opt(cw, ch, rc.row_start, rc.rs, 0, lq, lq, &C)) { runs_free(&rc); goto done; }
+      runs_free(&rc);
+      for (size_t p = 0; p < C.npara && okc; p++) {
+        const GD3BPara *P = &C.para[p];
+        for (uint32_t l = P->first_line; l < P->first_line + P->nlines && okc; l++) {
+          Box b = {cb0.x0 + (int32_t)C.line[l].x0, cb0.y0 + (int32_t)C.line[l].y0,
+                   cb0.x0 + (int32_t)C.line[l].x1, cb0.y0 + (int32_t)C.line[l].y1};
+          okc = pieces_of(ink, W, b, need, lh, &vrules, &pcs);
+        }
+      }
+      gd3_blocks_free(&C);
+      if (!okc) goto done;
     }
   }
   /* step 4: m, clip, specks */
@@ -622,7 +739,16 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   IcPage pg = {W, H, r.row_start, r.rs, r.nrun};
   IcSpaceParams sp; ic_space_defaults(&sp); sp.max_sep = 1024;
   if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) goto done;
-  int okt = typed(&fin, &figs, H, lh, S.vsep, S.nvsep, &vrules, out);
+  /* the gutters of step 3a are separators too: a row's pieces never join across a column's gutter */
+  IcRect *sep = malloc((S.nvsep + gutters.n + 1) * sizeof *sep);
+  if (!sep) { ic_space_free(&S); goto done; }
+  memcpy(sep, S.vsep, S.nvsep * sizeof *sep);
+  for (size_t i = 0; i < gutters.n; i++) {
+    IcRect q = {(uint32_t)gutters.b[i].x0, (uint32_t)gutters.b[i].y0, (uint32_t)gutters.b[i].x1, (uint32_t)gutters.b[i].y1};
+    sep[S.nvsep + i] = q;
+  }
+  int okt = typed(&fin, &figs, H, lh, sep, S.nvsep + gutters.n, &vrules, out);
+  free(sep);
   ic_space_free(&S);
   if (!okt) goto done;
   ok = 1;
@@ -630,7 +756,7 @@ done:
   free(ink); free(cb); free(hv);
   runs_free(&r);
   if (have_b) gd3_blocks_free(&B);
-  free(vrules.b); free(pcs.b); free(kept.b); free(figs.b); free(fin.b);
+  free(vrules.b); free(pcs.b); free(kept.b); free(figs.b); free(fin.b); free(cells.b); free(gutters.b);
   if (!ok) { ic_lines_free(out); return 5; }
   return 0;
 }

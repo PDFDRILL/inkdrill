@@ -266,6 +266,57 @@ def test_L4_two_columns_are_read_apart(page):
     return len(left) + len(right)
 
 
+def test_L8_a_gutter_narrower_than_a_line_height(page):
+    """columns before lines: an 8 pt gutter at 10 pt type is 0.88 lh (lh 38 px at 300 dpi), the width measured on a
+    real two-column page (dev2 2110.13883 p8: 40 px at lh 43, 0.93 lh). That is narrower than both the piece gap
+    (1.5 lh) and step 6's join separator (1 lh), so without step 3a every line of the upper half crosses it."""
+    pg, lines, _ = make_page(TWOCOL.replace(r"\begin{document}", r"\setlength{\columnsep}{8pt}\begin{document}"))
+    w = int(re.match(rb"P5\s+(?:#[^\n]*\n\s*)*(\d+)", pg)[1])
+    got = [b for t, b in lines_of(pg) if t == "text"]
+    left = [b for b, ws in lines if b[2] < w / 2]
+    right = [b for b, ws in lines if b[0] > w / 2]
+    assert len(left) >= 20 and len(right) >= 20, (len(left), len(right))
+    gap = min(b[0] for b in right) - max(b[2] for b in left)
+    assert 25 <= gap <= 40, gap                                       # the fixture is the narrow case
+    across = [b for b in got if b[0] < w / 2 - 20 and b[2] > w / 2 + 20]
+    assert not across, (len(across), across[:3])
+    for b in left + right:
+        assert max(iou(b, t) for t in got) >= 0.7, b
+    return len(left) + len(right)
+
+
+NARROW = r"""\documentclass[11pt]{article}
+\usepackage[a5paper,margin=1.8cm]{geometry}
+\begin{document}
+\noindent Narrow columns of a table are not the columns of a page. The lines of this paragraph and the rows of the
+table below are read as before, because a column of the page is at least ten line heights wide.
+\begin{center}\setlength{\tabcolsep}{4pt}\begin{tabular}{llllllll}
+""" + "\n".join(r"%d & alpha & beta%d & gamma & delta & eps & zeta%d & eta \\" % (k, k, k) for k in range(1, 26)) + r"""
+\end{tabular}\end{center}
+\end{document}
+"""
+
+
+def test_L9_narrow_table_columns_are_not_page_columns(page):
+    """step 3a cuts only between columns >= 10 lh wide. This table's eight columns are 2-4 lh wide and 0.8 lh apart
+    (white strips that pass as gutters by width and height), so step 3a leaves the table to steps 4-6: every box over
+    it spans the table, as before columns were found. (pdftotext reads the cells, 204 words; cells are the table
+    step's work, not this one's.) Without the width test the table comes out as 200 cell boxes."""
+    pg, lines, words = make_page(NARROW)
+    h = parse_pgm(pg)[1]
+    cells = [b for b, w in words if b[1] > lines[2][0][3] + 10 and b[3] < 0.9 * h]   # below the paragraph, above
+                                                                                     # the page number
+    assert len(cells) == 200, len(cells)
+    tx0, tx1 = min(b[0] for b in cells), max(b[2] for b in cells)
+    ty0, ty1 = min(b[1] for b in cells), max(b[3] for b in cells)
+    got = [(t, b) for t, b in lines_of(pg) if t in ("text", "math")]
+    over = [b for t, b in got if b[1] < ty1 and b[3] > ty0]
+    assert len(over) >= 10, len(over)
+    for b in over:
+        assert abs(b[0] - tx0) <= 20 and abs(b[2] - tx1) <= 20, (b, (tx0, tx1))
+    return len(over)
+
+
 if __name__ == "__main__":
     if not all(shutil.which(t) for t in TOOLS):
         print("test_inkcmp_lines: SKIP (needs %s)" % ", ".join(TOOLS))
