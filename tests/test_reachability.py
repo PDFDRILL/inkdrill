@@ -26,6 +26,8 @@ OFF_THE_CLI_PATH = {
     "judge": "the inkcmp judge (T-0148), its own command bin/inkcmp-judge: "
              "it compares a lines.json reading with a born-digital PDF and "
              "needs the PDF, pdflatex, mutool and poppler, not a page raster",
+    "setter": "a text-only reading set in the page's own font program "
+              "(bin/inkcmp-judge, through judge), not by pdflatex",
     "textpos": "the judge's glyph origins from the PDF's text operators "
                "(bin/inkcmp-judge, through judge): mutool rounds /Widths",
     "band": "the parallel sweep tier; the CLI does one page at a time "

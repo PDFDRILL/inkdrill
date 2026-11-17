@@ -510,10 +510,10 @@ class JudgeBatch(unittest.TestCase):
                 wd1, wd2 = os.path.join(d, name, "one"), os.path.join(d, name, "batch")
                 os.makedirs(wd1)
                 out = io.StringIO()
-                judge.judge(pdf, 1, lj, wd1, out=out)
+                judge.judge(pdf, 1, lj, wd1, out=out, setter=False)   # pdflatex grouping is what this tests
                 single[name] = out.getvalue()
                 jobs.append((pdf, 1, lj, wd2))
-            st = judge.judge_batch(jobs, bwd=os.path.join(d, "b"))
+            st = judge.judge_batch(jobs, bwd=os.path.join(d, "b"), setter=False)
             self.assertEqual(st["batched"], 3)
             self.assertEqual(st["groups"], 1, "one preamble, one pdflatex run")
             for (name, _, _), job in zip(cases, jobs):
@@ -523,3 +523,32 @@ class JudgeBatch(unittest.TestCase):
             self.assertIn("D U+", single["broken"], "the character pdflatex cannot set is dropped there")
             self.assertNotIn("NOT_COMPILED", single["clean"] + single["accent"])
             self.assertNotIn("D U+", single["clean"] + single["accent"], "and nowhere else")
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeSetter(unittest.TestCase):
+    """A page without formula lines is set in the page's own font program (inkdrill/setter.py), not by pdflatex:
+    a clean reading has no flag, a planted letter is flagged, a character the page never printed comes from the TeX
+    tree's Type 1 of the same font, and a page with a formula line is still set by pdflatex."""
+
+    def run_case(self, d, name, page, read):
+        res, out = _accent_case(d, name, page, read)
+        return res, "\n".join(out)
+
+    def test_setter_clean_planted_fallback_and_formula(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-setter-") as d:
+            line = "Hilbert and Noether wrote about rings, fields and their ideals here."
+            res, out = self.run_case(d, "clean", line, line)
+            self.assertEqual(res.get("setter"), 1, out[:300])
+            self.assertIn("set by setter", out)
+            self.assertEqual((res["flagged"], res["a_unpaired"], res["b_unpaired"]), (0, 0, 0))
+            res, out = self.run_case(d, "plant", line, line.replace("rings", "rinqs"))
+            self.assertEqual(res.get("setter"), 1)
+            self.assertGreaterEqual(res["flagged"], 1, "the planted q is flagged")
+            # 'Q' and 'z' are not on the page: from cmr10.pfb (the page's font is a subset)
+            res, out = self.run_case(d, "fallback", line, line.replace("rings", "Qings").replace("fields", "fieldz"))
+            self.assertEqual(res.get("setter"), 1, "the subset gap is filled from the TeX tree")
+            self.assertGreaterEqual(res["flagged"], 2)
+            res, out = self.run_case(d, "formula", "Let $x$ be a ring here.", "Let \\(x\\) be a ring here.")
+            self.assertNotIn("setter", res)
+            self.assertIn("set by pdflatex", out)
