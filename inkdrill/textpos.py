@@ -58,7 +58,30 @@ function forms(res, depth) {
   return out;
 }
 var doc = Document.openDocument(scriptArgs[0]);
-var first = parseInt(scriptArgs[1]), last = parseInt(scriptArgs[2]);
+var first = parseInt(scriptArgs[1]), last = parseInt(scriptArgs[2]), fontdir = scriptArgs[3] || "";
+// the embedded Type 1 and Type 1C programs of the whole document (what `mutool extract` wrote), as font-<obj>.pfa|cff
+if (fontdir) {
+  var seen = {};
+  function save(f) {
+    var fd = f.get("FontDescriptor");
+    if (fd && fd.isDictionary()) {
+      var ff = fd.get("FontFile"), ext = "pfa";
+      if (!ff || !ff.isStream()) { ff = fd.get("FontFile3"); ext = "cff"; }
+      if (ff && ff.isStream() && (ext == "pfa" || String(ff.get("Subtype")) == "/Type1C")) {
+        var n = ff.asIndirect();
+        if (!seen[n]) { seen[n] = 1; ff.readStream().save(fontdir + "/font-" + ("000" + n).slice(-4) + "." + ext); }
+      }
+    }
+  }
+  function walkres(res, depth) {
+    if (!res || !res.isDictionary() || depth > 4) return;
+    var fo = res.get("Font");
+    if (fo && fo.isDictionary()) fo.forEach(function (v) { save(v); });
+    var xo = res.get("XObject");
+    if (xo && xo.isDictionary()) xo.forEach(function (v) { if (String(v.get("Subtype")) == "/Form") walkres(v.get("Resources"), depth + 1); });
+  }
+  for (var q = 0; q < doc.countPages(); q++) walkres(doc.loadPage(q).getObject().get("Resources"), 0);
+}
 if (last < 0 || last > doc.countPages()) last = doc.countPages();
 var pages = [];
 for (var n = first; n <= last; n++) {
@@ -298,16 +321,20 @@ def solve(pts):
     return best
 
 
-def origins(pdf: str, first: int, last, wd: str) -> dict:
+def origins(pdf: str, first: int, last, wd: str, trace_text: str | None = None, fontdir: str | None = None) -> dict:
     """page -> {"ok": bool, "why": str, "map": {(mutool x, mutool y) rounded to 1e-4: (spec x, spec y)}} for the
-    glyphs mutool traces, in mutool's page frame (the frame of stext and trace)"""
+    glyphs mutool traces, in mutool's page frame (the frame of stext and trace). trace_text: the caller's `mutool trace`
+    of the same pages (one run serves both); fontdir: also write the document's Type 1 / Type 1C programs there (the
+    same `mutool run`, instead of a `mutool extract`)"""
     js = os.path.join(wd, "textpos.js")
     with open(js, "w") as fh:
         fh.write(DUMP_JS)
-    p = subprocess.run(["mutool", "run", js, os.path.abspath(pdf), str(first), str(-1 if last is None else last)],
-                       capture_output=True, text=True)
-    tr = subprocess.run(["mutool", "trace", pdf, f"{first}-{'N' if last is None else last}"], capture_output=True,
-                        text=True).stdout
+    if fontdir:
+        os.makedirs(fontdir, exist_ok=True)
+    p = subprocess.run(["mutool", "run", js, os.path.abspath(pdf), str(first), str(-1 if last is None else last)]
+                       + ([os.path.abspath(fontdir)] if fontdir else []), capture_output=True, text=True)
+    tr = trace_text if trace_text is not None else subprocess.run(
+        ["mutool", "trace", pdf, f"{first}-{'N' if last is None else last}"], capture_output=True, text=True).stdout
     traced, cur, M = {}, None, None
     for m in TRACE_G.finditer(tr):
         if m[1]:

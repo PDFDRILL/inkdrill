@@ -194,11 +194,15 @@ TR = re.compile(r'<page number="(\d+)"|<fill_text [^>]*transform="([^"]+)"|<span
                 r'<(?:stroke_text|clip_text|clip_stroke_text|ignore_text)\b')
 
 
-def trace(pdf: str, first: int, last) -> dict:
+def trace_text(pdf: str, first: int, last) -> str:
+    return subprocess.run(["mutool", "trace", pdf, f"{first}-{'N' if last is None else last}"], capture_output=True,
+                          text=True, check=True).stdout
+
+
+def trace(pdf: str, first: int, last, text: str | None = None) -> dict:
     """page -> [(char, glyph name, origin x pt, origin y pt, font, (a, b, c, d) pt per em)] of the filled text,
-    from `mutool trace`: the glyph names and matrices stext does not give"""
-    x = subprocess.run(["mutool", "trace", pdf, f"{first}-{'N' if last is None else last}"], capture_output=True,
-                       text=True, check=True).stdout
+    from `mutool trace` (or its output, `text`): the glyph names and matrices stext does not give"""
+    x = text if text is not None else trace_text(pdf, first, last)
     out, cur, M, T, font, live = {}, None, None, None, None, False
     for m in TR.finditer(x):
         if m[1]:
@@ -276,8 +280,8 @@ def pgms(pdf: str, pages: list, dpi: int, wd: str) -> dict:
 def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec") -> tuple:
     """what the glyph route needs of the original alone (it runs while pdflatex sets the reading): its font programs,
     its traced glyphs (at the specification's origins), and its 400-dpi render"""
-    FA = Fonts(a_pdf, os.path.join(wd, "fontsA"), 0)
-    TA = Origins(spec.traced(pno, trace(a_pdf, pno, pno).get(pno, [])))
+    FA = Fonts(a_pdf, os.path.join(wd, "fontsA"), 0, extract=False)
+    TA = Origins(spec.traced(pno, trace(a_pdf, pno, pno, spec.trace_text).get(pno, [])))
     aw, ah, ab = pgm(a_pdf, pno, DPI)
     a400 = os.path.join(wd, "a400.pgm")
     pgm_write(a400, aw, ah, ab)
@@ -290,7 +294,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
     font, an accent the page drew as a rule) is the page's own ink from one 400-dpi render. Also returns that render
     and the 400-dpi renders of the snippet pages the formula lines' rule comparison reads."""
     FA, TA, (aw, ah, ab), a400 = side_a
-    FB, tb = side_b[0].result(), side_b[1].result()
+    FB, tb = side_b
     need = [bo + i + 1 for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs]
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     bjob = pool.submit(pgms, bpdf, need, DPI, wd) if need else None    # poppler renders while inkcmp rasterises
@@ -361,9 +365,10 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
 class Spec:
     """mutool origin -> the specification's origin (inkdrill.textpos), looked up within 0.002 pt; pages it could
     not place keep mutool's origins"""
-    def __init__(self, pdf: str, first: int, last, wd: str):
+    def __init__(self, pdf: str, first: int, last, wd: str, fontdir: str | None = None):
         os.makedirs(wd, exist_ok=True)
-        self.pages = textpos.origins(pdf, first, last, wd)
+        self.trace_text = trace_text(pdf, first, last)        # one `mutool trace`, shared with the glyph route
+        self.pages = textpos.origins(pdf, first, last, wd, self.trace_text, fontdir)
         self.b = collections.defaultdict(dict)
         for n, rec in self.pages.items():
             for (x, y), v in rec["map"].items():
@@ -399,9 +404,10 @@ class Fonts:
     """the font programs a PDF embeds (`mutool extract`), loaded once by `inkcmp glyphs`; a traced font name finds
     its file by full name, by name without the subset prefix, or by that name without trailing digits (mutool
     numbers a second instance of a name), among the files that hold the glyph"""
-    def __init__(self, pdf: str, wd: str, base: int = 0):
+    def __init__(self, pdf: str, wd: str, base: int = 0, extract: bool = True):
         os.makedirs(wd, exist_ok=True)
-        subprocess.run(["mutool", "extract", os.path.abspath(pdf)], cwd=wd, capture_output=True)
+        if extract:                                   # else Spec's `mutool run` wrote them
+            subprocess.run(["mutool", "extract", os.path.abspath(pdf)], cwd=wd, capture_output=True)
         self.files = sorted(os.path.join(wd, f) for f in os.listdir(wd) if f.endswith((".pfa", ".pfb", ".cff")))
         self.base = base
         self.names = {base + i: font_name(f) for i, f in enumerate(self.files)}
@@ -962,7 +968,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     k = pw_pt * S / pg["page_width"]                  # lines.json px -> 400-dpi px
     lv = leaves(pg)
     fam, pre = memo(("pre", a_pdf, pno), font_preamble, a_pdf, pno)
-    spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"))
+    spec_a = memo(("spec", a_pdf, pno, route), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"),
+                  os.path.join(wd, "fontsA") if route == "glyph" else None)
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
     comp = compiler or (lambda texts, sizes, pre, wd: compile_lines(texts, sizes, pre, wd) + (0,))   # them
 
@@ -1000,14 +1007,19 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     else:
         bpdf, failed, dropped, bo = comp([ln["text"] for ln in lv], sizes, pre, wd)
     gone = UNMAPPABLE | dropped
-    side_b = None
-    if route == "glyph" and os.path.exists(bpdf):   # the reading's trace and fonts while its stext is read
-        pool_b = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-        side_b = (pool_b.submit(Fonts, bpdf, os.path.join(wd, "fontsB"), len(side_a[0].files)),
-                  pool_b.submit(trace, bpdf, bo + 1, bo + len(lv)))
+    side_b, fut_b = None, None
+    if os.path.exists(bpdf):                        # the reading's trace, origins (and fonts) while its stext is read
+        pool_b = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        fut_b = pool_b.submit(Spec, bpdf, bo + 1, bo + len(lv), os.path.join(wd, "specB"),
+                              os.path.join(wd, "fontsB") if route == "glyph" else None)
         pool_b.shutdown(wait=False)
     bc = chars(bpdf, bo + 1, bo + len(lv)) if os.path.exists(bpdf) else []
-    spec_b = Spec(bpdf, bo + 1, bo + len(lv), os.path.join(wd, "specB")) if bc else None
+    spec_b = fut_b.result() if fut_b is not None else None
+    if not bc:
+        spec_b = None
+    if route == "glyph" and spec_b is not None:
+        side_b = (Fonts(bpdf, os.path.join(wd, "fontsB"), len(side_a[0].files), extract=False),
+                  trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text))
     if spec_b:
         bc = [spec_b.chars(bo + n + 1, cs) for n, cs in enumerate(bc)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
