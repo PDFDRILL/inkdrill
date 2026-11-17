@@ -465,6 +465,24 @@ Time: median 142 ms per page, max 320 ms.
   and tables most of all.
 - The YOLO route on these pages comes from gemma4-ee; the gate waits for it.
 
+**Input correction for held-out 3 and 4 (2026-11-17).** In each set, one German page's folder has no source
+PDF. The measurement runner took the folder's only other PDF, pdfdrill's `report.pdf`, and so measured a different
+document.
+- Pages: held-out 3 `lib:c8284ecd923d` p1, read by v3; held-out 4 `lib:f96282ec0392` p1, read by v4.
+- The runner no longer falls back to another PDF. Without `<folder>.pdf` it reads `inspect/pages/page-NNNN.png`,
+  grey and resized to the MathPix page size, which is the image gemma4-ee's YOLO route used.
+- The two pages were rerun with the frozen binaries (built from 5245a31 and 0f26ea3); the code did not change.
+  The corrected numbers, with the originals beside them:
+
+| | page: matched / truth (ours) | german | all |
+|---|---|---|---|
+| held-out 3 as measured | 1 / 84 (8) | 0.701 / 0.949 | 0.608 / 0.752 |
+| held-out 3, corrected input | 28 / 84 (69) | 0.774 / 0.856 | 0.619 / 0.743 |
+| held-out 4 as measured | 0 / 24 (8) | 0.686 / 0.807 | 0.709 / 0.753 |
+| held-out 4, corrected input | 18 / 24 (32) | 0.708 / 0.805 | 0.712 / 0.753 |
+
+In the comparison with YOLO these two pages are also reported apart.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.
