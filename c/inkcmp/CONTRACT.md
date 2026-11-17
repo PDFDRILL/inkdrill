@@ -566,6 +566,13 @@ in the local cache, so the original's licence is NOT verified. The run path abov
 graph, onnxruntime (MIT), OpenCV's resize (Apache-2.0), numpy; the export itself used the AGPL package once. Sizes:
 the .pt 40.7 MB (sha256 9a2ee022...), ONNX fp32 75.3 MB, int8 19.4 MB: fp32 needs a fetch script with its sha256
 (rule 7), int8 would fit in git.
+Coordinator's ruling (2026-11-17): the run path (ONNX graph, onnxruntime, OpenCV, numpy) may go into inkdrill; the
+AGPL package only in the one-time `tools/detector/export_onnx.py`, never vendored or linked; the weights' Apache-2.0
+card beside `tools/detector/fetch_weights.sh` (`LICENSE-WEIGHTS.md`), which downloads the weights, checks their sha256,
+exports, and checks the graph's sha256 (the export is byte-identical run to run; checked for torch 2.14.1, onnxruntime
+1.30.0). fp32, not int8 (not faster).
+Reference disagreement, counted in the gate: 1809.09528 p5 -- a figure made of example questions, which MathPix splits
+into text lines; any figure source that keeps it whole "swallows" them (vector route 17, detector 10).
 
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do

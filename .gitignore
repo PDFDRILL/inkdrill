@@ -20,3 +20,4 @@ results/
 
 # C build output (make, D-6)
 /build/
+/models/
