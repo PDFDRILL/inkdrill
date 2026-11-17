@@ -411,6 +411,13 @@ class Fonts:
 
     def find(self, font: str):
         """candidate ids, best first"""
+        if not hasattr(self, "_found"):
+            self._found = {}
+        if font not in self._found:
+            self._found[font] = self._find(font)
+        return self._found[font]
+
+    def _find(self, font: str):
         if not hasattr(self, "_by"):
             self._by = collections.defaultdict(list)
             for i, nm in self.names.items():
@@ -968,9 +975,15 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         return b[0] <= (c[3] + c[5]) / 2 * S < b[2] and b[1] <= (c[4] + c[6]) / 2 * S < b[3]
 
     sizes = []
+    cgrid = collections.defaultdict(list)          # glyphs by the cell of their centre, in page order
+    for ci, c in enumerate(ac):
+        cgrid[(int((c[3] + c[5]) / 2 * S // 256), int((c[4] + c[6]) / 2 * S // 256))].append(ci)
+    nomath = [not re.search(MATHFONT, c[7]) for c in ac]
     for ln in lv:
         b = box(ln)
-        cs = [c[8] for c in ac if inside(c, b) and not re.search(MATHFONT, c[7])]
+        near = sorted(ci for gx in range(int(b[0] // 256), int(b[2] // 256) + 1)
+                      for gy in range(int(b[1] // 256), int(b[3] // 256) + 1) for ci in cgrid.get((gx, gy), ()))
+        cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
