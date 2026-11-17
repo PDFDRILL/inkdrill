@@ -415,6 +415,22 @@ the target, 1 CPU s/page, does not). CPU of a median page: pdflatex 0.6, Python 
 9. Order proposed: B first (every page, no semantic change), A only if B leaves the target missed on text pages.
 10. Not done yet: any of them.
 
+**Rule-6 experiments, measured (2026-11-17).**
+- B (the pairing in C): decided without code. The pairing (difflib) costs 0.008-0.021 s of a page's 0.6-1.4 s of
+  Python (lib_c9daf p68, 1805.01788 p3); porting it cannot halve Python's share. The rest of the Python is spread
+  over stext parsing, origin lookups, job formatting and the textpos interpreter: "the text side in C" is the judge
+  rewritten, not a port of one step.
+- A (`tools/judge_setter.py`: the reading's text lines set in the page's own regular font program, with the page's
+  own traced advances and kerning, through the unchanged judge): on the 6 judged MathPix pages without formula lines,
+  flags agree with the pdflatex glyph route on 15921 of 15954 pairs (99.79%); setter 0.02-0.07 CPU s/page. Where they
+  differ the setter is right more often than not: pdflatex substitutes Nimbus for the page's Times-Roman (`l` at
+  xor 270 on lib_88d76967110e p170, 0 here). Its limit is the subset: a reading character the page never printed in
+  that font has no glyph -- 578 of 1381 on lib_d68e0271bd4d p334 (code in CMTT that MathPix read as plain text), 1-11
+  on three others -- and becomes unpaired (lib_d68e residual 0.778 -> 0.836). And maths still needs pdflatex on 22 of
+  30 board pages.
+- So neither reaches 1 CPU s/page on the board's median page: B's port is a rewrite, A removes pdflatex on text-only
+  pages only (about 1 in 4) and needs a fallback (the TeX tree's Type 1 of the same font) for subset gaps.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
