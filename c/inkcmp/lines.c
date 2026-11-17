@@ -3,7 +3,9 @@
    kept here. It agreed with the prototype on all 5501 lines of Killing, Hilbert and Penev before two measured
    changes (contract unit 7): the edge-column blanking is gone, and a display's rows merge across its number.
    Steps are numbered as in the contract. */
+#define _POSIX_C_SOURCE 199309L
 #include "lines.h"
+#include <time.h>
 #include "layout/blocks.h"
 #include "white.h"
 #include <ctype.h>
@@ -157,6 +159,14 @@ static int label(Runs *r, uint32_t h, Box **cbox) {
   return 1;
 }
 
+static double g_t0;
+static void tick(const char *what) {
+  if (!getenv("INKCMP_DEBUG")) return;
+  struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+  double now = t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+  if (what) fprintf(stderr, "time %-12s %6.1f ms\n", what, now - g_t0);
+  g_t0 = now;
+}
 static int cmp_i32(const void *a, const void *b) {
   int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
   return (x > y) - (x < y);
@@ -299,12 +309,142 @@ static int cmp_u32(const void *a, const void *b) {
   uint32_t p = *(const uint32_t *)a, q = *(const uint32_t *)b;
   return (p > q) - (p < q);
 }
-static int column_cells(const Runs *r, uint32_t W, uint32_t H, double lh, Boxes *cells, Boxes *gutters) {
-  IcPage pg = {W, H, r->row_start, r->rs, r->nrun};
-  IcSpaceParams sp; ic_space_defaults(&sp);
-  sp.vsep_w = 0.75; sp.vsep_h = 10; sp.max_sep = 1024;
+/* The vertical white separators of a page, tallest first. Unit 3's ic_space keeps candidates by decreasing AREA
+   over both classes, and a kept rectangle that spans a candidate's width cuts it: a column gutter is crossed by
+   every paragraph gap that lines up in both columns and by the white after each short line, all wider than the
+   gutter, so the gutter came back in pieces (postscriptexamples23 p2: the gutter runs from y 294 to 2568 and was
+   reported from 992). A gutter is the TALLEST white rectangle at its place, so here the candidates (maximal white
+   rectangles >= wf lh wide and >= hf lh tall, clipped to the content box, strictly inside it) are kept by
+   decreasing height; one that lies > 20% inside rectangles already kept is dropped. Fills S->vsep/nvsep/content/blank. */
+static int by_height(const void *a, const void *b) {
+  const IcRect *p = a, *q = b;
+  uint32_t hp = p->y1 - p->y0, hq = q->y1 - q->y0;
+  if (hp != hq) return hp > hq ? -1 : 1;
+  if (p->x0 != q->x0) return p->x0 < q->x0 ? -1 : 1;
+  if (p->y0 != q->y0) return p->y0 < q->y0 ? -1 : 1;
+  if (p->x1 != q->x1) return p->x1 < q->x1 ? -1 : 1;
+  return 0;
+}
+/* candidates: every maximal white rectangle >= wf lh wide and >= hf lh tall, clipped to the content box in y and
+   strictly inside it in x. One scan of the page (ic_white); both uses below select from this list. */
+typedef struct { IcRect *r; size_t n; IcRect content; int blank; } White;
+static int white_candidates(const IcPage *pg, double lh, double wf, double hf, White *Wt) {
+  memset(Wt, 0, sizeof *Wt);
+  uint32_t w = pg->width, h = pg->height, cx0 = w, cx1 = 0, cy0 = h, cy1 = 0;
+  for (uint32_t y = 0; y < h; y++) {
+    uint64_t i0 = pg->row_start[y], i1 = pg->row_start[y + 1];
+    if (i0 == i1) continue;
+    if (cy0 == h) cy0 = y;
+    cy1 = y + 1;
+    if (pg->spans[2 * i0] < cx0) cx0 = pg->spans[2 * i0];
+    if (pg->spans[2 * i1 - 1] > cx1) cx1 = pg->spans[2 * i1 - 1];
+  }
+  if (cy0 == h) { Wt->blank = 1; return 1; }
+  Wt->content = (IcRect){cx0, cy0, cx1, cy1};
+  uint32_t mw = (uint32_t)ceil(wf * lh), mh = (uint32_t)ceil(hf * lh);
+  if (mw < 1) mw = 1;
+  if (mh < 1) mh = 1;
+  IcRects R;
+  /* The scan costs O(width x height) and was the largest step (43 of 109 ms on a 6 Mpx page). The rectangles
+     wanted are large, so at lh >= 16 px it runs on the page reduced 2 x 2 (a cell is ink when any of its four
+     pixels is). A white cell is white in all four pixels, so every rectangle found is white on the page; a side
+     may fall short of the true rectangle by up to 2 px. The size tests are not relaxed for that: on the dev set
+     the results equal the full-resolution scan's with no allowance, and are slightly worse with one. */
+  uint32_t k = lh >= 16 ? 2 : 1;
+  if (k == 1) {
+    if (ic_white(pg, mw, mh, &R)) return 0;
+  } else {
+    uint32_t cw = (w + 1) / 2, ch = (h + 1) / 2;
+    uint64_t *rs = malloc(((size_t)ch + 1) * sizeof *rs);
+    uint32_t *sp = malloc((pg->nruns ? pg->nruns : 1) * 2 * sizeof *sp);
+    if (!rs || !sp) { free(rs); free(sp); return 0; }
+    uint64_t n = 0;
+    for (uint32_t Y = 0; Y < ch; Y++) {              /* merge the runs of rows 2Y and 2Y + 1, halved */
+      rs[Y] = n;
+      uint64_t a = pg->row_start[2 * Y], ae = pg->row_start[2 * Y + 1];
+      uint64_t b = 2 * Y + 1 < h ? ae : 0, be = 2 * Y + 1 < h ? pg->row_start[2 * Y + 2] : 0;
+      uint64_t first = n;
+      while (a < ae || b < be) {
+        int ta = b >= be || (a < ae && pg->spans[2 * a] <= pg->spans[2 * b]);
+        uint64_t i = ta ? a++ : b++;
+        uint32_t x0 = pg->spans[2 * i] / 2, x1 = (pg->spans[2 * i + 1] + 1) / 2;
+        if (n > first && x0 <= sp[2 * n - 1]) { if (x1 > sp[2 * n - 1]) sp[2 * n - 1] = x1; }
+        else { sp[2 * n] = x0; sp[2 * n + 1] = x1; n++; }
+      }
+    }
+    rs[ch] = n;
+    IcPage cp = {cw, ch, rs, sp, n};
+    uint32_t cmw = mw > 3 ? (mw - 2) / 2 : 1, cmh = mh > 3 ? (mh - 2) / 2 : 1;
+    int rc = ic_white(&cp, cmw, cmh, &R);
+    free(rs); free(sp);
+    if (rc) return 0;
+    for (size_t i = 0; i < R.n; i++) {
+      R.r[i].x0 *= 2; R.r[i].y0 *= 2; R.r[i].x1 *= 2; R.r[i].y1 *= 2;
+      if (R.r[i].x1 > w) R.r[i].x1 = w;
+      if (R.r[i].y1 > h) R.r[i].y1 = h;
+    }
+    mh = mh > 2 ? mh - 2 : 1;
+  }
+  size_t nc = 0;
+  for (size_t i = 0; i < R.n; i++) {
+    IcRect q = R.r[i];
+    if (q.y0 < cy0) q.y0 = cy0;
+    if (q.y1 > cy1) q.y1 = cy1;
+    if (q.x0 <= cx0 || q.x1 >= cx1 || q.y1 <= q.y0 || q.y1 - q.y0 < mh) continue;
+    R.r[nc++] = q;
+  }
+  if (nc) qsort(R.r, nc, sizeof *R.r, by_height);
+  Wt->r = R.r; Wt->n = nc;
+  return 1;
+}
+/* rows of c with ink within d px on its left, and on its right; the smaller count is returned. A separator
+   separates: the white beside a display and down an empty half page is tall and has text on neither side for most of
+   its rows. The two sides are counted apart, because the lines of two columns need not share rows
+   (postscriptexamples23 p2: 834 rows left, 656 right, 253 with both, of 2382). */
+static uint32_t flanked_rows(const IcPage *pg, IcRect c, uint32_t d) {
+  uint32_t nl = 0, nr = 0;
+  for (uint32_t y = c.y0; y < c.y1; y++) {
+    uint64_t lo = pg->row_start[y], hi = pg->row_start[y + 1];
+    if (lo == hi) continue;
+    while (lo < hi) {                                /* the first run that ends after c.x0 */
+      uint64_t mid = (lo + hi) / 2;
+      if (pg->spans[2 * mid + 1] <= c.x0) lo = mid + 1; else hi = mid;
+    }
+    /* c is white, so run lo starts at or after c.x1, and run lo - 1 ends at or before c.x0 */
+    nl += lo > pg->row_start[y] && pg->spans[2 * (lo - 1) + 1] + d >= c.x0;
+    nr += lo < pg->row_start[y + 1] && pg->spans[2 * lo] <= c.x1 + d;
+  }
+  return nl < nr ? nl : nr;
+}
+/* the candidates >= wf lh wide and >= hf lh tall, tallest first, that have ink within 3 lh on each side in at
+   least a fifth of their rows; one lying > 20% inside those kept is dropped */
+static int tall_white(const IcPage *pg, const White *Wt, double lh, double wf, double hf, IcSpace *S) {
+  memset(S, 0, sizeof *S);
+  S->blank = Wt->blank; S->content = Wt->content;
+  IcRect *v = malloc((Wt->n ? Wt->n : 1) * sizeof *v);
+  if (!v) return 0;
+  size_t nv = 0;
+  for (size_t i = 0; i < Wt->n && nv < 1024; i++) {
+    IcRect c = Wt->r[i];
+    if (c.x1 - c.x0 < wf * lh || c.y1 - c.y0 < hf * lh) continue;
+    if (5 * flanked_rows(pg, c, (uint32_t)(3 * lh)) < c.y1 - c.y0) continue;
+    uint64_t in = 0, a = (uint64_t)(c.x1 - c.x0) * (c.y1 - c.y0);
+    for (size_t j = 0; j < nv; j++) {
+      uint32_t x0 = c.x0 > v[j].x0 ? c.x0 : v[j].x0, x1 = c.x1 < v[j].x1 ? c.x1 : v[j].x1;
+      uint32_t y0 = c.y0 > v[j].y0 ? c.y0 : v[j].y0, y1 = c.y1 < v[j].y1 ? c.y1 : v[j].y1;
+      if (x0 < x1 && y0 < y1) in += (uint64_t)(x1 - x0) * (y1 - y0);
+    }
+    if (5 * in > a) continue;
+    v[nv++] = c;
+  }
+  S->vsep = v; S->nvsep = nv;
+  return 1;
+}
+
+static int column_cells(const Runs *r, const White *Wt, uint32_t W, uint32_t H, double lh, Boxes *cells, Boxes *gutters) {
   IcSpace S;
-  if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) return 0;
+  IcPage pg = {W, H, r->row_start, r->rs, r->nrun};
+  if (!tall_white(&pg, Wt, lh, 0.75, 10, &S)) return 0;
   int ok = 0;
   IcRect *g = malloc((S.nvsep ? S.nvsep : 1) * sizeof *g);
   uint32_t *ys = malloc((2 * S.nvsep + 2) * sizeof *ys), *cut = NULL, *pcut = NULL;
@@ -313,17 +453,38 @@ static int column_cells(const Runs *r, uint32_t W, uint32_t H, double lh, Boxes 
   if (!S.blank)
     for (size_t i = 0; i < S.nvsep; i++)
       if (S.vsep[i].x0 > S.content.x0 && S.vsep[i].x1 < S.content.x1) g[ng++] = S.vsep[i];
+  /* two white rectangles side by side, < 1 lh apart and sharing >= 80% of the taller one's rows, are one gutter
+     with a speck in it (a footnote mark, dust, a rule's end): without this each made the other's column 0 wide */
+  for (int again = 1; again;) {
+    again = 0;
+    for (size_t i = 0; i < ng && !again; i++)
+      for (size_t j = 0; j < ng && !again; j++) {
+        if (i == j || g[j].x0 < g[i].x1 || g[j].x0 - g[i].x1 >= lh) continue;
+        uint32_t y0 = g[i].y0 > g[j].y0 ? g[i].y0 : g[j].y0, y1 = g[i].y1 < g[j].y1 ? g[i].y1 : g[j].y1;
+        uint32_t hi = g[i].y1 - g[i].y0, hj = g[j].y1 - g[j].y0, hs = hi > hj ? hi : hj;
+        if (y1 <= y0 || 10 * (uint64_t)(y1 - y0) < 8 * (uint64_t)hs) continue;
+        g[i].x1 = g[j].x1; g[i].y0 = y0; g[i].y1 = y1;
+        g[j] = g[--ng];
+        again = 1;
+      }
+  }
+  if (getenv("INKCMP_DEBUG")) for (size_t i = 0; i < ng; i++) fprintf(stderr, "cand %u %u %u %u\n", g[i].x0, g[i].y0, g[i].x1, g[i].y1);
   size_t k = 0;
   /* a column is >= 10 lh wide: from each gutter to the next gutter beside it (overlapping in y), or to the edge of
      the ink, on both sides (not the narrow strips of a scanner bed's noise or a table's columns) */
   int *keep = malloc((ng ? ng : 1) * sizeof *keep);
   if (!keep) goto out;
+  /* tallest first: a gutter is measured against the page edge and the gutters already kept, never against a
+     shorter white rectangle beside it (the white inside a figure 26 px from the real gutter vetoed it) */
+  qsort(g, ng, sizeof *g, by_height);
   for (size_t i = 0; i < ng; i++) {
     int32_t lx = (int32_t)S.content.x0, rx = (int32_t)S.content.x1;
     for (size_t j = 0; j < ng; j++) {
       if (j == i || g[j].y1 <= g[i].y0 || g[j].y0 >= g[i].y1) continue;
+      if (j < i ? !keep[j] : 10 * (uint64_t)(g[j].y1 - g[j].y0) < 8 * (uint64_t)(g[i].y1 - g[i].y0)) continue;
       if (g[j].x1 <= g[i].x0 && (int32_t)g[j].x1 > lx) lx = (int32_t)g[j].x1;
       if (g[j].x0 >= g[i].x1 && (int32_t)g[j].x0 < rx) rx = (int32_t)g[j].x0;
+      if (g[j].x0 < g[i].x1 && g[j].x1 > g[i].x0) lx = rx = (int32_t)g[i].x0;   /* overlaps a kept one */
     }
     keep[i] = (int32_t)g[i].x0 - lx >= 10 * lh && rx - (int32_t)g[i].x1 >= 10 * lh;
   }
@@ -340,6 +501,7 @@ static int column_cells(const Runs *r, uint32_t W, uint32_t H, double lh, Boxes 
   }
   for (size_t i = 0; i < ng; i++) {
     Box b = {(int32_t)g[i].x0, (int32_t)g[i].y0, (int32_t)g[i].x1, (int32_t)g[i].y1};
+    if (getenv("INKCMP_DEBUG")) fprintf(stderr, "gutter %d %d %d %d\n", b.x0, b.y0, b.x1, b.y1);
     if (!push(gutters, b)) goto out;
   }
   size_t ny = 0;
@@ -383,6 +545,12 @@ static int cmp_box_yx(const void *a, const void *b) {
   if (p->x1 != q->x1) return (p->x1 > q->x1) - (p->x1 < q->x1);
   return (p->y1 > q->y1) - (p->y1 < q->y1);
 }
+static const Box *g_sortb;                           /* for cmp_ord_yx only */
+static int cmp_ord_yx(const void *a, const void *b) {
+  size_t i = *(const size_t *)a, j = *(const size_t *)b;
+  int c = cmp_box_yx(&g_sortb[i], &g_sortb[j]);
+  return c ? c : (i > j) - (i < j);
+}
 static int emit(IcLines *o, size_t *cap, Box b, int type) {
   if (o->n == *cap) {
     size_t c = *cap ? 2 * *cap : 64;
@@ -401,8 +569,8 @@ static int emit(IcLines *o, size_t *cap, Box b, int type) {
    An equation number: a piece <= 4 lh wide, >= 2 lh beside a display in its row. Pieces of a row then join unless
    a vertical white separator of unit 3 lies in the gap (a gutter, a table's column gap); equation numbers and
    page_info never join. Display pieces that overlap in x and lie < 0.5 lh apart become one display. */
-static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, const IcRect *vs, size_t nvs,
-                 const Boxes *vr, IcLines *o) {
+static int typed(const Boxes *lines, const Box *parent, double m, const Boxes *figs, uint32_t H, double lh, const IcRect *vs, size_t nvs,
+                 const Boxes *vr, const Boxes *hr, IcLines *o) {
   size_t cap = 0, n = lines->n;
   const Box *b = lines->b;
   int *type = calloc(n ? n : 1, sizeof *type);
@@ -463,7 +631,22 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
     }
     type[i] = IC_TEXT;
     refs[i] = ref;
-    if (ref >= 0 && b[i].x0 >= b[ref].x0 + 1.5 * lh && b[i].x1 <= b[ref].x1 - 1.5 * lh) type[i] = IC_MATH;
+    /* a display is indented on both sides and not anchored at the left: a short text line (a paragraph's first
+       line "If ..., then", "This completes the proof.") has a small left indent and a large right one */
+    int32_t rl = b[i].x0, rr = b[i].x1;              /* the row's extent inside the reference, without a narrow
+                                                        piece at either edge (an equation number): a display of
+                                                        two parts far apart is centred as a whole */
+    if (ref >= 0)
+      for (size_t j = 0; j < n; j++) {
+        if (j == i || row[j] != row[i] || b[j].x0 < b[ref].x0 || b[j].x1 > b[ref].x1) continue;
+        if (b[j].x1 - b[j].x0 <= 4 * lh && (b[j].x1 >= b[ref].x1 - 1.5 * lh || b[j].x0 <= b[ref].x0 + 1.5 * lh)) continue;
+        if (b[j].x0 < rl) rl = b[j].x0;
+        if (b[j].x1 > rr) rr = b[j].x1;
+      }
+    if (ref >= 0 && b[i].x0 >= b[ref].x0 + 1.5 * lh && b[i].x1 <= b[ref].x1 - 1.5 * lh
+        && ((rl - b[ref].x0) >= 0.35 * (b[ref].x1 - rr)
+            || parent[i].y1 - parent[i].y0 >= 1.4 * m)) type[i] = IC_MATH;   /* or tall: a flush-left display's
+                                                                                fractions, sums and integrals */
   }
   for (size_t i = 0; i < n; i++) {                   /* equation numbers beside a display, at the column's edge */
     if (type[i] == IC_PAGEINFO || b[i].x1 - b[i].x0 > 4 * lh) continue;
@@ -497,6 +680,8 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
         for (size_t v = 0; v < nvs && !sep; v++)
           sep = (int32_t)vs[v].x0 >= g0 - 1 && (int32_t)vs[v].x1 <= g1 + 1 && (int32_t)vs[v].y0 <= y0 && (int32_t)vs[v].y1 >= y1;
         if (!sep) sep = ruled(vr, g0, g1, y0, y1, lh);
+        /* a gap of 3 lh is never a word gap (dev sweep 2/3/4/6: 3); the parts of one display may lie further apart */
+        if (!sep && !(type[i] == IC_MATH && type[nx] == IC_MATH)) sep = g1 - g0 >= 3 * lh;
         if (sep) break;
         if (bb[nx].x1 > bb[i].x1) bb[i].x1 = bb[nx].x1;
         if (bb[nx].y0 < bb[i].y0) bb[i].y0 = bb[nx].y0;
@@ -509,32 +694,56 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
   size_t *cnt = calloc(nrows ? nrows : 1, sizeof *cnt);
   if (!cnt) { free(gone); free(bb); free(type); free(row); free(last); free(refs); return 0; }
   for (size_t i = 0; i < n; i++) if (!gone[i] && type[i] != IC_EQNUM && type[i] != IC_PAGEINFO) cnt[row[i]]++;
-  for (size_t i = 0; i < n; i++) if (!gone[i] && cnt[row[i]] >= 3 && type[i] == IC_MATH) type[i] = IC_TEXT;
+  /* ... when the row lies in a ruled table: between two horizontal rules, one above and one below within 30 lh,
+     each over at least half of the box's width. A matrix or an aligned
+     display has rows of >= 3 pieces too, and no such rules (a single line over it does not make a table: the
+     Coxeter-Dynkin diagram above hep-th/9411188 p6's matrix); its pieces stay maths and become one display. */
+  for (size_t i = 0; i < n; i++) {
+    if (gone[i] || cnt[row[i]] < 3 || type[i] != IC_MATH) continue;
+    int above = 0, below = 0, tab = 0;
+    for (size_t k = 0; k < hr->n; k++) {
+      const Box *q = &hr->b[k];
+      int32_t ov = (q->x1 < bb[i].x1 ? q->x1 : bb[i].x1) - (q->x0 > bb[i].x0 ? q->x0 : bb[i].x0);
+      if (2 * ov < bb[i].x1 - bb[i].x0) continue;
+      if (q->y1 <= bb[i].y0 + lh && bb[i].y0 - q->y1 <= 30 * lh) above = 1;
+      if (q->y0 >= bb[i].y1 - lh && q->y0 - bb[i].y1 <= 30 * lh) below = 1;
+    }
+    tab = above && below;
+    if (tab) type[i] = IC_TEXT;
+  }
   free(cnt);
   for (size_t i = 0; i < n; i++)
     if (!gone[i] && !emit(o, &cap, bb[i], type[i])) { free(gone); free(bb); free(type); free(row); free(last); free(refs); return 0; }
   free(gone); free(bb);
   free(type); free(row); free(last); free(refs);
   for (size_t i = 0; i < figs->n; i++) if (!emit(o, &cap, figs->b[i], IC_DIAGRAM)) return 0;
-  /* display rows: math pieces that overlap in x and are < 0.5 lh apart vertically are one display */
+  /* displays. MathPix gives one box to a whole display: the rows of an aligned block, a matrix with its left side,
+     consecutive numbered equations. Maths pieces that overlap in x and lie < 1 lh apart vertically, or that share
+     rows and lie < 3 lh apart, are one display; a text or maths piece whose centre lies in a display belongs to it. */
   int merged = 1;
   while (merged) {
     merged = 0;
     for (size_t i = 0; i < o->n && !merged; i++) {
       if (o->l[i].type != IC_MATH) continue;
-      for (size_t j = i + 1; j < o->n && !merged; j++) {
+      for (size_t j = 0; j < o->n && !merged; j++) {
         IcLine *p = &o->l[i], *c = &o->l[j];
-        if (c->type != IC_MATH || c->x1 <= p->x0 || c->x0 >= p->x1) continue;
-        double gap = c->y0 >= p->y1 ? (double)c->y0 - p->y1 : p->y0 >= c->y1 ? (double)p->y0 - c->y1 : 0;
-        if (gap < 0.5 * lh) {
-          if (c->x0 < p->x0) p->x0 = c->x0;
-          if (c->y0 < p->y0) p->y0 = c->y0;
-          if (c->x1 > p->x1) p->x1 = c->x1;
-          if (c->y1 > p->y1) p->y1 = c->y1;
-          memmove(c, c + 1, (o->n - j - 1) * sizeof *c);
-          o->n--;
-          merged = 1;
+        if (j == i || (c->type != IC_MATH && c->type != IC_TEXT)) continue;
+        int join = 0;
+        double cx = (c->x0 + c->x1) / 2.0, cy = (c->y0 + c->y1) / 2.0;
+        if (cx >= p->x0 && cx <= p->x1 && cy >= p->y0 && cy <= p->y1) join = 1;
+        else if (c->type == IC_MATH) {
+          double gy = c->y0 >= p->y1 ? (double)c->y0 - p->y1 : p->y0 >= c->y1 ? (double)p->y0 - c->y1 : 0;
+          double gx = c->x0 >= p->x1 ? (double)c->x0 - p->x1 : p->x0 >= c->x1 ? (double)p->x0 - c->x1 : 0;
+          join = (gx == 0 && gy < 1.0 * lh) || (gy == 0 && gx < 3 * lh);
         }
+        if (!join) continue;
+        if (c->x0 < p->x0) p->x0 = c->x0;
+        if (c->y0 < p->y0) p->y0 = c->y0;
+        if (c->x1 > p->x1) p->x1 = c->x1;
+        if (c->y1 > p->y1) p->y1 = c->y1;
+        memmove(c, c + 1, (o->n - j - 1) * sizeof *c);
+        o->n--;
+        merged = 1;
       }
     }
   }
@@ -555,13 +764,30 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->threshold = th;
   uint8_t *ink = malloc(N);
   Runs r = {0}; Box *cb = NULL;
-  Boxes vrules = {0}, pcs = {0}, kept = {0}, figs = {0}, fin = {0}, cells = {0}, gutters = {0};
+  Boxes vrules = {0}, hrules = {0}, pcs = {0}, kept = {0}, figs = {0}, fin = {0}, finp = {0}, cells = {0}, gutters = {0};
   int32_t *hv = NULL;
   double hv_med = 10;
   GD3Blocks B; int have_b = 0;
+  White Wt = {0};
   int ok = 0;
   if (!ink) goto done;
-  for (size_t i = 0; i < N; i++) ink[i] = grey[i] < th;
+  tick(NULL);
+  {
+    size_t dark = 0;
+    for (size_t i = 0; i < N; i++) { ink[i] = grey[i] < th; dark += ink[i]; }
+    /* step 1b: polarity. Ink is the minority colour: on a page that is mostly dark (light text on a dark
+       ground) the roles are swapped and the threshold is taken again on the inverted page. */
+    if (!threshold && 2 * dark > N) {
+      uint8_t *inv = malloc(N);
+      if (!inv) goto done;
+      for (size_t i = 0; i < N; i++) inv[i] = (uint8_t)(255 - grey[i]);
+      th = auto_threshold(inv, N);
+      for (size_t i = 0; i < N; i++) ink[i] = inv[i] < th;
+      free(inv);
+      out->threshold = th; out->inverted = 1;
+    }
+  }
+  tick("threshold");
   /* step 2: components: specks, edge-touching (a gutter shadow's core), taller than half the page. (The
      prototype's column-density blanking before this changed nothing on Killing, 7 lines on Penev, and cost Hilbert
      precision 0.857 -> 0.821; removed 2026-11-17.) */
@@ -583,6 +809,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
       }
   }
   runs_free(&r); free(cb); cb = NULL;
+  tick("components");
   /* step 2b: thin rules: horizontal runs >= 12 med and vertical runs >= 8 med whose thickness at their middle
      is <= 0.5 med are erased (table grids, frames around text, underlines) */
   {
@@ -592,13 +819,18 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     int32_t thin = (int32_t)(0.5 * med) > 1 ? (int32_t)(0.5 * med) : 1;
     /* runs are found on two-pixel strips (ink in y or y + 1, x or x + 1): a rule of 1-2 px at 300 dpi wanders
        between neighbouring pixel rows/columns, and a one-pixel scan sees it in pieces */
-#define INK2H(xx, yy) (ink[(size_t)(yy) * W + (xx)] || ((yy) + 1 < H && ink[(size_t)((yy) + 1) * W + (xx)]))
-#define INK2V(xx, yy) (ink[(size_t)(yy) * W + (xx)] || ((xx) + 1 < W && ink[(size_t)(yy) * W + (xx) + 1]))
+    uint8_t *strip = malloc((size_t)W + 1);
+    if (!strip) { free(er); goto done; }
     for (uint32_t y = 0; y < H; y++) {
+      const uint8_t *r0 = ink + (size_t)y * W, *r1 = y + 1 < H ? r0 + W : r0;
+      for (uint32_t x = 0; x < W; x++) strip[x] = r0[x] | r1[x];   /* ink in row y or y + 1 */
+      strip[W] = 0;
       for (uint32_t x = 0; x < W;) {
-        if (!INK2H(x, y)) { x++; continue; }
-        uint32_t a = x;
-        while (x < W && INK2H(x, y)) x++;
+        const uint8_t *q = memchr(strip + x, 1, W - x);
+        if (!q) break;
+        uint32_t a = (uint32_t)(q - strip);
+        x = a;
+        while (strip[x]) x++;
         if (x - a >= 12 * med) {           /* a rule when at least half of its positions are <= thin thick: the
                                               crossings of a table's grid do not keep it (sampled points can all
                                               land on crossings) */
@@ -609,42 +841,83 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
             for (uint32_t yy = y + 1; yy < H && ink[(size_t)yy * W + mx] && tq <= thin; yy++) tq++;
             nthin += tq <= thin;
           }
-          if (2 * nthin >= x - a)
+          if (2 * nthin >= x - a) {
             for (uint32_t xx = a; xx < x; xx++) {
               er[(size_t)y * W + xx] = 1;
               if (y + 1 < H) er[(size_t)(y + 1) * W + xx] = 1;
             }
+            Box hr = {(int32_t)a, (int32_t)y, (int32_t)x, (int32_t)y + 2};   /* a table's rule, for step 6 */
+            if (!push(&hrules, hr)) { free(strip); free(er); goto done; }
+          }
         }
       }
     }
-    for (uint32_t x = 0; x < W; x++)
-      for (uint32_t y = 0; y < H;) {
-        if (!INK2V(x, y)) { y++; continue; }
-        uint32_t a = y;
-        while (y < H && INK2V(x, y)) y++;
-        if (y - a >= 4 * med) {
-          uint32_t nthin = 0;
+    /* vertical runs, found row by row in memory order: vlen[x] = rows of the strip (x, x + 1) with ink ending
+       above row y; a run ends where the strip is white, or at the page's bottom. The per-row update has no branch
+       (ends[x] = the length of a run >= 4 med that ends here, else 0); the rare ends are then looked at. */
+    {
+      uint32_t *vlen = calloc((size_t)W, sizeof *vlen), *ends = malloc((size_t)W * sizeof *ends);
+      if (!vlen || !ends) { free(vlen); free(ends); free(strip); free(er); goto done; }
+      uint32_t minlen = (uint32_t)ceil(4 * med);
+      for (uint32_t y = 0; y <= H; y++) {
+        uint32_t any = 0;
+        if (y < H) {
+          const uint8_t *row = ink + (size_t)y * W;
+          for (uint32_t x = 0; x + 1 < W; x++) strip[x] = row[x] | row[x + 1];
+          strip[W - 1] = row[W - 1];
+        } else memset(strip, 0, W);
+        for (uint32_t x = 0; x < W; x++) {
+          uint32_t old = vlen[x], on = strip[x];
+          vlen[x] = on ? old + 1 : 0;
+          uint32_t e = (!on && old >= minlen) ? old : 0;
+          ends[x] = e; any |= e;
+        }
+        if (!any) continue;
+        for (uint32_t x = 0; x < W; x++) {
+          uint32_t len = ends[x];
+          if (!len) continue;
+          uint32_t a = y - len, nthin = 0;
           for (uint32_t my = a; my < y; my++) {
             int32_t tq = 0;
             for (int32_t xx = (int32_t)x; xx >= 0 && ink[(size_t)my * W + xx] && tq <= thin; xx--) tq++;
             for (uint32_t xx = x + 1; xx < W && ink[(size_t)my * W + xx] && tq <= thin; xx++) tq++;
             nthin += tq <= thin;
           }
-          if (2 * nthin >= y - a) {
+          if (2 * nthin >= len) {
             for (uint32_t yy = a; yy < y; yy++) {
               er[(size_t)yy * W + x] = 1;
               if (x + 1 < W) er[(size_t)yy * W + x + 1] = 1;
             }
             Box vr = {(int32_t)x, (int32_t)a, (int32_t)x + 2, (int32_t)y};   /* a cell boundary from here on */
-            if (!push(&vrules, vr)) { free(er); goto done; }
+            if (!push(&vrules, vr)) { free(vlen); free(ends); free(strip); free(er); goto done; }
           }
         }
       }
-#undef INK2H
-#undef INK2V
+      free(ends);
+      free(vlen);
+    }
+    free(strip);
     for (size_t i = 0; i < N; i++) if (er[i]) ink[i] = 0;
     free(er);
+    /* a vertical rule is a table's cell boundary only when a horizontal rule meets it (a grid). A norm bar, a
+       determinant's bar, a tall bracket or an integral's stem is thin and tall too and meets none: it is still
+       erased, but it cuts no piece and blocks no join. */
+    {
+      size_t kv = 0;
+      int32_t tol = (int32_t)med > 2 ? (int32_t)med : 2;
+      for (size_t i = 0; i < vrules.n; i++) {
+        const Box *v = &vrules.b[i];
+        int met = 0;
+        for (size_t k = 0; k < hrules.n && !met; k++) {
+          const Box *q = &hrules.b[k];
+          met = q->x0 - tol <= v->x0 && q->x1 + tol >= v->x1 && q->y0 >= v->y0 - tol && q->y1 <= v->y1 + tol;
+        }
+        if (met) vrules.b[kv++] = *v;
+      }
+      vrules.n = kv;
+    }
   }
+  tick("rules");
   /* step 3: blocks on the cleaned page, then pieces */
   if (!runs_of(ink, W, H, &r)) goto done;
   if (gd3_blocks_opt(W, H, r.row_start, r.rs, 0, 0, 0, &B)) goto done;
@@ -652,7 +925,14 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->lh = B.lh;
   double lh = B.lh;
   uint32_t need = (uint32_t)(1.5 * lh) > 1 ? (uint32_t)(1.5 * lh) : 1;
-  if (!column_cells(&r, W, H, lh, &cells, &gutters)) goto done;
+  tick("blocks");
+  {                                                  /* one scan for all white rectangles the page needs */
+    IcPage pgw = {W, H, r.row_start, r.rs, r.nrun};
+    if (!white_candidates(&pgw, lh, 0.75, 8, &Wt)) goto done;
+  }
+  tick("white scan");
+  if (!column_cells(&r, &Wt, W, H, lh, &cells, &gutters)) goto done;
+  tick("gutters");
   if (cells.n <= 1) {
     for (size_t p = 0; p < B.npara; p++) {
       const GD3BPara *P = &B.para[p];
@@ -689,6 +969,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
       if (!okc) goto done;
     }
   }
+  tick("lines+pieces");
   /* step 4: m, clip, specks */
   free(hv); hv = malloc((pcs.n ? pcs.n : 1) * sizeof *hv);
   if (!hv) goto done;
@@ -722,6 +1003,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
       if (!push(&kept, b)) goto done;
     }
   }
+  tick("step4");
   /* step 5: figures, and the pieces they hold */
   if (!figures(ink, W, H, m, &figs)) goto done;
   for (size_t i = 0; i < kept.n; i++) {
@@ -730,15 +1012,28 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     int in = 0;
     for (size_t f = 0; f < figs.n && !in; f++)
       in = figs.b[f].x0 <= cx && cx <= figs.b[f].x1 && figs.b[f].y0 <= cy && cy <= figs.b[f].y1;
-    if (!in && !vsplit(ink, W, b, m, &fin)) goto done;
+    if (in) continue;
+    size_t n0 = fin.n;
+    if (!vsplit(ink, W, b, m, &fin)) goto done;
+    for (size_t q = n0; q < fin.n; q++) if (!push(&finp, b)) goto done;   /* the piece each line was cut from */
   }
-  qsort(fin.b, fin.n, sizeof *fin.b, cmp_box_yx);
+  {                                                  /* sort the lines by (y0, x0, ...), their parents with them */
+    size_t *ord = malloc((fin.n ? fin.n : 1) * sizeof *ord);
+    Box *t1 = malloc((fin.n ? fin.n : 1) * sizeof *t1), *t2 = malloc((fin.n ? fin.n : 1) * sizeof *t2);
+    if (!ord || !t1 || !t2) { free(ord); free(t1); free(t2); goto done; }
+    for (size_t i = 0; i < fin.n; i++) ord[i] = i;
+    g_sortb = fin.b;
+    qsort(ord, fin.n, sizeof *ord, cmp_ord_yx);
+    for (size_t i = 0; i < fin.n; i++) { t1[i] = fin.b[ord[i]]; t2[i] = finp.b[ord[i]]; }
+    memcpy(fin.b, t1, fin.n * sizeof *t1); memcpy(finp.b, t2, fin.n * sizeof *t2);
+    free(ord); free(t1); free(t2);
+  }
   /* step 6 */
+  tick("figures+split");
   /* step 6: the vertical white separators of unit 3 (gutters, table column gaps), then types */
-  IcSpace S;
-  IcPage pg = {W, H, r.row_start, r.rs, r.nrun};
-  IcSpaceParams sp; ic_space_defaults(&sp); sp.max_sep = 1024;
-  if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) goto done;
+  IcSpace S;                                         /* separators: >= 1 lh wide and >= 8 lh tall (dev sweep) */
+  IcPage pg6 = {W, H, r.row_start, r.rs, r.nrun};
+  if (!tall_white(&pg6, &Wt, lh, 1.0, 8.0, &S)) goto done;
   /* the gutters of step 3a are separators too: a row's pieces never join across a column's gutter */
   IcRect *sep = malloc((S.nvsep + gutters.n + 1) * sizeof *sep);
   if (!sep) { ic_space_free(&S); goto done; }
@@ -747,16 +1042,18 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     IcRect q = {(uint32_t)gutters.b[i].x0, (uint32_t)gutters.b[i].y0, (uint32_t)gutters.b[i].x1, (uint32_t)gutters.b[i].y1};
     sep[S.nvsep + i] = q;
   }
-  int okt = typed(&fin, &figs, H, lh, sep, S.nvsep + gutters.n, &vrules, out);
+  tick("ic_space");
+  int okt = typed(&fin, finp.b, m, &figs, H, lh, sep, S.nvsep + gutters.n, &vrules, &hrules, out);
   free(sep);
   ic_space_free(&S);
+  tick("typed");
   if (!okt) goto done;
   ok = 1;
 done:
-  free(ink); free(cb); free(hv);
+  free(ink); free(cb); free(hv); free(Wt.r);
   runs_free(&r);
   if (have_b) gd3_blocks_free(&B);
-  free(vrules.b); free(pcs.b); free(kept.b); free(figs.b); free(fin.b); free(cells.b); free(gutters.b);
+  free(vrules.b); free(hrules.b); free(pcs.b); free(kept.b); free(figs.b); free(fin.b); free(finp.b); free(cells.b); free(gutters.b);
   if (!ok) { ic_lines_free(out); return 5; }
   return 0;
 }

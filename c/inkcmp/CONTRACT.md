@@ -711,6 +711,69 @@ New tests:
 - L9: a table of eight columns 2-4 lh wide and 0.8 lh apart; every box over it spans the table, as in v5. It fails
   without the 10 lh column width.
 
+**v7 (2026-11-17, an audit chat; `inkcmp lines` now). Harness and sets: `tools/lines-audit/`.**
+
+What the audit found, each seen on a page first:
+- **The truth counts containers as lines.** A MathPix lines.json is a tree: `column`, `table`, `table_row`,
+  `table_column`, and every node with `children_ids` (`list_item`, `abstract`, `footnote`, ...) hold other lines. The
+  scorer counts all of them. No line finder can match a column box, so recall has a ceiling well below 1 (two-column
+  pages: 66 `column` boxes in 30 pages; 1910.08395 p10 scores 56/78 raw and 56/56 on its leaves). Both routes carry
+  the same handicap, so the comparison with YOLO stands; the absolute figures do not. `score.py` prints **raw** (the
+  committed scorer) and **leaf** (containers dropped) side by side.
+- **A dark page was read as ink** (Uebung12 p2: white text on black, 3 of 47 lines). Step 1b.
+- **Gutters came back in pieces, or not at all.** Unit 3's cover keeps white rectangles by decreasing area over both
+  classes and cuts a candidate where a kept one spans its width. Every paragraph gap that lines up in both columns is
+  wider than the gutter and cut it (postscriptexamples23 p2: gutter y 294-2568, reported from 992). And step 3a's
+  width test let any white rectangle beside a gutter veto it (the white in a figure, 26 px away).
+- **Rows of one display were separate boxes**, and a matrix under a diagram's line was a "table".
+- **Norm bars, determinant bars and tall brackets were table rules** and cut their display into cells.
+
+Changes from v6:
+- 1b **Polarity.** When more than half of the page is below the threshold, the grey values are inverted and the
+  threshold is taken again.
+- 2b **A vertical rule is a cell boundary only in a grid:** a horizontal rule must meet it. Others are still erased.
+- 3a **Separators, tallest first** (`white_candidates`, `tall_white`). One scan gives every maximal white rectangle
+  >= 0.75 lh wide and >= 8 lh tall. Candidates are taken by decreasing height; one is kept when it has ink within
+  3 lh on each side in >= 1/5 of its rows (the two sides counted apart: two columns' lines need not share rows) and
+  lies <= 20% inside those kept. Gutters: >= 10 lh tall; two side by side < 1 lh apart sharing 80% of the taller's rows
+  are one (a speck in the gutter). The 10 lh column width is measured to the page edge, to kept gutters, and to
+  candidates >= 80% as tall (a table's equal column gaps still veto each other, L9; a figure's short white does not).
+- 6 **Join separators** are the same candidates >= 1 lh wide and >= 8 lh tall (sweep 4/6/8 x 1.0/1.25), plus: pieces
+  >= 3 lh apart never join unless both are maths (sweep 2/3/4/6).
+- 6 **Displays.** A piece is maths when indented >= 1.5 lh on both sides and either not left-anchored (its row's
+  left indent >= 0.35 x the right one) or cut from a piece >= 1.4 m tall. Maths pieces that overlap in x and lie < 1 lh
+  apart, or share rows < 3 lh apart, are one display; a text or maths piece whose centre lies in a display joins it.
+- 6 **Table rows** (>= 3 boxes become text) need a horizontal rule above and one below within 30 lh, each over half
+  the box's width. Without them the row stays maths (a matrix).
+- **Speed.** The white scan ran twice at full resolution (73 of ~125 ms on a 6 Mpx page). It now runs once, on the
+  run list reduced 2 x 2 when lh >= 16 px (10 ms; results equal the full-resolution scan's on the dev set). The rule
+  search reads the page in memory order without a branch per pixel (30 -> 12 ms, boxes byte-identical on 111 pages).
+
+Measured (recall / precision; raw = committed scorer, leaf = containers dropped). Pages rendered with poppler, not
+Ghostscript. Only library documents whose PDF is in git could be rendered: 76 of the 176 held-out pages (3 scans).
+
+| set | version | raw all | leaf all | leaf german | leaf maths | leaf table | leaf two_column | ms/page median |
+|---|---|---|---|---|---|---|---|---|
+| audit dev (111), developed on | v6 | 0.783 / 0.838 | 0.872 / 0.832 | 0.748 / 0.616 | 0.955 / 0.807 | 0.781 / 0.841 | 0.947 / 0.900 | 153 |
+| | v7 | 0.817 / 0.875 | 0.915 / 0.873 | 0.865 / 0.772 | 0.961 / 0.856 | 0.854 / 0.882 | 0.966 / 0.917 | 79 |
+| held-out 1-4, the 76 renderable pages; never developed on | YOLO+Gemma | 0.595 / 0.651 | 0.674 / 0.638 | 0.634 / 0.677 | 0.959 / 0.858 | 0.336 / 0.303 | 0.921 / 0.931 | 9800-18900 |
+| | v6 | 0.716 / 0.809 | 0.823 / 0.806 | 0.795 / 0.668 | 0.967 / 0.888 | 0.688 / 0.774 | 0.925 / 0.876 | 158 |
+| | v7 | 0.769 / 0.835 | 0.886 / 0.833 | 0.882 / 0.819 | 0.980 / 0.869 | 0.787 / 0.769 | 0.961 / 0.905 | 84 |
+| audit confirm (85, no German, no scan); read after the code was frozen | v6 | 0.738 / 0.851 | 0.843 / 0.847 | - | 0.957 / 0.873 | 0.718 / 0.830 | 0.938 / 0.854 | 136 |
+| | v7 | 0.753 / 0.865 | 0.862 / 0.863 | - | 0.965 / 0.892 | 0.738 / 0.839 | 0.960 / 0.874 | 77 |
+
+- My YOLO scores equal gemma4-ee's per-page table on all 41 held-out 4 pages I could render (matched and box counts).
+- Still behind YOLO: **two-column precision** (0.905 against 0.931 leaf; 0.906 against 0.932 raw). Maths precision is
+  1 point ahead of YOLO and 2 points below v6 on the held-out pages.
+- The dev gain (+4.3 / +4.1 leaf) is about twice the confirm gain (+1.9 / +1.6): the dev set held the dark page and
+  the pages the gutter faults were found on.
+- The confirm set was read twice: once before the L9 change to the column-width test (0.861 / 0.862), once after.
+- Tried and not taken: column width 5 lh instead of 10 (dev leaf 0.922 / 0.875, table +1.2 recall; it contradicts L9);
+  both-sides ink in 1/8 of the rows (dev 0.923 / 0.873; L1 fails).
+
+New tests: L10 (the two-column page inverted gives the same 88 lines; committed code: 19) and L11 (an align block of
+three rows is one display with three equation numbers; committed code: three displays).
+
 **ours+ink on the board (T-0148, 2026-11-17, scratch `work/run-files/board-ink/`).** The question: does
 regrouping `pdfdrill glyphlines` lines by `inkcmp lines` boxes move the board's ours column? The gate: the ink
 residual is lower on >= 4 of the 5 table rows, and no maths row is worse.

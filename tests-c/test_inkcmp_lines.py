@@ -317,6 +317,54 @@ def test_L9_narrow_table_columns_are_not_page_columns(page):
     return len(over)
 
 
+def test_L10_light_text_on_a_dark_page(page):
+    """step 1b: a page that is mostly dark is read with its grey values inverted. The two-column page of L4, inverted,
+    gives the same text lines. Without the step the dark ground is the ink and no line is found (Uebung12 p2 of the
+    library: 3 of 47 lines)."""
+    pg, _, _ = make_page(TWOCOL)
+    w, h, px = parse_pgm(pg)
+    head = b"P5\n%d %d\n255\n" % (w, h)
+    a = [b for t, b in lines_of(head + bytes(px)) if t == "text"]
+    b = [b for t, b in lines_of(head + bytes(255 - v for v in px)) if t == "text"]
+    assert len(a) >= 40 and len(b) == len(a), (len(a), len(b))
+    for x in a:
+        assert max(iou(x, y) for y in b) >= 0.9, x
+    return len(a)
+
+
+ALIGNED = r"""\documentclass[10pt]{article}
+\usepackage[a4paper,margin=3cm]{geometry}
+\usepackage{amsmath}
+\begin{document}
+\noindent """ + " ".join(["A display of several rows is one box, as MathPix gives it."] * 12) + r"""
+\begin{align}
+a_1 + b_1 &= c_1 + d_1 + e_1, \\
+a_2 x^2 + b_2 x &= c_2, \\
+\int_0^1 f(t)\,dt &= F(1) - F(0).
+\end{align}
+""" + " ".join(["The text goes on below the display and fills the lines of the page as before."] * 12) + r"""
+\end{document}
+"""
+
+
+def test_L11_rows_of_an_aligned_display_are_one_display(page):
+    """step 6, displays: the three rows of an align block are one math box, and each row keeps its equation number.
+    With the display rule of v6 (rows join only when < 0.5 lh apart) there are three boxes."""
+    pg, lines, _ = make_page(ALIGNED)
+    got = lines_of(pg)
+    disp = [b for t, b in got if t == "math"]
+    eq = [b for t, b in got if t == "equation_number"]
+    text = [b for t, b in got if t == "text"]
+    assert len(disp) == 1, disp
+    assert len(eq) == 3, eq
+    th = sorted(b[3] - b[1] for b in text)[len(text) // 2]
+    d = disp[0]
+    assert d[3] - d[1] >= 3 * th, (d, th)                              # it spans the three rows
+    assert all(d[1] <= (e[1] + e[3]) / 2 <= d[3] and e[0] > d[2] for e in eq), (d, eq)
+    assert not any(t[1] < d[3] and t[3] > d[1] for t in text), "a text box lies in the display's rows"
+    return 1 + len(eq)
+
+
 if __name__ == "__main__":
     if not all(shutil.which(t) for t in TOOLS):
         print("test_inkcmp_lines: SKIP (needs %s)" % ", ".join(TOOLS))

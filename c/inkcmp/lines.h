@@ -10,6 +10,7 @@ typedef struct { uint32_t x0, y0, x1, y1; int type; } IcLine;     /* half-open b
 typedef struct {
   IcLine *l; size_t n;
   uint32_t width, height, threshold, lh, m;   /* ink threshold used, blocks' lh, the line height m (step 4) */
+  int inverted;                               /* 1: light text on a dark ground, read with the grey values inverted (step 1b) */
 } IcLines;
 
 /* one P5 PGM (maxval 255) as grey bytes: 0, 1 at a clean end of input (no page), 2 bad header, 4 short, 5 memory */
