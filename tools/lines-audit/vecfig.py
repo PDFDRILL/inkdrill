@@ -26,6 +26,8 @@ import sys
 ROWS = "--no-rows" not in sys.argv              # panels in one row are one figure
 BLOCK = "--no-block" not in sys.argv            # held-out attempt 2: a line of a text block is no label
 FRAMED = "--framed" in sys.argv                 # held-out attempt 2b: framed text is not a figure
+CONTENT = "--content" in sys.argv               # held-out attempt 3: a text-dominated cluster is text
+TEXTY = float(next((a.split("=")[1] for a in sys.argv if a.startswith("--texty=")), "0.5"))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INKCMP = os.path.join(ROOT, "build", "inkcmp")
 LIBROOT = os.environ.get("LINES_AUDIT_LIB", os.path.expanduser("~/pdfdrill-library"))
@@ -167,6 +169,16 @@ def measure(doc, tol=12.0, sel=None, folder=None):
                         break
                 if merged:
                     break
+        if CONTENT:                                  # attempt 3: a cluster whose area is mostly text lines is text --
+            def texty(c):                            # with no image in it (a figure draws; a text box frames text)
+                area = (c[2] - c[0]) * (c[3] - c[1])
+                cov = sum((min(c[2], b[2]) - max(c[0], b[0])) * (min(c[3], b[3]) - max(c[1], b[1]))
+                          for t, b in ink if t in ("text", "math") and c[0] <= (b[0] + b[2]) / 2 <= c[2]
+                          and c[1] <= (b[1] + b[3]) / 2 <= c[3])
+                return area > 0 and cov / area >= TEXTY and not any(img_inside(c, b) for b in imgs)
+            cand = [c for c in cand if not texty(c)]
+            # a page element, not a figure: a candidate in the top 8% of the page whose only drawing is a small image
+            cand = [c for c in cand if not (c[3] <= 0.12 * H and any(img_inside(c, b) for b in imgs))]
         if FRAMED:                                   # a frame around text lines is text: few paths, no image, and
             def framed(c):                           # three text lines or more inside
                 inside = [b for t, b in ink if t == "text" and c[0] <= (b[0] + b[2]) / 2 <= c[2]

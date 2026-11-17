@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """figdraw.py <out.tsv> [N] [seed] -- a held-out set of born-digital pages with MathPix figures (diagram/chart regions)
 for the figure step (CONTRACT unit 7). The library's documents with a PDF and a MathPix lines.json, minus every
-document of the board set, held-out 1-4, the audit dev and confirm sets, and the three development documents (0864,
+document of the board set, held-out 1-4, the audit dev and confirm sets, earlier figure sets, and the three development documents (0864,
 1805.01788, 2312.11532); one page per document (its pages with a figure, one drawn); seed 9003; a page drawn as one
 page-size image (a scan) is drawn past. Written before anything is measured on it."""
 import csv, glob, hashlib, json, os, random, re, subprocess, sys
@@ -12,6 +12,7 @@ seed = int(sys.argv[3]) if len(sys.argv) > 3 else 9003
 names = {"lib:" + hashlib.sha256(d).hexdigest()[:12]: os.fsdecode(d) for d in os.listdir(os.fsencode(LIB))}
 excl = {"0864", "1805.01788", "2312.11532", "2312.11532v2"}
 sets = [os.path.join(HERE, "audit-dev-set.tsv"), os.path.join(HERE, "audit-confirm-set.tsv")] + \
+       sorted(glob.glob(os.path.join(HERE, "figure-set-*.tsv"))) + \
        sorted(glob.glob(os.path.expanduser("~/drillgroup/results/heldout*-set.tsv"))) + \
        [os.path.expanduser("~/drillgroup/results/board-set.tsv")]
 for f in sets:
