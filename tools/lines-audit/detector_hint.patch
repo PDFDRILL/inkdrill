@@ -1,0 +1,29 @@
+--- inkcmp/lines.c	2026-11-17 19:11:32.297233567 +0100
++++ inkcmp/lines.c	2026-11-17 19:24:44.584116399 +0100
+@@ -648,6 +648,26 @@
+             || parent[i].y1 - parent[i].y0 >= 1.4 * m)) type[i] = IC_MATH;   /* or tall: a flush-left display's
+                                                                                 fractions, sums and integrals */
+   }
++  {                                                  /* EXPERIMENT (a): layout-detector hint, scratch only */
++    const char *hf = getenv("INKCMP_HINT");
++    FILE *f = hf ? fopen(hf, "r") : NULL;
++    if (f) {
++      double hb[512][5]; size_t nh = 0;
++      while (nh < 512 && fscanf(f, "%lf %lf %lf %lf %lf", &hb[nh][0], &hb[nh][1], &hb[nh][2], &hb[nh][3], &hb[nh][4]) == 5) nh++;
++      fclose(f);
++      for (size_t i = 0; i < n; i++) {
++        if (type[i] != IC_MATH) continue;
++        double cx = (b[i].x0 + b[i].x1) / 2.0, cy = (b[i].y0 + b[i].y1) / 2.0;
++        int txt = 0, frm = 0;
++        for (size_t h = 0; h < nh; h++)
++          if (hb[h][0] <= cx && cx <= hb[h][2] && hb[h][1] <= cy && cy <= hb[h][3]) {
++            int c = (int)hb[h][4];
++            txt |= c == 0 || c == 1 || c == 2; frm |= c == 8;
++          }
++        if (txt && !frm) type[i] = IC_TEXT;
++      }
++    }
++  }
+   for (size_t i = 0; i < n; i++) {                   /* equation numbers beside a display, at the column's edge */
+     if (type[i] == IC_PAGEINFO || b[i].x1 - b[i].x0 > 4 * lh) continue;
+     long rf = refs[i];

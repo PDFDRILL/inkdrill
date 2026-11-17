@@ -656,6 +656,29 @@ box and in no `isolate_formula` box is text -- couples step 6 to the detector's 
 text layer: a centred line whose characters are words is text -- inkcmp lines is ink-only, so this is a hint input;
 (c) position: centred lines between the title and the first body line of page 1.
 
+**Experiment (a), the layout detector as a typing hint (coordinator's pick, 2026-11-17).** Gate: both author red
+pages green, and no MathPix display on the board becomes text. `tools/lines-audit/detector_hint.py` with the scratch
+patch `detector_hint.patch` (step 6 reads INKCMP_HINT: a display candidate whose centre lies in a title / plain text /
+abandon box and in no isolate_formula box is text, before displays merge):
+- detector at 320 x 256 (the figure model): FAILS before the end-to-end run -- of the 53 inkcmp maths records that
+  MathPix calls maths on the 30 board pages + 2 red pages, 15 sit in a plain-text box (2103.01507 p118: 7; lib:b21e554b9232
+  p201: 5): at that size the detector does not see a display; 2304.03442's author lines lie in its figure box.
+- detector at 640 x 512: PASSES -- 2304.03442 p1 24 of 24, 1805.01788 p1 12 of 12, 0 maths inside; on the board
+  19 pages change, no display becomes text, two displays shed a line they had swallowed (IoU with MathPix
+  0.65 -> 0.71, 0.32 -> 0.82); 57 records become text where MathPix has text, page_info, a table cell, a caption, a
+  section header or nothing.
+- Cost: the 640 x 512 graph is 3.6x the 320 x 256 one (3.06 against 0.84 CPU s/run on one thread at load 25; quiet,
+  320 x 256 measured 0.24-0.31 s/page): about 1.0 CPU s/page, the whole of the 1 page/s loop. So the hint passes
+  on quality and fails the budget; nothing is in lines.c.
+- From C (the owner's C-reader target): onnxruntime's C API (MIT; libonnxruntime.so, a dependency to name) --
+  `OrtGetApiBase()->GetApi(ORT_API_VERSION)`, `CreateEnv`, `CreateSessionOptions` + `SetIntraOpNumThreads(1)`,
+  `CreateSession(model)`, `CreateTensorWithDataAsOrtValue` over the letterboxed float page [1,3,H,W], `Run`,
+  `GetTensorMutableData` -> [1,300,6] boxes (x0 y0 x1 y1 score class). The preprocessing must be OpenCV's
+  INTER_LINEAR shrink without antialiasing (PIL's antialiased shrink cost half the figures): a bilinear resample,
+  half-pixel centres, about 40 lines of C, checked against cv2 on the dev pages. Inference cost is the runtime's
+  (0.24-0.31 s at 320 x 256, ~1 s at 640 x 512); the resize and letterbox are milliseconds. One session per process,
+  reused across pages (session creation ~0.3 s).
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
