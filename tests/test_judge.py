@@ -125,6 +125,16 @@ class JudgeBornDigital(unittest.TestCase):
         _, _, rows = self.planted_run()
         self.assertEqual([(r[2], r[3], r[6]) for r in rows if r[4] == "0" and r[8] != "1"], [])
 
+    def test_overlapping_boxes_pair_each_glyph_once(self):
+        """a reading with a line boxed twice (overlapping regions) must not pair the page's glyphs twice"""
+        clean, _ = self.run_judge(self.doc, "clean2")
+        doc = copy.deepcopy(self.doc)
+        doc["pages"][0]["lines"].insert(1, copy.deepcopy(doc["pages"][0]["lines"][0]))
+        res, _ = self.run_judge(doc, "dup")
+        self.assertLessEqual(res["glyphs"], res["a_glyphs"])
+        self.assertLessEqual(res["glyphs"], clean["glyphs"])
+        self.assertEqual(res["a_glyphs"], res["glyphs"] + res["a_unpaired"])
+
     def test_threshold_is_the_frozen_value(self):
         self.assertEqual(judge.THRESHOLD, 7)
         self.assertEqual(judge.UP, 8)

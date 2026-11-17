@@ -311,12 +311,25 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     for i, e in sorted(failed.items()):
         print(f"N L{i} NOT_COMPILED {e}", file=out)
     res["not_compiled"] = len(failed)
+    # each original glyph belongs to ONE line: the smallest box that holds its centre. Where a reading's boxes
+    # overlap, a glyph was paired once per box (board 2312.11532 p7: 3396 pairs of 3325 glyphs)
+    boxes = [box(ln) for ln in lv]
+    owner = {}
+    for ci, c in enumerate(ac):
+        best = None
+        for li, b in enumerate(boxes):
+            if inside(c, b):
+                a = (b[2] - b[0]) * (b[3] - b[1])
+                if best is None or a < best[0]:
+                    best = (a, li)
+        if best is not None:
+            owner[ci] = best[1]
     for i, ln in enumerate(lv[:len(bc)]):
         if i in failed:
             continue
         b_total += len(bc[i])
-        b = box(ln)
-        ca = sorted((c for c in ac if inside(c, b)), key=lambda c: c[1])
+        b = boxes[i]
+        ca = sorted((c for ci, c in enumerate(ac) if owner.get(ci) == i), key=lambda c: c[1])
         cb = sorted(bc[i], key=lambda c: c[1])
         if not ca or not cb:
             res["lines_empty"] += 1

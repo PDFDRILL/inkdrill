@@ -273,6 +273,12 @@ the alignment) and `b_unpaired` (rendered glyphs with no partner).
   ours 4732 unpaired original glyphs, ours+ink 661).
 - 040123 p2: G rows unchanged; a_glyphs 3133, a_unpaired 276, b_unpaired 0.
 
+**One owner line per original glyph (2026-11-17, rule 4).** Where a reading's line boxes overlap, the judge paired
+an original glyph once per box. On board 2312.11532 p7 ours+ink, 3396 pairs came from 3325 glyphs, so a_unpaired
+was negative. Each original glyph now belongs to the smallest leaf box that holds its centre. 040123 p2: G rows
+unchanged. Test: a reading with one line boxed twice pairs no more glyphs than the page has, nor more than the
+clean reading. Pairing per box fails it.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of
