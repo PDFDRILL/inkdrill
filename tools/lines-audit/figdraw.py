@@ -2,7 +2,7 @@
 """figdraw.py <out.tsv> [N] [seed] -- a held-out set of born-digital pages with MathPix figures (diagram/chart regions)
 for the figure step (CONTRACT unit 7). The library's documents with a PDF and a MathPix lines.json, minus every
 document of the board set, held-out 1-4, the audit dev and confirm sets, earlier figure sets, and the three development documents (0864,
-1805.01788, 2312.11532); one page per document (its pages with a figure, one drawn); seed 9003; a page drawn as one
+1805.01788, 2312.11532); one page per document (its pages with a figure, one drawn); seed as given (9003 by default); a page drawn as one
 page-size image (a scan) is drawn past. Written before anything is measured on it."""
 import csv, glob, hashlib, json, os, random, re, subprocess, sys
 LIB = os.environ.get("LINES_AUDIT_LIB", os.path.expanduser("~/pdfdrill-library"))
