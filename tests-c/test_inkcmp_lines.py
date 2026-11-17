@@ -177,6 +177,38 @@ def test_L3_two_pages_in_one_stream(page):
     return 1
 
 
+RULED = r"""\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\begin{document}
+\noindent A ruled table of eight rows: its rules cross each other at a quarter, a half and three quarters of their length.
+The line height must still come from the text lines, never from a rule.
+
+\begin{center}\begin{tabular}{|l|c|c|c|r|}\hline
+""" + "\n".join("Row %d & a%d & b%d & c%d & %d.5 \\\\ \\hline" % (k, k, k, k, k) for k in range(1, 9)) + r"""
+\end{tabular}\end{center}
+\noindent After the table the paragraph goes on with more plain text, written to give the page a few lines.
+\end{document}
+"""
+
+
+def test_L5_ruled_table_cells_and_line_height(page):
+    """The rules of a ruled table are erased even though its crossings sit at their sample points; each cell is a
+    line, and the line height comes from text, never from a rule."""
+    pg, lines, words = make_page(RULED)
+    p = run([INKCMP, "lines"], pg)
+    head = p.stdout.decode().splitlines()[0].split()
+    m = int(head[head.index("m") + 1])
+    text_h = sorted(b[3] - b[1] for b, ws in lines if len(ws) > 6)
+    assert text_h and m >= 0.5 * text_h[len(text_h) // 2], (m, text_h)
+    got = lines_of(pg)
+    assert not [b for t, b in got if t in ("diagram", "math")], [(t, b) for t, b in got if t in ("diagram", "math")][:3]
+    cells = [b for b, w in words if re.fullmatch(r"[abc][1-8]", w)]
+    assert len(cells) == 24, len(cells)
+    for c in cells:
+        assert max(iou(c, b) for t, b in got) >= 0.6, c
+    return len(cells)
+
+
 def test_L4_two_columns_are_read_apart(page):
     pg, lines, _ = make_page(TWOCOL)
     w = int(re.match(rb"P5\s+(?:#[^\n]*\n\s*)*(\d+)", pg)[1])

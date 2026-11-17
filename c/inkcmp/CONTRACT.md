@@ -418,6 +418,35 @@ board set, held-out 1 and 2, and the development draws). Measured once, with v3 
 Time: median 139 ms per page, max 353 ms. The YOLO route on these pages comes from gemma4-ee (frozen); the gate
 waits for it.
 
+**v4 (2026-11-17, `inkcmp lines` now)**, developed on the same 90 development pages; the held-out sets are untouched.
+Changes from v3:
+- **Rules.** A rule is a run >= 12 med (horizontal) or >= 4 med (vertical) of which at least half the positions
+  are <= 0.5 med thick, with runs found on two-pixel strips.
+  - v3 sampled the thickness at one point (in a first fix, three). In a ruled table, the crossings can sit exactly
+    at the sample points: in L5's 8-row table all three samples hit them and measured 570 px, so the grid
+    survived and the table became one `math` box.
+  - A 1-2 px rule wanders between neighbouring pixel columns, which is why runs are found on two-pixel strips.
+- **m**, the line height: only pieces taller than 0.8 med count. A surviving rule (3 px) was once m, and then every
+  glyph was a figure: one dev page had 512 `diagram` boxes. A first guard, >= 0.4 lh, failed where blocks' lh is
+  itself inflated (Penev recall 0.856 -> 0.838).
+- **Clip.** It never cuts into the inner 90% of the page width. On a page of short lines the 80th percentile cut a
+  full-width line in half (L5's first line).
+- **Header and footer blocks.** The rows beyond the outermost white gap >= 3 lh that lie wholly in the outer 12% of
+  the page are `page_info`, like MathPix's letterhead and footer blocks. The sweep: F 0.12/0.18, G 2/3; 0.12/3 lost
+  the least recall.
+- **Not done:** deskewing. The one skewed dev page (a curved receipt, about 20 degrees) also has degenerate MathPix
+  boxes, so it is no basis for a decision.
+
+| version | maths | german | two_column | table | scan | all |
+|---|---|---|---|---|---|---|
+| v3 | 0.913 / 0.899 | 0.747 / 0.780 | 0.883 / 0.815 | 0.716 / 0.676 | 0.622 / 0.544 | 0.763 / 0.718 |
+| v4 | 0.919 / 0.899 | 0.749 / 0.778 | 0.882 / 0.819 | 0.741 / 0.799 | 0.626 / 0.559 | 0.775 / 0.774 |
+
+Single-column documents: Killing 0.931/0.901, Hilbert 0.873/0.853, Penev 0.857/0.818. Time: median 132 ms, max
+176 ms per page. New test L5: a pdflatex ruled table of eight rows, where all 24 single-word cells are their own
+line, with no `math` and no `diagram`, and m stays at the text's line height. Requiring a rule to be thin at every
+position fails it.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.

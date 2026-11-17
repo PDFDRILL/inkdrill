@@ -311,8 +311,33 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
     if (b[i].y0 < top) { top = b[i].y0; rtop = row[i]; }
     if (b[i].y1 > bot) { bot = b[i].y1; rbot = row[i]; }
   }
+  /* header and footer blocks: the rows beyond the outermost white gap >= G lh, wholly within the outer F of the page */
+  const double F = 0.12, G = 3;                      /* dev: scan precision 0.544 -> 0.563, recall -0.2 points */
+  int32_t foot_y = INT32_MAX, head_y = -1;           /* pieces with y0 >= foot_y or y1 <= head_y are page_info */
+  if (n) {
+    int32_t *ys = malloc(2 * n * sizeof *ys);        /* intervals sorted by y0: merge, then look for gaps */
+    if (ys) {
+      size_t *ord = malloc(n * sizeof *ord);
+      if (ord) {
+        for (size_t i = 0; i < n; i++) ord[i] = i;
+        for (size_t a = 1; a < n; a++) { size_t v = ord[a], c = a; while (c > 0 && b[ord[c - 1]].y0 > b[v].y0) { ord[c] = ord[c - 1]; c--; } ord[c] = v; }
+        int32_t cy1 = b[ord[0]].y1;
+        for (size_t k = 1; k < n; k++) {
+          Box q = b[ord[k]];
+          if (q.y0 - cy1 >= G * lh) {                  /* a white band from cy1 to q.y0 */
+            if (q.y0 >= (1 - F) * H && q.y0 < foot_y) foot_y = q.y0;
+            if (cy1 <= F * H) head_y = cy1;
+          }
+          if (q.y1 > cy1) cy1 = q.y1;
+        }
+        free(ord);
+      }
+      free(ys);
+    }
+  }
   for (size_t i = 0; i < n; i++) {
-    int pi = (row[i] == rtop && b[i].y1 < 0.07 * H) || (row[i] == rbot && b[i].y0 > 0.93 * H);
+    int pi = (row[i] == rtop && b[i].y1 < 0.07 * H) || (row[i] == rbot && b[i].y0 > 0.93 * H)
+             || b[i].y0 >= foot_y || b[i].y1 <= head_y;
     if (pi) { type[i] = IC_PAGEINFO; continue; }
     long ref = -1;         /* the widest piece overlapping in x within 10 lh above or below: the body text */
     for (size_t j = 0; j < n; j++) {
@@ -449,32 +474,55 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     uint8_t *er = calloc(N, 1);
     if (!er) goto done;
     int32_t thin = (int32_t)(0.5 * med) > 1 ? (int32_t)(0.5 * med) : 1;
+    /* runs are found on two-pixel strips (ink in y or y + 1, x or x + 1): a rule of 1-2 px at 300 dpi wanders
+       between neighbouring pixel rows/columns, and a one-pixel scan sees it in pieces */
+#define INK2H(xx, yy) (ink[(size_t)(yy) * W + (xx)] || ((yy) + 1 < H && ink[(size_t)((yy) + 1) * W + (xx)]))
+#define INK2V(xx, yy) (ink[(size_t)(yy) * W + (xx)] || ((xx) + 1 < W && ink[(size_t)(yy) * W + (xx) + 1]))
     for (uint32_t y = 0; y < H; y++) {
-      const uint8_t *row = ink + (size_t)y * W;
       for (uint32_t x = 0; x < W;) {
-        if (!row[x]) { x++; continue; }
+        if (!INK2H(x, y)) { x++; continue; }
         uint32_t a = x;
-        while (x < W && row[x]) x++;
-        if (x - a >= 12 * med) {
-          uint32_t mx = (a + x) / 2; int32_t t = 0;
-          for (int32_t yy = (int32_t)y; yy >= 0 && ink[(size_t)yy * W + mx]; yy--) t++;
-          for (uint32_t yy = y + 1; yy < H && ink[(size_t)yy * W + mx]; yy++) t++;
-          if (t <= thin) memset(er + (size_t)y * W + a, 1, x - a);
+        while (x < W && INK2H(x, y)) x++;
+        if (x - a >= 12 * med) {           /* a rule when at least half of its positions are <= thin thick: the
+                                              crossings of a table's grid do not keep it (sampled points can all
+                                              land on crossings) */
+          uint32_t nthin = 0;
+          for (uint32_t mx = a; mx < x; mx++) {
+            int32_t tq = 0;
+            for (int32_t yy = (int32_t)y; yy >= 0 && ink[(size_t)yy * W + mx] && tq <= thin; yy--) tq++;
+            for (uint32_t yy = y + 1; yy < H && ink[(size_t)yy * W + mx] && tq <= thin; yy++) tq++;
+            nthin += tq <= thin;
+          }
+          if (2 * nthin >= x - a)
+            for (uint32_t xx = a; xx < x; xx++) {
+              er[(size_t)y * W + xx] = 1;
+              if (y + 1 < H) er[(size_t)(y + 1) * W + xx] = 1;
+            }
         }
       }
     }
     for (uint32_t x = 0; x < W; x++)
       for (uint32_t y = 0; y < H;) {
-        if (!ink[(size_t)y * W + x]) { y++; continue; }
+        if (!INK2V(x, y)) { y++; continue; }
         uint32_t a = y;
-        while (y < H && ink[(size_t)y * W + x]) y++;
+        while (y < H && INK2V(x, y)) y++;
         if (y - a >= 4 * med) {
-          uint32_t my = (a + y) / 2; int32_t t = 0;
-          for (int32_t xx = (int32_t)x; xx >= 0 && ink[(size_t)my * W + xx]; xx--) t++;
-          for (uint32_t xx = x + 1; xx < W && ink[(size_t)my * W + xx]; xx++) t++;
-          if (t <= thin) for (uint32_t yy = a; yy < y; yy++) er[(size_t)yy * W + x] = 1;
+          uint32_t nthin = 0;
+          for (uint32_t my = a; my < y; my++) {
+            int32_t tq = 0;
+            for (int32_t xx = (int32_t)x; xx >= 0 && ink[(size_t)my * W + xx] && tq <= thin; xx--) tq++;
+            for (uint32_t xx = x + 1; xx < W && ink[(size_t)my * W + xx] && tq <= thin; xx++) tq++;
+            nthin += tq <= thin;
+          }
+          if (2 * nthin >= y - a)
+            for (uint32_t yy = a; yy < y; yy++) {
+              er[(size_t)yy * W + x] = 1;
+              if (x + 1 < W) er[(size_t)yy * W + x + 1] = 1;
+            }
         }
       }
+#undef INK2H
+#undef INK2V
     for (size_t i = 0; i < N; i++) if (er[i]) ink[i] = 0;
     free(er);
   }
@@ -496,7 +544,8 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   free(hv); hv = malloc((pcs.n ? pcs.n : 1) * sizeof *hv);
   if (!hv) goto done;
   size_t nw = 0;
-  for (size_t i = 0; i < pcs.n; i++) if (pcs.b[i].x1 - pcs.b[i].x0 > 0.3 * W) hv[nw++] = pcs.b[i].y1 - pcs.b[i].y0;
+  for (size_t i = 0; i < pcs.n; i++)          /* wide pieces, not rules: a rule's thickness is no line height */
+    if (pcs.b[i].x1 - pcs.b[i].x0 > 0.3 * W && pcs.b[i].y1 - pcs.b[i].y0 > 0.8 * hv_med) hv[nw++] = pcs.b[i].y1 - pcs.b[i].y0;
   qsort(hv, nw, sizeof *hv, cmp_i32);
   double m = nw ? hv[nw / 5] : lh;
   out->m = (uint32_t)m;
@@ -510,6 +559,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     qsort(hv, nw, sizeof *hv, cmp_i32);
     double xr = hv[(size_t)(0.8 * (nw - 1) + 0.5)] + 0.5 * lh;   /* 80th percentile: the median cut equation
                                                                      numbers off pages of short lines */
+    if (xr < 0.9 * W) xr = 0.9 * W;          /* the clip is for edge fringe: it never cuts into the inner 90% */
     for (size_t i = 0; i < pcs.n; i++) {
       Box b = pcs.b[i];
       if (b.x0 >= xr) continue;
