@@ -699,6 +699,21 @@ The 640 x 512 graph as the figure source: 40 of 48 whole (83%), 1 swallowed (e12
 swallow nearly gone, at about 4x the cost. **Next option (2), waiting for the C reader's speed budget:** one 640 x 512
 pass per page serving figures and typing (gate on 9005 would then be 83% whole, 1 swallowed: still short of 0).
 
+**The cascade (coordinator, 2026-11-17; `detector_set.py --cascade= --board= [--trigger=figure]`, load 5-7).** The 320
+x 256 pass on every page; where it finds a figure (or a table) box, the 640 x 512 pass runs and its figure boxes
+replace the first's.
+| trigger | 9005: whole | swallowed | 9005 CPU s/page | 640 pass on | board CPU s/page | 640 pass on |
+|---|---|---|---|---|---|---|
+| none (320 only) | 41/48 (85%) | 26 | 0.312 | - | - | - |
+| figure or table | 40/48 (83%) | 1 | 1.347 | 34 of 40 | 0.654 | 8 of 30 |
+| figure only | 40/48 (83%) | 1 | 1.320 | 33 of 40 | 0.470 | 4 of 30 |
+Gate: 83% >= 80% met; swallowed 1, not 0 -- FAILS by one line: e12s40 p1, the chart's subtitle ("Tägliche Werte der
+Monate, ...") printed inside the chart's drawn frame, kept by the detector, split off by MathPix. Budget (mean <= 0.6
+CPU s/page): the board 0.470 with the figure-only trigger (a table alone needs no second pass: tables are not in the
+figure rate), 0.654 with figure-or-table; 9005 is all figure pages by construction, so its 1.3 s is the cost of a
+figure page, not of the loop. Note: 9005 is no longer held out -- the listing cut and the --blocks attempt were
+measured on it -- so a pass would need a fresh seed.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

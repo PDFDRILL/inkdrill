@@ -5,6 +5,10 @@ rendered at 150 dpi, shrunk as ultralytics does (cv2 INTER_LINEAR, no antialiasi
 half the figures), letterboxed (grey 114, centred). Per page and in total: MathPix figures with a detected figure at
 IoU >= 0.5; body lines swallowed (MathPix text lines outside every MathPix figure and caption whose centre falls in a
 detected figure); CPU s per page for the detector (resize included).
+--cascade=<dly640x512.onnx> (coordinator, 2026-11-17): the first graph runs on every page; where it finds a figure or a
+table box, the 640 x 512 graph runs too and its figure boxes replace the first's. --board=<dir> adds the mean CPU
+s/page and the share of pages that trigger the second pass over the board's one-page PDFs (no reference needed).
+--trigger=figure: only a figure box starts the second pass (a table alone does not).
 Listings (coordinator, 2026-11-17): a MathPix diagram/chart region whose area is >= LISTING (0.15) covered by
 readable text-layer words (pdftotext -bbox; >= 2 characters, >= 60% ASCII letters or digits -- a figure drawn with
 line-font glyphs such as ajm p30's graphs has words too, "Ä", "??") is a code listing, prompt or algorithm: text in our
@@ -25,9 +29,14 @@ BLOCKS = "--blocks" in sys.argv
 LISTING = 0.15
 INKCMP = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "build", "inkcmp")
 sys.argv = [a for a in sys.argv if a not in ("-v", "--blocks")]
-model, H, W = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+CASCADE = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--cascade=")), None)
+BOARD = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--board=")), None)
+TRIGGER = (3,) if "--trigger=figure" in sys.argv else (3, 5)       # what starts the second pass: figure, or figure/table
+sys.argv = [a for a in sys.argv if not a.startswith(("--cascade=", "--board=", "--trigger="))]
+model, H0, W0 = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 so = ort.SessionOptions(); so.intra_op_num_threads = 1; so.inter_op_num_threads = 1
 sess = ort.InferenceSession(model, so, providers=["CPUExecutionProvider"])
+sess640 = ort.InferenceSession(CASCADE, so, providers=["CPUExecutionProvider"]) if CASCADE else None
 
 
 def iou(a, b):
@@ -36,7 +45,9 @@ def iou(a, b):
     return ix * iy / u if u > 0 else 0
 
 
-def detect(img):
+def detect(img, session=None, size=None, classes=(3,), tagged=False):
+    """boxes of the given classes (3 figure, 5 table) in the image's pixels"""
+    session, (H, W) = session or sess, size or (H0, W0)
     w, h = img.size
     r = min(W / w, H / h)
     nw, nh = round(w * r), round(h * r)
@@ -44,8 +55,19 @@ def detect(img):
     canvas = np.full((H, W, 3), 114, np.uint8)
     dx, dy = (W - nw) // 2, (H - nh) // 2
     canvas[dy:dy + nh, dx:dx + nw] = small
-    out = sess.run(None, {"images": canvas.astype(np.float32).transpose(2, 0, 1)[None] / 255.0})[0][0]
-    return [((b[0] - dx) / r, (b[1] - dy) / r, (b[2] - dx) / r, (b[3] - dy) / r) for b in out if b[4] >= 0.2 and int(b[5]) == 3]
+    out = session.run(None, {"images": canvas.astype(np.float32).transpose(2, 0, 1)[None] / 255.0})[0][0]
+    return [((b[0] - dx) / r, (b[1] - dy) / r, (b[2] - dx) / r, (b[3] - dy) / r) + ((int(b[5]),) if tagged else ())
+            for b in out if b[4] >= 0.2 and int(b[5]) in classes]
+
+
+def figures(img):
+    """the figure boxes of a page and whether the cascade's second pass ran: --cascade M640 runs the 640 x 512 graph
+    only where the first pass found a figure or a table, and its figure boxes replace the first pass's"""
+    first = detect(img, classes=(3, 5), tagged=True)
+    figs = [b[:4] for b in first if b[4] == 3]
+    if not CASCADE or not [b for b in first if b[4] in TRIGGER]:
+        return figs, False
+    return detect(img, sess640, (640, 512)), True
 
 
 def readable_words(pdf, page, pg):
@@ -99,8 +121,22 @@ def free_of(d, lines):
     return (d[0], lo, d[2], hi)
 
 
-hit = n = sw = pages = lhit = ln_ = 0
+hit = n = sw = pages = lhit = ln_ = triggered = 0
 cpu = 0.0
+if BOARD:                                          # cost only: the board's one-page PDFs, no reference needed
+    bc, bt, bn = 0.0, 0, 0
+    for k in sorted(os.listdir(BOARD)):
+        pdf = os.path.join(BOARD, k, k + ".pdf")
+        if not os.path.exists(pdf):
+            continue
+        png = subprocess.run(["pdftoppm", "-r", "150", "-png", "-singlefile", "-f", "1", "-l", "1", pdf], capture_output=True).stdout
+        img = Image.open(io.BytesIO(png)).convert("RGB")
+        if bn == 0:
+            figures(img)
+        t = time.process_time()
+        _, second = figures(img)
+        bc += time.process_time() - t; bt += second; bn += 1
+    print(f"BOARD {bn} pages: CPU {bc / max(1, bn):.3f} s/page (1 thread); the 640 pass ran on {bt} of {bn}")
 for tsv in sys.argv[4:]:
     for r in csv.reader(open(tsv), delimiter="\t"):
         if not r or r[0].startswith("#") or r[0] == "stratum":
@@ -116,10 +152,11 @@ for tsv in sys.argv[4:]:
         img = Image.open(io.BytesIO(png)).convert("RGB")
         sx, sy = pg["page_width"] / img.width, pg["page_height"] / img.height
         if pages == 0:
-            detect(img)                                    # warm up
+            figures(img)                                   # warm up
         t = time.process_time()
-        det = detect(img)
+        det, second = figures(img)
         cpu += time.process_time() - t
+        triggered += second
         pages += 1
         det = [(b[0] * sx, b[1] * sy, b[2] * sx, b[3] * sy) for b in det]
         if BLOCKS:
@@ -150,5 +187,7 @@ for tsv in sys.argv[4:]:
             print(f"     detector figures {[[int(v) for v in d] for d in det]}")
 print(f"TOTAL {pages} pages: figures whole {hit} of {n} = {hit / max(1, n):.0%}; body lines swallowed {sw}; "
       f"CPU {cpu / max(1, pages):.3f} s/page (1 thread)")
+if CASCADE:
+    print(f"CASCADE: the 640 pass ran on {triggered} of {pages} pages")
 print(f"LISTINGS (MathPix diagram regions >= {LISTING:.0%} readable words; text in our reading, not in the rate): "
       f"{ln_}, of which the detector boxed {lhit} as a figure")
