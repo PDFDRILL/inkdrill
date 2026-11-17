@@ -679,6 +679,26 @@ abandon box and in no isolate_formula box is text, before displays merge):
   (0.24-0.31 s at 320 x 256, ~1 s at 640 x 512); the resize and letterbox are milliseconds. One session per process,
   reused across pages (session creation ~0.3 s).
 
+**Option (1) built: the hint on a document's page 1 (coordinator, 2026-11-17; GLYPHDRILL3 e218b97, pinned).**
+Run path: `tools/detector/layout_hint.py <dly640x512.onnx> <pdf> [page]` (default page 1; title / plain text /
+abandon -> `text`, isolate_formula -> `formula`, fractions of the page) -> `inkcmp lines --hint FILE` (lines
+`page class x0 y0 x1 y1`, clamped to the page; an unknown class or a short line is refused, exit 2) ->
+`ic_lines_hinted` in lines.c (`ic_lines` unchanged for GLYPHDRILL3's callers). `fetch_weights.sh` now also exports
+the 640 x 512 graph and checks it (sha256 efe1580e...; byte-identical run to run). Gate, measured through that path
+(`detector_hint.py ... --page1=30`): 2304.03442 p1 24 of 24, 1805.01788 p1 12 of 12 (`redtests_authors.py
+--hint-model`, exit 0; without the hint 2/24 and 8/12); page 1 of 30 library documents with a MathPix display (seed
+9006, board and red documents excluded): no display turned to text, 94 records now text where MathPix has text;
+the 30 board pages are none of them page 1, and their output is byte-identical to the unhinted binary's (the
+detector does not run there: per-page cost on pages 2+ unchanged). `tests-c/test_inkcmp_hint.py`: no hint -> the
+centred line is a display; text hint -> text; text + formula -> maths; a hint for page 2 -> nothing; three malformed
+files refused, an empty one accepted; three mutants (no retype, formula ignored, page ignored) each fail it.
+
+**The 9005 swallow, re-measured (2026-11-17, load 7).** The figure route reads only the detector's figure boxes, so
+the typing hint does not touch it: 320 x 256 still 41 of 48 whole, 26 swallowed (2304.03442 p1: 24), 0.345 s/page.
+The 640 x 512 graph as the figure source: 40 of 48 whole (83%), 1 swallowed (e12s40 p1), 1.394 CPU s/page -- the
+swallow nearly gone, at about 4x the cost. **Next option (2), waiting for the C reader's speed budget:** one 640 x 512
+pass per page serving figures and typing (gate on 9005 would then be 83% whole, 1 swallowed: still short of 0).
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

@@ -22,7 +22,9 @@ static int usage(void) {
         "       inkcmp white  [--threshold T] < page.pgm\n"
         "       inkcmp space  [--threshold T] [--lh PX] [--vsep-w F] [--vsep-h F] [--hsep-w F] [--hsep-h F]\n"
         "                     [--overlap F] [--max-sep N] < page.pgm\n"
-        "       inkcmp lines  [--threshold T] < pages.pgm   (one or more concatenated pages; T default: automatic)\n"
+        "       inkcmp lines  [--threshold T] [--hint FILE] < pages.pgm   (one or more concatenated pages; T default:\n"
+        "                     automatic; FILE: lines 'page text|formula x0 y0 x1 y1', a layout detector's regions as\n"
+        "                     fractions of the page, for a document's page 1)\n"
         "       inkcmp glyphs < job   (glyph rasters from font programs, scored per pair; glyphs.c)\n"
         "       inkcmp rules  < job   (rule-like ink no glyph covers; rules.c)\n"
         "       T: 1..256 (default 154), ink = pixel < T\n", stderr);
@@ -49,10 +51,40 @@ static int load_error(int rc) {
 }
 
 /* unit 7: every page of the stream, INKLINES1 blocks (CONTRACT.md unit 7) */
+/* --hint FILE: "page text|formula x0 y0 x1 y1" per line, coordinates as fractions of the page's width and height
+   (independent of the render's resolution); other classes and malformed lines are an error */
+typedef struct { unsigned page; int cls; double x0, y0, x1, y1; } HintIn;
+static HintIn *g_hint; static size_t g_nhint;
+static int read_hints(const char *path) {
+  FILE *f = fopen(path, "r");
+  if (!f) { perror(path); return 0; }
+  char cls[32]; HintIn h; size_t cap = 0;
+  int rc;
+  while ((rc = fscanf(f, "%u %31s %lf %lf %lf %lf", &h.page, cls, &h.x0, &h.y0, &h.x1, &h.y1)) == 6) {
+    h.x0 = h.x0 < 0 ? 0 : h.x0 > 1 ? 1 : h.x0; h.x1 = h.x1 < 0 ? 0 : h.x1 > 1 ? 1 : h.x1;   /* a box may reach past */
+    h.y0 = h.y0 < 0 ? 0 : h.y0 > 1 ? 1 : h.y0; h.y1 = h.y1 < 0 ? 0 : h.y1 > 1 ? 1 : h.y1;   /* the page's edge */
+    if (!strcmp(cls, "text")) h.cls = IC_HINT_TEXT;
+    else if (!strcmp(cls, "formula")) h.cls = IC_HINT_FORMULA;
+    else { fprintf(stderr, "inkcmp lines: %s: class %s is neither text nor formula\n", path, cls); fclose(f); return 0; }
+    if (g_nhint == cap) {
+      cap = cap ? 2 * cap : 64;
+      HintIn *q = realloc(g_hint, cap * sizeof *q);
+      if (!q) { fclose(f); return 0; }
+      g_hint = q;
+    }
+    g_hint[g_nhint++] = h;
+  }
+  int ok = rc == EOF;
+  if (!ok) fprintf(stderr, "inkcmp lines: %s: a line is not 'page class x0 y0 x1 y1'\n", path);
+  fclose(f);
+  return ok;
+}
+
 static int lines_main(int argc, char **argv) {
   uint32_t t = 0;
   for (int i = 2; i < argc; i++) {
     if (!strcmp(argv[i], "--threshold") && i + 1 < argc && whole(argv[i + 1], 256, &t) && t > 0) i++;
+    else if (!strcmp(argv[i], "--hint") && i + 1 < argc) { if (!read_hints(argv[++i])) return 2; }
     else return usage();
   }
   static char obuf[1 << 16]; setvbuf(stdout, obuf, _IOFBF, sizeof obuf);
@@ -63,7 +95,18 @@ static int lines_main(int argc, char **argv) {
     if (rc == 1 && page > 1) break;
     if (rc) return load_error(rc == 1 ? 4 : rc);
     IcLines L;
-    rc = ic_lines(g, w, h, t, &L);
+    IcHint *ph = NULL; size_t nph = 0;               /* this page's hints, in its pixels */
+    for (size_t k = 0; k < g_nhint; k++) nph += g_hint[k].page == page;
+    if (nph && !(ph = malloc(nph * sizeof *ph))) { free(g); return load_error(5); }
+    nph = 0;
+    for (size_t k = 0; k < g_nhint; k++)
+      if (g_hint[k].page == page) {
+        IcHint q = {(uint32_t)(g_hint[k].x0 * w), (uint32_t)(g_hint[k].y0 * h), (uint32_t)(g_hint[k].x1 * w + 0.5),
+                    (uint32_t)(g_hint[k].y1 * h + 0.5), g_hint[k].cls};
+        ph[nph++] = q;
+      }
+    rc = ic_lines_hinted(g, w, h, t, ph, nph, &L);
+    free(ph);
     free(g);
     if (rc) return load_error(5);
     printf("INKLINES1 page %u %u %u threshold %u lh %u m %u lines %zu\n", page, w, h, L.threshold, L.lh, L.m, L.n);

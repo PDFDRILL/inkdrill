@@ -2,7 +2,8 @@
 """Author-header red tests (owner: "author header in 3 columns not detected", 1805.01788 p1; coordinator 2026-11-17,
 with 2304.03442 p1, whose centred author lines inkcmp lines typed as maths and merged four to a box).
 
-    redtests_authors.py [--inkcmp BINARY]      exit 0 when every test passes, 1 when one is red, 2 NOT RUN
+    redtests_authors.py [--inkcmp BINARY] [--hint-model dly640x512.onnx]
+                                               exit 0 when every test passes, 1 when one is red, 2 NOT RUN
 
 Per page, against MathPix's `authors` records: every printed author line (an authors record's text children) has an
 inkcmp `text` record at IoU >= 0.5, and no inkcmp `math` record has its centre inside an authors region. Pages at
@@ -26,6 +27,8 @@ def box(r):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--inkcmp", default=os.path.join(ROOT, "build", "inkcmp"))
+    ap.add_argument("--hint-model", help="the 640 x 512 layout graph (tools/detector/fetch_weights.sh): page 1's hint "
+                                         "from tools/detector/layout_hint.py goes to inkcmp lines --hint")
     a = ap.parse_args()
     red = 0
     for doc, n in PAGES:
@@ -39,7 +42,16 @@ def main():
         pgm = subprocess.run(["gs", "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=pgmraw", "-r%.4f" % (pg["page_width"] / wpt * 72),
                               "-dUseCropBox", f"-dFirstPage={n}", f"-dLastPage={n}", "-sOutputFile=%stdout", base + ".pdf"],
                              capture_output=True, check=True).stdout
-        out = subprocess.run([a.inkcmp, "lines"], input=pgm, capture_output=True, check=True).stdout.decode().splitlines()
+        cmd = [a.inkcmp, "lines"]
+        if a.hint_model:
+            sys.path.insert(0, os.path.join(ROOT, "tools", "detector"))
+            import layout_hint
+            hf = os.path.join(os.environ.get("TMPDIR", "."), f"authors-hint-{doc}.txt")
+            with open(hf, "w") as f:
+                for c, x0, y0, x1, y1 in layout_hint.hints(a.hint_model, base + ".pdf", n):
+                    f.write(f"1 {c} {x0:.5f} {y0:.5f} {x1:.5f} {y1:.5f}\n")      # page 1 of the one-page stream
+            cmd += ["--hint", hf]
+        out = subprocess.run(cmd, input=pgm, capture_output=True, check=True).stdout.decode().splitlines()
         hd = out[0].split(); sx, sy = pg["page_width"] / int(hd[3]), pg["page_height"] / int(hd[4])
         recs = [(f[0], (int(f[1]) * sx, int(f[2]) * sy, int(f[3]) * sx, int(f[4]) * sy)) for f in (l.split() for l in out[1:-1])]
         byid = {l.get("id"): l for l in pg["lines"]}

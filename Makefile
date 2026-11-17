@@ -57,6 +57,7 @@ test-c: all
 	python3 tests-c/test_inkcmp_lines.py
 	python3 tests-c/test_inkcmp_glyphs.py
 	python3 tests-c/test_inkcmp_stamp.py
+	python3 tests-c/test_inkcmp_hint.py
 	sh tests-c/test_pin.sh
 test-py:
 	python3 -m unittest discover -s tests -t .
