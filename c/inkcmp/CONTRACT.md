@@ -623,6 +623,19 @@ other record on both pages is byte-identical. `tests-c/test_inkcmp_stamp.py`: ea
 a dark stamp erased, none for line numbers or a plain page); four mutants (no erase, rotation constant, coverage
 0.2, no gap check) each fail it.
 
+**Figure step, listings row and the swallow attempt (2026-11-17, figure-set-9005, detector 320 x 256).** Listings
+(the coordinator's row): a MathPix figure region >= 15% covered by READABLE text-layer words (>= 2 characters, >= 60%
+ASCII letters or digits). The plain coverage did not separate: ajm-1154098926 p30's three graphs are drawn with
+line-font glyphs and read 0.52-0.56 ("Ä", "??"); with readable words every listing looked at reads >= 0.17 (code,
+prompts, an algorithm block), the highest figure 0.12 (11_Paper p1, photos beside text). 13 listings; figures
+41 of 48 whole (85%), body lines swallowed 26 -- the gate still fails on the swallow.
+The attempt (`detector_set.py --blocks`, one rule, fixed before the run): a detected figure keeps its tallest
+y-interval free of lines of multi-line text blocks (inkcmp lines' text lines with a neighbour <= 1 lh above or below,
+x-overlap >= 50%). Result: 22 of 48 (46%), swallowed 26 -- FAILS. It cuts 19 good figures, because the labels, legends
+and speech bubbles inside a figure are stacked text lines too; and it does not reach 2304.03442 p1, whose author
+block inkcmp lines types as `math` displays, four centred lines merged into one record (y 386-547 at 250 dpi) -- an
+inkcmp lines defect of its own (centred short lines read as displays), now the next fix.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
