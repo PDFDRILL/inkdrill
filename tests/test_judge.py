@@ -226,13 +226,13 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
         self.assertEqual(judge.style("ABCDEF+LinLibertineT"), "")
 
 
-def _accent_case(tmp, name, page_line, read_line):
+def _accent_case(tmp, name, page_line, read_line, preamble=""):
     """one-line page set by pdflatex, read back as `read_line`; returns (res, judge output lines)"""
     d = os.path.join(tmp, name)
     os.makedirs(d)
     with open(os.path.join(d, "page.tex"), "w") as fh:
-        fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm]{geometry}\n\\pagestyle{empty}\n"
-                 "\\begin{document}\n\\noindent " + page_line + "\n\\end{document}\n")
+        fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm]{geometry}\n" + preamble +
+                 "\\pagestyle{empty}\n\\begin{document}\n\\noindent " + page_line + "\n\\end{document}\n")
     subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
                    capture_output=True, check=True)
     pdf = os.path.join(d, "page.pdf")
@@ -440,3 +440,18 @@ class JudgeRuleNotMaths(unittest.TestCase):
             out = io.StringIO()
             res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out)
             self.assertEqual(res["rules_missing"], 0, [l for l in out.getvalue().splitlines() if l.startswith("R ")])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeT1(unittest.TestCase):
+    """The snippet is T1: \\guillemetright and \\TH are unavailable in OT1 (board lib:c9daf79960c3 p68, 3 lines did
+    not compile), and an OT1 \\~N is a tilde glyph over an N where the page has one composed glyph."""
+
+    def test_guillemets_thorn_and_composed_letters_pair(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-t1-") as d:
+            text = "Der Preis »gut« und Þing in España, NIÑO hier."
+            res, out = _accent_case(d, "t1", text, text, preamble="\\usepackage[T1]{fontenc}\n")
+            self.assertEqual(res["not_compiled"], 0, [l for l in out if l.startswith("N ")])
+            self.assertEqual(res["unmappable"], 0)
+            self.assertEqual(res["flagged"], 0, [l for l in out if l.startswith("G ") and l.split()[8] == "1"])
+            self.assertEqual(res["b_unpaired"], 0, [l for l in out if l.startswith("U ")])

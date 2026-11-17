@@ -335,6 +335,20 @@ math/equation or with inline maths in their text.
   - JudgeRuleNotMaths: footnote rule.
   - Removing the call, the ownership or the maths filter fails them.
 
+**T1 snippet encoding (2026-11-17, rule 4; found by pdfdrill-a2 on lib:c9daf79960c3 p68).** The snippet preamble
+now has `\usepackage[T1]{fontenc}`.
+- Why: in OT1, `\guillemetright` and `\TH` are unavailable (3 lines did not compile), and an OT1 `\~N` is a tilde
+  glyph over an N where the page has one composed glyph.
+- Effect on 040123 p2 (Times, MathPix):
+  - flags unchanged, 176 of 2857 paired (166 style, 10 glyph);
+  - the scored solid residual sums to 15269 against 15292 (-23, -0.15%);
+  - the unscored raw XOR rises 11% on 9 of 43 lines (sub-pixel position changes of some glyphs).
+  - The G rows therefore differ in xor/solid values, not in pairs or flags.
+- The planted CM test is unchanged: 0 flags clean, 7 of 8 plants caught, e->c still the thin-stroke miss. Under T1,
+  CM renders as the EC fonts.
+- Test (JudgeT1): a T1 page with guillemets, a thorn and composed Ñ pairs with 0 flags, 0 unpaired, 0 not
+  compiled. Without the T1 line it fails.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of

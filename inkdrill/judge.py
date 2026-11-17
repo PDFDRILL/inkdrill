@@ -264,7 +264,7 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12)
             body.append(line)
         with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
             fh.write("\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
-                     "\\usepackage{amsmath,amssymb,amsfonts}\n" + pre + "\n\\begin{document}\n" + "\n".join(body)
+                     "\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}\n" + pre + "\n\\begin{document}\n" + "\n".join(body)
                      + "\n\\end{document}\n")
         subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
                        capture_output=True)
