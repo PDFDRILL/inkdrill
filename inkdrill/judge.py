@@ -72,7 +72,8 @@ FAMILIES = [  # (regex on the PDF font name, preamble, family)
     (r"LinLibertine|LinBiolinum|Libertine", r"\usepackage{libertine}", "libertine"),
 ]
 MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|txmi|TXMI", r"\usepackage{newtxmath}"),
-           (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}")]
+           (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}"),
+           (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}")]   # mathabx: its own designs of \in, \geq, ...
 
 
 def style(font: str) -> str:

@@ -583,3 +583,20 @@ class JudgeSetter(unittest.TestCase):
                 out = io.StringIO()
                 res = judge.judge(os.path.join(d, "alone", "page.pdf"), 1, lj, wd, out=out, peers=peers)
                 self.assertIn("set by " + want, out.getvalue(), name)
+
+
+class JudgeMathFamilies(unittest.TestCase):
+    """A page set with mathabx (fonts TeX-matha/TeX-mathb, or matha/mathb) is judged with mathabx loaded: its \\in
+    and \\geq are its own designs, and set from Computer Modern they differ in shape -- board lib:c9daf79960c3 p68
+    counted each \\in twice, once as a glyph finding and once as an invented rule (6 rules on every column)."""
+
+    def pick(self, font):
+        return [p for r, p in judge.MATHFAM if re.search(r, font)]
+
+    def test_mathabx_fonts_load_mathabx(self):
+        for f in ("TeX-matha12", "TeX-matha6", "TeX-mathb10", "matha10", "mathb8"):
+            self.assertEqual(self.pick(f), [r"\usepackage{mathabx}"], f)
+
+    def test_other_maths_fonts_do_not(self):
+        for f in ("CMSY10", "CMMI10", "MSBM10", "TeX-mathx12", "LMMathSymbols10-Regular", "TeX-mathit10", "mathpazo"):
+            self.assertNotIn(r"\usepackage{mathabx}", self.pick(f), f)
