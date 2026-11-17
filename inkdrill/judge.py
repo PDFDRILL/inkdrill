@@ -1,6 +1,7 @@
 """inkcmp judge, born-digital branch: is a lines.json reading of a PDF page the same ink as the page?
 
     inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR] [--route glyph|render] [--no-setter]
+                 [--peers other.lines.json,...]   (the page's other judged readings: one route for all of them)
     inkcmp-judge --batch <jobs.tsv> [--work DIR] [--route glyph|render]   (one pdflatex per preamble; judge_batch)
 
 Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per glyph). Steps:
@@ -297,7 +298,7 @@ def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec", render: bool) -> t
     """what the glyph route needs of the original alone (it runs while pdflatex sets the reading): its font programs,
     its traced glyphs (at the specification's origins), and -- when a formula line will read it -- its 400-dpi
     render"""
-    FA = Fonts(a_pdf, os.path.join(wd, "fontsA"), 0, extract=False)
+    FA = Fonts(a_pdf, spec.fontdir, 0, extract=False)
     TA = Origins(spec.traced(pno, trace(a_pdf, pno, pno, spec.trace_text).get(pno, [])))
     ink = PageInk(a_pdf, pno, wd)
     if render:
@@ -386,6 +387,8 @@ class Spec:
     def __init__(self, pdf: str, first: int, last, wd: str, fontdir: str | None = None):
         os.makedirs(wd, exist_ok=True)
         self.trace_text = trace_text(pdf, first, last)        # one `mutool trace`, shared with the glyph route
+        self.fontdir = fontdir                                 # where its `mutool run` wrote the font programs (a
+        # batch keeps one Spec per page across jobs: read them there, not in each job's own folder)
         self.pages = textpos.origins(pdf, first, last, wd, self.trace_text, fontdir)
         self.b = collections.defaultdict(dict)
         for n, rec in self.pages.items():
@@ -973,7 +976,7 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
             print(f"R L{i} invented {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
 
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render",
-          compiler=None, setter: bool = True) -> collections.Counter:
+          compiler=None, setter: bool = True, peers: list | None = None) -> collections.Counter:
     """one page. compiler(texts, sizes, preamble, wd) -> (snippet pdf, failed, dropped, first page) sets the
     reading's lines; by default one pdflatex run of this page's lines alone (`judge_batch` sets many pages' lines
     in one run and hands each page its part)"""
@@ -1016,15 +1019,36 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     set_by = "pdflatex"
-    if setter and lv and not any(is_formula(ln) for ln in lv):   # text only: the page's own font program, not TeX's
+
+    def reading_of(path):
+        """a peer reading of this page: its leaf lines, their boxes (400 grid) and sizes, as for the own reading"""
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        p2 = next((q for q in d.get("pages", []) if q.get("page") == pno), None) or (
+            d["pages"][pno - 1] if len(d.get("pages", [])) >= pno else None)   # as the judge picks its own page
+        if p2 is None or not p2.get("page_width"):
+            return None
+        l2 = leaves(p2)
+        if not l2 or not all(isinstance(x.get("region"), dict) for x in l2):
+            return None                              # not judged (no geometry): it chooses nothing
+        k2 = pw_pt * S / p2["page_width"]
+        b2 = [(x["region"]["top_left_x"] * k2, x["region"]["top_left_y"] * k2,
+               (x["region"]["top_left_x"] + x["region"]["width"]) * k2,
+               (x["region"]["top_left_y"] + x["region"]["height"]) * k2) for x in l2]
+        s2 = []
+        for b in b2:
+            cs = [c[8] for c in ac if inside(c, b) and not re.search(MATHFONT, c[7])]
+            s2.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
+        return l2, b2, s2
+
+    def try_set(l2, b2, s2, d2):
+        """the reading set in the page's own font program, or None (inkdrill/setter.py)"""
         sst = collections.Counter()
         traced = trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, [])
         traced_spec = spec_a.traced(pno, traced)
         line_ligs, line_gaps, line_tcs = [], [], []  # per line box: the page's ligature glyphs, word gap and
-        # letter spacing (em)
-        adv_em = setter_mod.advances(spec_a.trace_text)
-        for li, ln in enumerate(lv):
-            b = box(ln)
+        adv_em = setter_mod.advances(spec_a.trace_text)   # letter spacing (em)
+        for b in b2:
             inl = sorted((g for g in traced_spec if b[0] <= g[2] * S < b[2] and b[1] - 8 <= g[3] * S < b[3] + 8
                           and g[0].strip()), key=lambda g: g[2])     # a drawn space glyph is part of the gap
             line_ligs.append({g[1] for g in inl if g[1] in setter_mod.LIGS})
@@ -1039,11 +1063,20 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             tc = sorted(small)[len(small) // 2] if small else 0.0    # letter spacing (a line justified by Tc)
             line_tcs.append(tc)
             line_gaps.append((sorted(gaps)[len(gaps) // 2] if gaps else 0.25) - tc)
-        sp = setter_mod.build(spec_a.trace_text, traced, Fonts(a_pdf, os.path.join(wd, "fontsA"), 0, extract=False),
-                              [ln["text"] for ln in lv], sizes, wd, style, MATHFONT, sst, line_ligs, line_gaps,
-                              line_tcs)
-        if sp is not None:
-            comp, set_by = (lambda texts, sz, pre, w: (sp, {}, set(), 0)), "setter"
+        os.makedirs(d2, exist_ok=True)
+        return setter_mod.build(spec_a.trace_text, traced, Fonts(a_pdf, spec_a.fontdir, 0, extract=False),
+                                [x["text"] for x in l2], s2, d2, style, MATHFONT, sst, line_ligs, line_gaps, line_tcs)
+
+    # the route is the page's, not the reading's: every judged reading of this page (this one and its peers) must be
+    # free of formula lines and settable, or pdflatex sets them all (coordinator, 2026-11-17: one instrument per page)
+    if setter and lv:
+        mine = (lv, [box(ln) for ln in lv], sizes)
+        others = [r for r in (reading_of(pth) for pth in (peers or [])) if r is not None]
+        if not any(is_formula(x) for r in [mine] + others for x in r[0]):
+            ok = all(try_set(*r, os.path.join(wd, "peer-%d" % n)) is not None for n, r in enumerate(others))
+            sp = try_set(*mine, wd) if ok else None
+            if sp is not None:
+                comp, set_by = (lambda texts, sz, pre, w: (sp, {}, set(), 0)), "setter"
     side_a = None
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -1280,11 +1313,12 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
     os.makedirs(bwd, exist_ok=True)
 
     def finish(j, compiler):
-        a, p, lj, wd = jobs[j]
+        a, p, lj, wd = jobs[j][:4]
+        pe = jobs[j][4] if len(jobs[j]) > 4 else None
         buf = io.StringIO()
         err = ""
         try:
-            judge(a, p, lj, wd, out=buf, route=route, compiler=compiler, setter=setter)
+            judge(a, p, lj, wd, out=buf, route=route, compiler=compiler, setter=setter, peers=pe)
         except _Need:
             raise
         except Exception:
@@ -1297,8 +1331,8 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
                 fh.write("\n--- stderr ---\n" + err)
     try:
         reqs = {}
-        for j, (a, p, lj, wd) in enumerate(jobs):
-            os.makedirs(wd, exist_ok=True)
+        for j, job in enumerate(jobs):
+            os.makedirs(job[3], exist_ok=True)
 
             def collect(texts, sizes, pre, w, j=j):
                 reqs[j] = (texts, sizes, pre)
@@ -1335,7 +1369,11 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    wd, route, batch, use_setter = None, "render", None, True
+    wd, route, batch, use_setter, peers = None, "render", None, True, []
+    if "--peers" in argv:
+        j = argv.index("--peers")
+        peers = [x for x in argv[j + 1].split(",") if x]
+        del argv[j:j + 2]
     if "--no-setter" in argv:
         argv.remove("--no-setter")
         use_setter = False
@@ -1360,8 +1398,8 @@ def main(argv=None) -> int:
                   " pdf<TAB>page<TAB>lines.json<TAB>work dir", file=sys.stderr)
             return 2
         with open(batch, encoding="utf-8") as fh:
-            jobs = [(f[0], int(f[1]), f[2], f[3]) for f in (l.rstrip("\n").split("\t") for l in fh)
-                    if len(f) == 4 and not f[0].startswith("#")]
+            jobs = [(f[0], int(f[1]), f[2], f[3]) + ((f[4].split(","),) if len(f) > 4 and f[4] else ())
+                    for f in (l.rstrip("\n").split("\t") for l in fh) if len(f) >= 4 and not f[0].startswith("#")]
         st = judge_batch(jobs, route=route, bwd=wd, setter=use_setter)
         print("BATCH1 " + " ".join(f"{k} {v}" for k, v in sorted(st.items())))
         return 0
@@ -1371,10 +1409,10 @@ def main(argv=None) -> int:
     a_pdf, pno, lj = argv[0], int(argv[1]), argv[2]
     if wd:
         os.makedirs(wd, exist_ok=True)
-        judge(a_pdf, pno, lj, wd, route=route, setter=use_setter)
+        judge(a_pdf, pno, lj, wd, route=route, setter=use_setter, peers=peers)
     else:
         with tempfile.TemporaryDirectory(prefix="inkcmp-judge-") as d:
-            judge(a_pdf, pno, lj, d, route=route, setter=use_setter)
+            judge(a_pdf, pno, lj, d, route=route, setter=use_setter, peers=peers)
     return 0
 
 

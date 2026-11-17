@@ -552,3 +552,24 @@ class JudgeSetter(unittest.TestCase):
             res, out = self.run_case(d, "formula", "Let $x$ be a ring here.", "Let \\(x\\) be a ring here.")
             self.assertNotIn("setter", res)
             self.assertIn("set by pdflatex", out)
+
+    def test_one_route_per_page(self):
+        """the route is the page's: a text-only reading goes to pdflatex when a peer reading of the same page has a
+        formula line (coordinator, 2026-11-17: the columns of a page are judged by one instrument)"""
+        with tempfile.TemporaryDirectory(prefix="test-judge-peers-") as d:
+            line = "Hilbert and Noether wrote about rings, fields and their ideals here."
+            res, out = self.run_case(d, "alone", line, line)
+            self.assertEqual(res.get("setter"), 1)
+            lj = os.path.join(d, "alone", "r.lines.json")
+            with open(lj) as fh:
+                doc = json.load(fh)
+            doc["pages"][0]["lines"][0]["text"] = "Hilbert and \\(x\\) wrote about rings, fields and their ideals here."
+            peer = os.path.join(d, "peer.lines.json")
+            with open(peer, "w") as fh:
+                json.dump(doc, fh)
+            for name, peers, want in (("withpeer", [peer], "pdflatex"), ("textpeer", [lj], "setter")):
+                wd = os.path.join(d, name)
+                os.makedirs(wd)
+                out = io.StringIO()
+                res = judge.judge(os.path.join(d, "alone", "page.pdf"), 1, lj, wd, out=out, peers=peers)
+                self.assertIn("set by " + want, out.getvalue(), name)
