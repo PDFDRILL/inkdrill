@@ -5,6 +5,7 @@
    Steps are numbered as in the contract. */
 #include "lines.h"
 #include "layout/blocks.h"
+#include "white.h"
 #include <ctype.h>
 #include <errno.h>
 #include <math.h>
@@ -267,18 +268,6 @@ static int cmp_box_yx(const void *a, const void *b) {
   if (p->x1 != q->x1) return (p->x1 > q->x1) - (p->x1 < q->x1);
   return (p->y1 > q->y1) - (p->y1 < q->y1);
 }
-static int cmp_box_x(const void *a, const void *b) {       /* Python's sorted() of [x0, y0, x1, y1] lists */
-  const Box *p = a, *q = b;
-  if (p->x0 != q->x0) return (p->x0 > q->x0) - (p->x0 < q->x0);
-  if (p->y0 != q->y0) return (p->y0 > q->y0) - (p->y0 < q->y0);
-  if (p->x1 != q->x1) return (p->x1 > q->x1) - (p->x1 < q->x1);
-  return (p->y1 > q->y1) - (p->y1 < q->y1);
-}
-static double median_i32(int32_t *v, size_t n) {
-  qsort(v, n, sizeof *v, cmp_i32);
-  return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2.0;
-}
-
 static int emit(IcLines *o, size_t *cap, Box b, int type) {
   if (o->n == *cap) {
     size_t c = *cap ? 2 * *cap : 64;
@@ -291,114 +280,112 @@ static int emit(IcLines *o, size_t *cap, Box b, int type) {
   return 1;
 }
 
-/* step 6: rows and types */
-static int typed(const Boxes *lines, const Boxes *figs, uint32_t W, uint32_t H, double lh, IcLines *o) {
+/* step 6: one line per piece, column-agnostic. Rows: pieces overlapping vertically by >= half the smaller height.
+   page_info: the top row in the outer 7%, the bottom row likewise. A display (math): a piece indented >= 1.5 lh on
+   both sides of the widest piece that overlaps it in x within 10 lh above or below (the body text of its column).
+   An equation number: a piece <= 4 lh wide, >= 2 lh beside a display in its row. Pieces of a row then join unless
+   a vertical white separator of unit 3 lies in the gap (a gutter, a table's column gap); equation numbers and
+   page_info never join. Display pieces that overlap in x and lie < 0.5 lh apart become one display. */
+static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, const IcRect *vs, size_t nvs,
+                    IcLines *o) {
   size_t cap = 0, n = lines->n;
-  if (n) {
-    /* rows: a piece joins the first row whose last piece overlaps it vertically by >= half the smaller height */
-    size_t *row_of = malloc(n * sizeof *row_of), *last = malloc(n * sizeof *last), nrows = 0;
-    int32_t *xs = malloc(n * sizeof *xs);
-    Box *tmp = malloc(n * sizeof *tmp);
-    if (!row_of || !last || !xs || !tmp) { free(row_of); free(last); free(xs); free(tmp); return 0; }
-    for (size_t i = 0; i < n; i++) {
-      Box r = lines->b[i];
-      size_t k;
-      for (k = 0; k < nrows; k++) {
-        Box u = lines->b[last[k]];
-        int32_t ov = (u.y1 < r.y1 ? u.y1 : r.y1) - (u.y0 > r.y0 ? u.y0 : r.y0);
-        int32_t mh = (u.y1 - u.y0) < (r.y1 - r.y0) ? (u.y1 - u.y0) : (r.y1 - r.y0);
-        if (ov >= 0.5 * mh) break;
-      }
-      if (k == nrows) nrows++;
-      row_of[i] = k; last[k] = i;
+  const Box *b = lines->b;
+  int *type = calloc(n ? n : 1, sizeof *type);
+  size_t *row = malloc((n ? n : 1) * sizeof *row), *last = malloc((n ? n : 1) * sizeof *last), nrows = 0;
+  if (!type || !row || !last) { free(type); free(row); free(last); return 0; }
+  for (size_t i = 0; i < n; i++) {                   /* rows */
+    size_t k;
+    for (k = 0; k < nrows; k++) {
+      Box u = b[last[k]];
+      int32_t ov = (u.y1 < b[i].y1 ? u.y1 : b[i].y1) - (u.y0 > b[i].y0 ? u.y0 : b[i].y0);
+      int32_t mh = (u.y1 - u.y0) < (b[i].y1 - b[i].y0) ? (u.y1 - u.y0) : (b[i].y1 - b[i].y0);
+      if (ov >= 0.5 * mh) break;
     }
-    size_t nw = 0;
-    for (size_t i = 0; i < n; i++) if (lines->b[i].x1 - lines->b[i].x0 > 0.5 * W) xs[nw++] = lines->b[i].x0;
-    int any_wide = nw > 0;
-    if (!any_wide) for (size_t i = 0; i < n; i++) xs[nw++] = lines->b[i].x0;
-    double xL = median_i32(xs, nw);
-    nw = 0;
-    for (size_t i = 0; i < n; i++)
-      if (!any_wide || lines->b[i].x1 - lines->b[i].x0 > 0.5 * W) xs[nw++] = lines->b[i].x1;
-    double xR = median_i32(xs, nw);
-    /* rows in order of their top (stable: Python's sorted by min y0) */
-    int32_t *rtop = malloc(nrows * sizeof *rtop);
-    size_t *order = malloc(nrows * sizeof *order);
-    if (!rtop || !order) { free(row_of); free(last); free(xs); free(tmp); free(rtop); free(order); return 0; }
-    for (size_t k = 0; k < nrows; k++) rtop[k] = INT32_MAX;
-    for (size_t i = 0; i < n; i++) if (lines->b[i].y0 < rtop[row_of[i]]) rtop[row_of[i]] = lines->b[i].y0;
-    for (size_t k = 0; k < nrows; k++) order[k] = k;
-    for (size_t a = 1; a < nrows; a++) {                 /* insertion sort: stable */
-      size_t v = order[a], b = a;
-      while (b > 0 && rtop[order[b - 1]] > rtop[v]) { order[b] = order[b - 1]; b--; }
-      order[b] = v;
+    if (k == nrows) nrows++;
+    row[i] = k; last[k] = i;
+  }
+  int32_t top = INT32_MAX, bot = -1; size_t rtop = 0, rbot = 0;
+  for (size_t i = 0; i < n; i++) {
+    if (b[i].y0 < top) { top = b[i].y0; rtop = row[i]; }
+    if (b[i].y1 > bot) { bot = b[i].y1; rbot = row[i]; }
+  }
+  for (size_t i = 0; i < n; i++) {
+    int pi = (row[i] == rtop && b[i].y1 < 0.07 * H) || (row[i] == rbot && b[i].y0 > 0.93 * H);
+    if (pi) { type[i] = IC_PAGEINFO; continue; }
+    long ref = -1;         /* the widest piece overlapping in x within 10 lh above or below: the body text */
+    for (size_t j = 0; j < n; j++) {
+      if (j == i || row[j] == row[i] || b[j].x1 <= b[i].x0 || b[j].x0 >= b[i].x1) continue;
+      double dy = b[j].y1 <= b[i].y0 ? b[i].y0 - b[j].y1 : b[j].y0 >= b[i].y1 ? b[j].y0 - b[i].y1 : 0;
+      if (dy > 10 * lh) continue;
+      if (ref < 0 || b[j].x1 - b[j].x0 > b[ref].x1 - b[ref].x0) ref = (long)j;
     }
-    for (size_t kk = 0; kk < nrows; kk++) {
-      size_t k = order[kk], np = 0;
-      for (size_t i = 0; i < n; i++) if (row_of[i] == k) tmp[np++] = lines->b[i];
-      qsort(tmp, np, sizeof *tmp, cmp_box_x);
-      int32_t x0 = INT32_MAX, x1 = -1, y0 = INT32_MAX, y1 = -1;
-      for (size_t i = 0; i < np; i++) {
-        if (tmp[i].x0 < x0) x0 = tmp[i].x0;
-        if (tmp[i].x1 > x1) x1 = tmp[i].x1;
-        if (tmp[i].y0 < y0) y0 = tmp[i].y0;
-        if (tmp[i].y1 > y1) y1 = tmp[i].y1;
+    type[i] = IC_TEXT;
+    if (ref >= 0 && b[i].x0 >= b[ref].x0 + 1.5 * lh && b[i].x1 <= b[ref].x1 - 1.5 * lh) type[i] = IC_MATH;
+  }
+  for (size_t i = 0; i < n; i++) {                   /* equation numbers beside a display */
+    if (type[i] == IC_PAGEINFO || b[i].x1 - b[i].x0 > 4 * lh) continue;
+    for (size_t j = 0; j < n; j++) {
+      if (j == i || row[j] != row[i] || type[j] != IC_MATH) continue;
+      int32_t gap = b[i].x0 >= b[j].x1 ? b[i].x0 - b[j].x1 : b[j].x0 - b[i].x1;
+      if (gap >= 2 * lh) { type[i] = IC_EQNUM; break; }
+    }
+    if (type[i] == IC_EQNUM) continue;
+  }
+  /* pieces of one row join unless a vertical white separator (unit 3: a gutter, a table's column gap)
+     lies in the gap between them; equation numbers and page_info never join */
+  int *gone = calloc(n ? n : 1, sizeof *gone);
+  Box *bb = malloc((n ? n : 1) * sizeof *bb);
+  if (!gone || !bb) { free(gone); free(bb); free(type); free(row); free(last); return 0; }
+  memcpy(bb, b, n * sizeof *bb);
+  for (size_t i = 0; i < n; i++) {
+      if (gone[i] || type[i] == IC_EQNUM || type[i] == IC_PAGEINFO) continue;
+      for (;;) {                                       /* the nearest piece to the right in the row */
+        long nx = -1;
+        for (size_t j = 0; j < n; j++) {
+          if (j == i || gone[j] || row[j] != row[i] || type[j] == IC_EQNUM || type[j] == IC_PAGEINFO) continue;
+          if (bb[j].x0 >= bb[i].x1 && (nx < 0 || bb[j].x0 < bb[nx].x0)) nx = (long)j;
+        }
+        if (nx < 0) break;
+        int32_t g0 = bb[i].x1, g1 = bb[nx].x0, y0 = bb[i].y0 < bb[nx].y0 ? bb[i].y0 : bb[nx].y0,
+                y1 = bb[i].y1 > bb[nx].y1 ? bb[i].y1 : bb[nx].y1;
+        int sep = 0;
+        for (size_t v = 0; v < nvs && !sep; v++)
+          sep = (int32_t)vs[v].x0 >= g0 - 1 && (int32_t)vs[v].x1 <= g1 + 1 && (int32_t)vs[v].y0 <= y0 && (int32_t)vs[v].y1 >= y1;
+        if (sep) break;
+        if (bb[nx].x1 > bb[i].x1) bb[i].x1 = bb[nx].x1;
+        if (bb[nx].y0 < bb[i].y0) bb[i].y0 = bb[nx].y0;
+        if (bb[nx].y1 > bb[i].y1) bb[i].y1 = bb[nx].y1;
+        if (type[nx] != IC_MATH) type[i] = IC_TEXT;
+        gone[nx] = 1;
       }
-      int edge = (kk == 0 && y1 < 0.07 * H) || (kk == nrows - 1 && y0 > 0.93 * H);
-      if (edge && ((y1 - y0) < 0.8 * lh || x1 - x0 < 0.5 * (xR - xL) || np > 1)) {
-        for (size_t i = 0; i < np; i++) if (!emit(o, &cap, tmp[i], IC_PAGEINFO)) goto oom;
-        continue;
-      }
-      size_t lo = 0, hi = np;           /* pieces [lo, hi) after taking an equation number off one end */
-      Box eqn; int has_eqn = 0;
-      if (np > 1) {
-        Box first = tmp[0], second = tmp[1], lastp = tmp[np - 1], prev = tmp[np - 2];
-        if (lastp.x1 - lastp.x0 <= 4 * lh && lastp.x0 - prev.x1 >= 2 * lh && lastp.x1 >= xR - 1.5 * lh) {
-          eqn = lastp; has_eqn = 1; hi--;
-        } else if (first.x1 - first.x0 <= 4 * lh && second.x0 - first.x1 >= 2 * lh && first.x0 <= xL + 1.5 * lh) {
-          eqn = first; has_eqn = 1; lo++;
+    }
+  for (size_t i = 0; i < n; i++)
+    if (!gone[i] && !emit(o, &cap, bb[i], type[i])) { free(gone); free(bb); free(type); free(row); free(last); return 0; }
+  free(gone); free(bb);
+  free(type); free(row); free(last);
+  for (size_t i = 0; i < figs->n; i++) if (!emit(o, &cap, figs->b[i], IC_DIAGRAM)) return 0;
+  /* display rows: math pieces that overlap in x and are < 0.5 lh apart vertically are one display */
+  int merged = 1;
+  while (merged) {
+    merged = 0;
+    for (size_t i = 0; i < o->n && !merged; i++) {
+      if (o->l[i].type != IC_MATH) continue;
+      for (size_t j = i + 1; j < o->n && !merged; j++) {
+        IcLine *p = &o->l[i], *c = &o->l[j];
+        if (c->type != IC_MATH || c->x1 <= p->x0 || c->x0 >= p->x1) continue;
+        double gap = c->y0 >= p->y1 ? (double)c->y0 - p->y1 : p->y0 >= c->y1 ? (double)p->y0 - c->y1 : 0;
+        if (gap < 0.5 * lh) {
+          if (c->x0 < p->x0) p->x0 = c->x0;
+          if (c->y0 < p->y0) p->y0 = c->y0;
+          if (c->x1 > p->x1) p->x1 = c->x1;
+          if (c->y1 > p->y1) p->y1 = c->y1;
+          memmove(c, c + 1, (o->n - j - 1) * sizeof *c);
+          o->n--;
+          merged = 1;
         }
       }
-      Box b = {INT32_MAX, INT32_MAX, -1, -1};
-      for (size_t i = lo; i < hi; i++) {
-        if (tmp[i].x0 < b.x0) b.x0 = tmp[i].x0;
-        if (tmp[i].y0 < b.y0) b.y0 = tmp[i].y0;
-        if (tmp[i].x1 > b.x1) b.x1 = tmp[i].x1;
-        if (tmp[i].y1 > b.y1) b.y1 = tmp[i].y1;
-      }
-      int indented = b.x0 >= xL + 1.5 * lh;
-      int disp = (has_eqn && (indented || b.x1 <= xR - 1.5 * lh)) || (indented && b.x1 <= xR - 1.5 * lh);
-      if (disp) {
-        if (!emit(o, &cap, b, IC_MATH)) goto oom;
-        if (has_eqn && !emit(o, &cap, eqn, IC_EQNUM)) goto oom;
-      } else {
-        Box a = {x0, y0, x1, y1};
-        if (!emit(o, &cap, a, IC_TEXT)) goto oom;
-      }
     }
-    free(row_of); free(last); free(xs); free(tmp); free(rtop); free(order);
-    goto figs_out;
-  oom:
-    free(row_of); free(last); free(xs); free(tmp); free(rtop); free(order);
-    return 0;
   }
-figs_out:
-  for (size_t i = 0; i < figs->n; i++) if (!emit(o, &cap, figs->b[i], IC_DIAGRAM)) return 0;
-  /* adjacent math rows < 0.5 lh apart are one display; an equation number between them does not separate them
-     (a display whose lower limit sits below its number's row) */
-  size_t j = 0;
-  for (size_t i = 0; i < o->n; i++) {
-    IcLine c = o->l[i];
-    size_t q = j;
-    while (q > 0 && o->l[q - 1].type == IC_EQNUM) q--;
-    if (c.type == IC_MATH && q > 0 && o->l[q - 1].type == IC_MATH && (double)c.y0 - o->l[q - 1].y1 < 0.5 * lh) {
-      IcLine *p = &o->l[q - 1];
-      if (c.x0 < p->x0) p->x0 = c.x0;
-      if (c.x1 > p->x1) p->x1 = c.x1;
-      if (c.y1 > p->y1) p->y1 = c.y1;
-    } else o->l[j++] = c;
-  }
-  o->n = j;
   return 1;
 }
 
@@ -418,6 +405,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   Runs r = {0}; Box *cb = NULL;
   Boxes pcs = {0}, kept = {0}, figs = {0}, fin = {0};
   int32_t *hv = NULL;
+  double hv_med = 10;
   GD3Blocks B; int have_b = 0;
   int ok = 0;
   if (!ink) goto done;
@@ -433,6 +421,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     for (size_t i = 0; i < r.nrun; i++) if (r.par[i] == i && cb[i].y1 - cb[i].y0 > 3) hv[nc++] = cb[i].y1 - cb[i].y0;
     qsort(hv, nc, sizeof *hv, cmp_i32);
     double med = nc ? hv[nc / 2] : 10;
+    hv_med = med;
     for (uint32_t y = 0; y < H; y++)
       for (uint64_t k = r.row_start[y]; k < r.row_start[y + 1]; k++) {
         Box c = cb[find(r.par, (uint32_t)k)];
@@ -442,6 +431,42 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
       }
   }
   runs_free(&r); free(cb); cb = NULL;
+  /* step 2b: thin rules: horizontal runs >= 12 med and vertical runs >= 8 med whose thickness at their middle
+     is <= 0.5 med are erased (table grids, frames around text, underlines) */
+  {
+    double med = hv_med;
+    uint8_t *er = calloc(N, 1);
+    if (!er) goto done;
+    int32_t thin = (int32_t)(0.5 * med) > 1 ? (int32_t)(0.5 * med) : 1;
+    for (uint32_t y = 0; y < H; y++) {
+      const uint8_t *row = ink + (size_t)y * W;
+      for (uint32_t x = 0; x < W;) {
+        if (!row[x]) { x++; continue; }
+        uint32_t a = x;
+        while (x < W && row[x]) x++;
+        if (x - a >= 12 * med) {
+          uint32_t mx = (a + x) / 2; int32_t t = 0;
+          for (int32_t yy = (int32_t)y; yy >= 0 && ink[(size_t)yy * W + mx]; yy--) t++;
+          for (uint32_t yy = y + 1; yy < H && ink[(size_t)yy * W + mx]; yy++) t++;
+          if (t <= thin) memset(er + (size_t)y * W + a, 1, x - a);
+        }
+      }
+    }
+    for (uint32_t x = 0; x < W; x++)
+      for (uint32_t y = 0; y < H;) {
+        if (!ink[(size_t)y * W + x]) { y++; continue; }
+        uint32_t a = y;
+        while (y < H && ink[(size_t)y * W + x]) y++;
+        if (y - a >= 4 * med) {
+          uint32_t my = (a + y) / 2; int32_t t = 0;
+          for (int32_t xx = (int32_t)x; xx >= 0 && ink[(size_t)my * W + xx]; xx--) t++;
+          for (uint32_t xx = x + 1; xx < W && ink[(size_t)my * W + xx]; xx++) t++;
+          if (t <= thin) for (uint32_t yy = a; yy < y; yy++) er[(size_t)yy * W + x] = 1;
+        }
+      }
+    for (size_t i = 0; i < N; i++) if (er[i]) ink[i] = 0;
+    free(er);
+  }
   /* step 3: blocks on the cleaned page, then pieces */
   if (!runs_of(ink, W, H, &r)) goto done;
   if (gd3_blocks_opt(W, H, r.row_start, r.rs, 0, 0, 0, &B)) goto done;
@@ -466,8 +491,10 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->m = (uint32_t)m;
   if (pcs.n) {
     nw = 0;
-    for (size_t i = 0; i < pcs.n; i++) if (pcs.b[i].x1 - pcs.b[i].x0 > 0.5 * W) hv[nw++] = pcs.b[i].x1;
-    if (!nw) for (size_t i = 0; i < pcs.n; i++) hv[nw++] = pcs.b[i].x1;
+    /* the right edge of the rightmost column: pieces > 0.2 W wide that end in the right half */
+    for (size_t i = 0; i < pcs.n; i++)
+      if (pcs.b[i].x1 - pcs.b[i].x0 > 0.2 * W && pcs.b[i].x1 > 0.5 * W) hv[nw++] = pcs.b[i].x1;
+    if (!nw) hv[nw++] = (int32_t)W;
     qsort(hv, nw, sizeof *hv, cmp_i32);
     double xr = hv[nw / 2] + 0.5 * lh;
     for (size_t i = 0; i < pcs.n; i++) {
@@ -495,7 +522,14 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   }
   qsort(fin.b, fin.n, sizeof *fin.b, cmp_box_yx);
   /* step 6 */
-  if (!typed(&fin, &figs, W, H, lh, out)) goto done;
+  /* step 6: the vertical white separators of unit 3 (gutters, table column gaps), then types */
+  IcSpace S;
+  IcPage pg = {W, H, r.row_start, r.rs, r.nrun};
+  IcSpaceParams sp; ic_space_defaults(&sp);
+  if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) goto done;
+  int okt = typed(&fin, &figs, H, lh, S.vsep, S.nvsep, out);
+  ic_space_free(&S);
+  if (!okt) goto done;
   ok = 1;
 done:
   free(ink); free(cb); free(hv);

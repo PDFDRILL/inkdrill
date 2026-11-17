@@ -299,13 +299,55 @@ boxes, where every type fires, and the same page under a gutter shadow and dust 
    peak ink, recursively. Pieces are clipped at the column's right edge + 0.5 lh, and specks < 0.4 m are dropped.
 5. **Figures.** Components on a 4x reduced ink image that are > 3 m tall and > 4 m wide, not touching the edge,
    become `diagram`, and they absorb the pieces whose centres they hold.
-6. **Types, from geometry only:**
-   - `equation_number`: a piece <= 4 lh wide at either column edge, >= 2 lh from the rest;
-   - `math`: a row indented >= 1.5 lh on both sides, or one that has an equation number; adjacent `math`
-     rows < 0.5 lh apart merge (MathPix boxes a display once). (C) An equation number between two such rows
-     does not keep them apart: before this, a lower limit below the number's row became a second `math` box;
-   - `page_info`: the first or last row in the outer 7%;
-   - `text`: everything else.
+6. **Types, v1** (measured on the held-out set below, and replaced by v2):
+   - rows are pieces overlapping vertically;
+   - `equation_number` is a narrow piece at either edge of the column;
+   - `math` is a row indented on both sides of the page's median text column;
+   - `page_info` is the first or last row in the outer 7%.
+
+**v2 (2026-11-17, `inkcmp lines` now), developed on 90 pages drawn with drillgroup `scripts/board_draw.py`,
+seeds 7101/7102/7103, excluding the board and held-out sets (`work/run-files/lines-dev/dev-*.tsv`).**
+Steps 1, 3, 4 (except the clip) and 5 are unchanged.
+- 2b **Thin rules are erased** before blocks:
+  - horizontal ink runs >= 12 med and vertical ones >= 4 med (med = median component height), whose
+    thickness at their middle is <= 0.5 med;
+  - this covers table grids, frames around text and underlines;
+  - a frame around text is no longer a figure, and a table's cell text stays.
+- 4 **Clip** at the rightmost column's right edge: the median right end of pieces > 0.2 W wide that end in the
+  right half, + 0.5 lh. (v1 took the median line end, which on a two-column page is the gutter.)
+- 6 **One line per piece, column-agnostic:**
+  - a piece is `math` when it is indented >= 1.5 lh on both sides of the widest piece that overlaps it in x
+    within 10 lh above or below;
+  - an `equation_number` is a piece <= 4 lh wide, >= 2 lh beside a display in its row;
+  - pieces of a row then join, unless a vertical white separator of unit 3 (`ic_space`, defaults) lies in the
+    gap: a gutter, or a table's column gap. Equation numbers and page_info never join;
+  - `math` pieces that overlap in x and lie < 0.5 lh apart become one display.
+
+The steps of v2, measured on the 90 development pages (recall / precision, all pages). Each row adds one step:
+
+| version | maths | german | two_column | table | scan | all |
+|---|---|---|---|---|---|---|
+| v1 | 0.918 / 0.905 | 0.574 / 0.808 | 0.359 / 0.540 | 0.108 / 0.605 | 0.423 / 0.365 | 0.335 / 0.596 |
+| + one line per piece, new clip | 0.870 / 0.709 | 0.570 / 0.613 | 0.903 / 0.784 | 0.633 / 0.835 | 0.639 / 0.392 | 0.713 / 0.689 |
+| + join across non-separator gaps | 0.877 / 0.805 | 0.581 / 0.685 | 0.900 / 0.812 | 0.539 / 0.803 | 0.607 / 0.404 | 0.668 / 0.705 |
+| + widest-neighbour reference | 0.892 / 0.835 | 0.586 / 0.726 | 0.882 / 0.839 | 0.567 / 0.824 | 0.598 / 0.401 | 0.677 / 0.725 |
+| + thin rules erased (v2) | 0.893 / 0.841 | 0.744 / 0.759 | 0.881 / 0.781 | 0.688 / 0.656 | 0.613 / 0.510 | **0.746 / 0.689** |
+
+Notes:
+- The last row renders every page with the longer side capped at 3500 px, so scans with a 70-inch page box no
+  longer take 12 s. That cap is part of why the scan figures rose.
+- Erasing rules trades table precision for German and table recall. The F1 is about equal (0.707 against 0.700).
+  Rules are kept, because frames around text are common in the German stratum.
+- v2 on the single-column documents: Killing 0.932/0.892, Hilbert 0.866/0.818, Penev 0.843/0.786. That is slightly
+  below v1 there (0.942/0.902, 0.859/0.857, 0.855/0.844); the price of not assuming one column.
+- Time: median 117 ms per page, max 146 ms (3500 px cap), of which `ic_space` is about 40 ms.
+
+Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
+- L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
+- L2: a gutter shadow and dust change nothing.
+- L3: two pages in one stream; a short second page is an error.
+- L4: on a pdflatex two-column page, no text line crosses the gutter.
+- Mutating rule removal fails L1, and dropping the separator check fails L4.
 
 Scored against the MathPix lines.json. Recall and precision are at IoU >= 0.5, matched one to one, with
 page_info left out of both. The YOLO route is Gemma4's lines.json (YOLO DocLayout + MFD + ink rows +
@@ -328,7 +370,7 @@ Time on this machine (16 cores, CPU):
 - YOLO: 4.9 s per page marginal plus 11 s model load, peak 1.8 GB, and that is before Gemma's OCR, which the YOLO
   route needs for its line boxes.
 
-Still wrong: list items "7. a+b" are split into an equation number and maths, where MathPix keeps one list_item.
+Still wrong (v1 text, kept for the record): list items "7. a+b" are split into an equation number and maths, where MathPix keeps one list_item.
 Tables and tables of contents are not modelled (simple_cell, table_of_contents_* are missed). Figures in
 halftone or with detached labels are only partly absorbed. The held-out test is drillgroup
 `results/heldout-set.tsv` (30 pages with a MathPix lines.json, 6 of them scans; the coordinator, 2026-11-17). It

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """inkcmp unit 7 (inkcmp/CONTRACT.md unit 7): `inkcmp lines`, line geometry and types from ink. Standard library only.
 
-The page is real. pdflatex sets a paragraph of ten lines, a numbered display, a framed figure with a label inside it,
-and a page number; gs renders it at 300 dpi to PGM. The oracle is independent of the ink: pdftotext -bbox-layout
+The page is real. pdflatex sets a paragraph of ten lines, a numbered display, a drawn figure (diagonal lines, a
+circle) with a label inside it, a framed note, and a page number; gs renders it at 300 dpi to PGM. The oracle is independent of the ink: pdftotext -bbox-layout
 gives each text line's box and the "(1)" word box, in pt, scaled to pixels. Every type must fire, each one on its
 own object. A second case puts a scanner's gutter shadow (a grey ramp with a black core at the right edge) and dust
 specks on the same page, and the lines must not change. Skips (prints SKIP) without pdflatex, gs or pdftotext.
@@ -29,7 +29,10 @@ heights, and their width defines the column.
 \begin{equation}
   E = \sum_{k=1}^{n} a_k x^k
 \end{equation}
-\begin{center}\framebox{\parbox[c][4cm][c]{7cm}{\centering Label}}\end{center}
+\begin{center}\setlength{\unitlength}{1mm}\begin{picture}(70,40)
+  \put(0,0){\line(2,1){70}}\put(0,35){\line(2,-1){70}}\put(35,17){\circle{24}}\put(31,30){Label}
+\end{picture}\end{center}
+\begin{center}\setlength{\fboxsep}{8pt}\fbox{\parbox{7cm}{Framed note inside a ruled box.}}\end{center}
 \end{document}
 """
 TOOLS = ("pdflatex", "gs", "pdftotext")
@@ -44,9 +47,17 @@ def iou(a, b):
     return ix * iy / u if u else 0
 
 
-def make_page():
+TWOCOL = r"""\documentclass[10pt,twocolumn]{article}
+\usepackage[a4paper,margin=2cm]{geometry}
+\begin{document}
+""" + "\n\n".join(["The left and the right column are read apart: a line ends at the gutter, and the next "
+                    "column starts a new set of lines. Paragraph %d of the test, written to fill both columns of "
+                    "the page with plain text that wraps." % k for k in range(1, 23)]) + "\n\\end{document}\n"
+
+
+def make_page(tex=TEX):
     d = tempfile.mkdtemp(prefix="test-inkcmp-lines-")
-    (Path(d) / "p.tex").write_text(TEX)
+    (Path(d) / "p.tex").write_text(tex)
     subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "p.tex"], cwd=d, capture_output=True,
                    check=True)
     pdf = str(Path(d) / "p.pdf")
@@ -102,7 +113,7 @@ def check(got, lines, words):
     for b in para:
         best = max(iou(b, t) for t in text)
         assert best >= 0.7, (b, best)
-    assert len(text) == len(para), (len(text), len(para))
+    assert len(text) == len(para) + 1, (len(text), len(para))     # + the framed note
     # the number "(1)" and the display, one box from the upper limit to the lower one
     eq = [b for t, b in got if t == "equation_number"]
     assert len(eq) == 1 and iou(eq[0], num) >= 0.6, (eq, num)
@@ -119,6 +130,10 @@ def check(got, lines, words):
     assert f[0] <= lab[0] and lab[2] <= f[2] and f[1] <= lab[1] and lab[3] <= f[3], (f, lab)
     assert not [b for t, b in got if t != "diagram" and f[0] <= (b[0] + b[2]) / 2 <= f[2]
                 and f[1] <= (b[1] + b[3]) / 2 <= f[3]]
+    # the framed note is text: its frame is a thin rule (step 2b), not a figure
+    note = next(b for b, ws in lines if ws[:1] == ["Framed"])
+    best = max((iou(note, b), b) for t, b in got if t == "text")
+    assert best[0] >= 0.7, (note, best)                    # the line's own ink, not the frame 8 pt around it
     # the page number, at the bottom
     pi = [b for t, b in got if t == "page_info"]
     pnum = next(b for b, w in words if w == "1")
@@ -149,6 +164,20 @@ def test_L3_two_pages_in_one_stream(page):
     p = run([INKCMP, "lines"], pg + b"P5\n10 10\n255\n" + b"\0" * 5)        # a short second page is an error
     assert p.returncode == 4, p.returncode
     return 1
+
+
+def test_L4_two_columns_are_read_apart(page):
+    pg, lines, _ = make_page(TWOCOL)
+    w = int(re.match(rb"P5\s+(?:#[^\n]*\n\s*)*(\d+)", pg)[1])
+    got = [b for t, b in lines_of(pg) if t == "text"]
+    left = [b for b, ws in lines if b[2] < w / 2]
+    right = [b for b, ws in lines if b[0] > w / 2]
+    assert len(left) >= 20 and len(right) >= 20, (len(left), len(right))
+    across = [b for b in got if b[0] < w / 2 - 20 and b[2] > w / 2 + 20]
+    assert not across, across[:3]                                     # no text line crosses the gutter
+    for b in left + right:
+        assert max(iou(b, t) for t in got) >= 0.7, b
+    return len(left) + len(right)
 
 
 if __name__ == "__main__":
