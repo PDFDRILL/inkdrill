@@ -109,6 +109,92 @@ def main():
           f"pages with text but no drawn path: {len(nopath)} {nopath[:12]}")
 
 
+def page_figs(pdf, pg, tol=12.0):
+    """the vector route's figures of one MathPix page, in MathPix pixels -> (figs, ctx); ctx holds the drawn
+    paths, the placed images, inkcmp's lines and the scale (px per pt), for a caller that refines other boxes"""
+    n, W, H = pg["page"], pg["page_width"], pg["page_height"]
+    info = subprocess.run(["pdfinfo", "-box", "-f", str(n), "-l", str(n), pdf], capture_output=True, text=True).stdout
+    m = re.search(r"Page\s+%d CropBox:\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)" % n, info)
+    wpt = float(m[3]) - float(m[1]) if m else 612.0
+    k = W / wpt
+    raw, imgs_pt = paths_of(pdf, n, with_images=True)
+    pth = [tuple(v * k for v in b) for b in raw]
+    imgs = [tuple(v * k for v in b) for b in imgs_pt]
+    pth = [b for b in pth if not (b[2] - b[0] > 0.9 * W and b[3] - b[1] > 0.9 * H)]
+    pgm = subprocess.run(["gs", "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=pgmraw", "-r%.3f" % (k * 72),
+                          "-dUseCropBox", f"-dFirstPage={n}", f"-dLastPage={n}", "-sOutputFile=%stdout", pdf],
+                         capture_output=True).stdout
+    out = subprocess.run([INKCMP, "lines"], input=pgm, capture_output=True).stdout.decode().splitlines()
+    hd = out[0].split()
+    sx, sy = W / int(hd[3]), H / int(hd[4])
+    ink = [(f[0], (int(f[1]) * sx, int(f[2]) * sy, int(f[3]) * sx, int(f[4]) * sy)) for f in
+           (ln.split() for ln in out[1:-1])]
+    labels = [b for t, b in ink if t in ("text", "math", "equation_number")]
+    lh = sorted(b[3] - b[1] for t, b in ink if t == "text")[len([1 for t, _ in ink if t == "text"]) // 2] \
+        if any(t == "text" for t, _ in ink) else 30
+
+    def in_block(b):
+        """a line with a neighbour line directly above or below it and nearly the same left edge: part of a text
+        block (body, an author block, a prompt), claimed by it, never a label"""
+        return any(t == "text" and c is not b and abs(c[0] - b[0]) <= 0.5 * lh
+                   and (0 <= c[1] - b[3] <= 1.0 * lh or 0 <= b[1] - c[3] <= 1.0 * lh) for t, c in ink)
+    if BLOCK:
+        labels = [b for b in labels if not in_block(b)]
+    T = tol * k
+    cand = [c for c in cluster(pth, T) if c[2] - c[0] >= 30 * k and c[3] - c[1] >= 30 * k]
+    def subcap(c):
+        """a text line of its own just under a panel, within its width: a sub-figure with its own caption, which
+        MathPix keeps apart (1805.01788 p8: six images, six figures)"""
+        return any(t == "text" and c[1] < b[1] and 0 <= b[1] - c[3] <= 40 * k and b[0] >= c[0] - 5 * k
+                   and b[2] <= c[2] + 5 * k for t, b in ink)
+    merged = True                                # panels of one figure side by side: one row (vertical overlap
+    while merged and ROWS:                       # >= 70% of the shorter), < 60 pt apart
+        merged = False
+        for i in range(len(cand)):
+            for j in range(i):
+                a, b = cand[i], cand[j]
+                ov = min(a[3], b[3]) - max(a[1], b[1])
+                gap = max(a[0], b[0]) - min(a[2], b[2])
+                if ov >= 0.7 * min(a[3] - a[1], b[3] - b[1]) and gap < 60 * k and not (subcap(a) and subcap(b)):
+                    cand[j] = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+                    del cand[i]
+                    merged = True
+                    break
+            if merged:
+                break
+    if CONTENT:                                  # attempt 3: a cluster whose area is mostly text lines is text --
+        def texty(c):                            # with no image in it (a figure draws; a text box frames text)
+            area = (c[2] - c[0]) * (c[3] - c[1])
+            cov = sum((min(c[2], b[2]) - max(c[0], b[0])) * (min(c[3], b[3]) - max(c[1], b[1]))
+                      for t, b in ink if t in ("text", "math") and c[0] <= (b[0] + b[2]) / 2 <= c[2]
+                      and c[1] <= (b[1] + b[3]) / 2 <= c[3])
+            return area > 0 and cov / area >= TEXTY and not any(img_inside(c, b) for b in imgs)
+        cand = [c for c in cand if not texty(c)]
+        # a page element, not a figure: a candidate in the top 8% of the page whose only drawing is a small image
+        cand = [c for c in cand if not (c[3] <= 0.12 * H and any(img_inside(c, b) for b in imgs))]
+    if FRAMED:                                   # a frame around text lines is text: few paths, no image, and
+        def framed(c):                           # three text lines or more inside
+            inside = [b for t, b in ink if t == "text" and c[0] <= (b[0] + b[2]) / 2 <= c[2]
+                      and c[1] <= (b[1] + b[3]) / 2 <= c[3]]
+            np_ = sum(1 for b in pth if c[0] - 1 <= b[0] and b[2] <= c[2] + 1 and c[1] - 1 <= b[1] and b[3] <= c[3] + 1)
+            return len(inside) >= 3 and np_ <= 6 and not any(img_inside(c, b) for b in imgs)
+        cand = [c for c in cand if not framed(c)]
+    figs = []
+    for c in cand:
+        taken = set()
+        while True:
+            w = c[2] - c[0]
+            add = [i for i, b in enumerate(labels) if i not in taken and near(c, b, T) and b[2] - b[0] <= w / 3]
+            if not add:
+                break
+            taken |= set(add)
+            for i in add:
+                b = labels[i]
+                c = (min(c[0], b[0]), min(c[1], b[1]), max(c[2], b[2]), max(c[3], b[3]))
+        figs.append(c)
+    return figs, {"paths": pth, "images": imgs, "ink": ink, "k": k, "labels": labels}
+
+
 def measure(doc, tol=12.0, sel=None, folder=None):
     """-> (figures matched, MathPix figures, body lines swallowed, pages with text but no path); folder: the
     library folder when it is not named like the document"""
@@ -119,86 +205,9 @@ def measure(doc, tol=12.0, sel=None, folder=None):
     figs_n = hit5 = swallowed = 0
     nopath = []
     for pg in pages:
-        n, W, H = pg["page"], pg["page_width"], pg["page_height"]
-        info = subprocess.run(["pdfinfo", "-box", "-f", str(n), "-l", str(n), pdf], capture_output=True, text=True).stdout
-        m = re.search(r"Page\s+%d CropBox:\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)" % n, info)
-        wpt = float(m[3]) - float(m[1]) if m else 612.0
-        k = W / wpt
-        raw, imgs_pt = paths_of(pdf, n, with_images=True)
-        pth = [tuple(v * k for v in b) for b in raw]
-        imgs = [tuple(v * k for v in b) for b in imgs_pt]
-        pth = [b for b in pth if not (b[2] - b[0] > 0.9 * W and b[3] - b[1] > 0.9 * H)]
-        pgm = subprocess.run(["gs", "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=pgmraw", "-r%.3f" % (k * 72),
-                              "-dUseCropBox", f"-dFirstPage={n}", f"-dLastPage={n}", "-sOutputFile=%stdout", pdf],
-                             capture_output=True).stdout
-        out = subprocess.run([INKCMP, "lines"], input=pgm, capture_output=True).stdout.decode().splitlines()
-        hd = out[0].split()
-        sx, sy = W / int(hd[3]), H / int(hd[4])
-        ink = [(f[0], (int(f[1]) * sx, int(f[2]) * sy, int(f[3]) * sx, int(f[4]) * sy)) for f in
-               (ln.split() for ln in out[1:-1])]
-        labels = [b for t, b in ink if t in ("text", "math", "equation_number")]
-        lh = sorted(b[3] - b[1] for t, b in ink if t == "text")[len([1 for t, _ in ink if t == "text"]) // 2] \
-            if any(t == "text" for t, _ in ink) else 30
-
-        def in_block(b):
-            """a line with a neighbour line directly above or below it and nearly the same left edge: part of a text
-            block (body, an author block, a prompt), claimed by it, never a label"""
-            return any(t == "text" and c is not b and abs(c[0] - b[0]) <= 0.5 * lh
-                       and (0 <= c[1] - b[3] <= 1.0 * lh or 0 <= b[1] - c[3] <= 1.0 * lh) for t, c in ink)
-        if BLOCK:
-            labels = [b for b in labels if not in_block(b)]
-        T = tol * k
-        cand = [c for c in cluster(pth, T) if c[2] - c[0] >= 30 * k and c[3] - c[1] >= 30 * k]
-        def subcap(c):
-            """a text line of its own just under a panel, within its width: a sub-figure with its own caption, which
-            MathPix keeps apart (1805.01788 p8: six images, six figures)"""
-            return any(t == "text" and c[1] < b[1] and 0 <= b[1] - c[3] <= 40 * k and b[0] >= c[0] - 5 * k
-                       and b[2] <= c[2] + 5 * k for t, b in ink)
-        merged = True                                # panels of one figure side by side: one row (vertical overlap
-        while merged and ROWS:                       # >= 70% of the shorter), < 60 pt apart
-            merged = False
-            for i in range(len(cand)):
-                for j in range(i):
-                    a, b = cand[i], cand[j]
-                    ov = min(a[3], b[3]) - max(a[1], b[1])
-                    gap = max(a[0], b[0]) - min(a[2], b[2])
-                    if ov >= 0.7 * min(a[3] - a[1], b[3] - b[1]) and gap < 60 * k and not (subcap(a) and subcap(b)):
-                        cand[j] = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
-                        del cand[i]
-                        merged = True
-                        break
-                if merged:
-                    break
-        if CONTENT:                                  # attempt 3: a cluster whose area is mostly text lines is text --
-            def texty(c):                            # with no image in it (a figure draws; a text box frames text)
-                area = (c[2] - c[0]) * (c[3] - c[1])
-                cov = sum((min(c[2], b[2]) - max(c[0], b[0])) * (min(c[3], b[3]) - max(c[1], b[1]))
-                          for t, b in ink if t in ("text", "math") and c[0] <= (b[0] + b[2]) / 2 <= c[2]
-                          and c[1] <= (b[1] + b[3]) / 2 <= c[3])
-                return area > 0 and cov / area >= TEXTY and not any(img_inside(c, b) for b in imgs)
-            cand = [c for c in cand if not texty(c)]
-            # a page element, not a figure: a candidate in the top 8% of the page whose only drawing is a small image
-            cand = [c for c in cand if not (c[3] <= 0.12 * H and any(img_inside(c, b) for b in imgs))]
-        if FRAMED:                                   # a frame around text lines is text: few paths, no image, and
-            def framed(c):                           # three text lines or more inside
-                inside = [b for t, b in ink if t == "text" and c[0] <= (b[0] + b[2]) / 2 <= c[2]
-                          and c[1] <= (b[1] + b[3]) / 2 <= c[3]]
-                np_ = sum(1 for b in pth if c[0] - 1 <= b[0] and b[2] <= c[2] + 1 and c[1] - 1 <= b[1] and b[3] <= c[3] + 1)
-                return len(inside) >= 3 and np_ <= 6 and not any(img_inside(c, b) for b in imgs)
-            cand = [c for c in cand if not framed(c)]
-        figs = []
-        for c in cand:
-            taken = set()
-            while True:
-                w = c[2] - c[0]
-                add = [i for i, b in enumerate(labels) if i not in taken and near(c, b, T) and b[2] - b[0] <= w / 3]
-                if not add:
-                    break
-                taken |= set(add)
-                for i in add:
-                    b = labels[i]
-                    c = (min(c[0], b[0]), min(c[1], b[1]), max(c[2], b[2]), max(c[3], b[3]))
-            figs.append(c)
+        n = pg["page"]
+        figs, ctx = page_figs(pdf, pg, tol)
+        pth, labels = ctx["paths"], ctx["labels"]
         mfig = []
         for ln in pg["lines"]:
             if ln["type"] in ("diagram", "chart") and isinstance(ln.get("region"), dict):

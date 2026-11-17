@@ -574,6 +574,24 @@ exports, and checks the graph's sha256 (the export is byte-identical run to run;
 Reference disagreement, counted in the gate: 1809.09528 p5 -- a figure made of example questions, which MathPix splits
 into text lines; any figure source that keeps it whole "swallows" them (vector route 17, detector 10).
 
+**(ii) vector refinement of the detector's boxes, developed on figure-set-9003 + -9004 (2026-11-17,
+`tools/lines-audit/detfig.py`, one detector run and one vector run, every variant on the same 40 pages, 46 figures):**
+| variant | figures whole | swallowed |
+|---|---|---|
+| detector alone (320 x 256) | 36 (78%) | 11 |
+| + panels in a row merged (vecfig's rule) | 33 | 11 |
+| + vector figures where the detector has none | 39 (85%) | 30 |
+| ... only where the detector's other classes cover < 50% | 36 | 11 |
+| + boxes cut to the drawing inside them | 36 | 11 |
+Looked at by eye: the three "recovered" figures are two code listings (Yolat p15, conceptgemini p4) and a framed
+formula block (New_Applications p18) that MathPix labels as diagrams; the 19 extra swallowed lines are framed text,
+a page header with a logo and a news item in a grey box -- the vector route's old failure, unchanged. The row merge
+joins figures MathPix keeps apart (2104.08926 p2, Chen p7). Trimming changes nothing. So no refinement step is taken:
+the route measured on the fresh set is the detector alone, fixed here before the set is drawn. Misses looked at:
+1807.03656 p4's one swallowed line is the title inside the screenshot (the detector keeps the whole image, MathPix cuts
+its top); Milne-ANT p143's MathPix box cuts its diagram in half and takes the running header; paper-7 p2's "diagram"
+is a block of formulas. All count in the gate.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

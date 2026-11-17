@@ -11,6 +11,8 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 LIB = os.environ.get("LINES_AUDIT_LIB", os.path.expanduser("~/pdfdrill-library"))
+VERBOSE = "-v" in sys.argv
+sys.argv = [a for a in sys.argv if a != "-v"]
 model, H, W = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 so = ort.SessionOptions(); so.intra_op_num_threads = 1; so.inter_op_num_threads = 1
 sess = ort.InferenceSession(model, so, providers=["CPUExecutionProvider"])
@@ -69,5 +71,10 @@ for tsv in sys.argv[4:]:
             s_ += any(d[0] <= cx <= d[2] and d[1] <= cy <= d[3] for d in det)
         hit += h_; n += len(figs); sw += s_
         print(f"ROW {doc[:40]:40} p{page:<4} figures {h_}/{len(figs)} swallowed {s_}")
+        if VERBOSE and (h_ < len(figs) or s_):
+            for f in figs:
+                bi = max(((iou(f, d), d) for d in det), default=(0, None))
+                print(f"     MathPix {[int(v) for v in f]} best IoU {bi[0]:.2f} {[int(v) for v in bi[1]] if bi[1] else '-'}")
+            print(f"     detector figures {[[int(v) for v in d] for d in det]}")
 print(f"TOTAL {pages} pages: figures whole {hit} of {n} = {hit / max(1, n):.0%}; body lines swallowed {sw}; "
       f"CPU {cpu / max(1, pages):.3f} s/page (1 thread)")
