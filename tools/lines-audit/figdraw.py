@@ -3,7 +3,9 @@
 for the figure step (CONTRACT unit 7). The library's documents with a PDF and a MathPix lines.json, minus every
 document of the board set, held-out 1-4, the audit dev and confirm sets, earlier figure sets, and the three development documents (0864,
 1805.01788, 2312.11532); one page per document (its pages with a figure, one drawn); seed as given (9003 by default); a page drawn as one
-page-size image (a scan) is drawn past. Written before anything is measured on it."""
+page-size image (a scan) is drawn past. Written before anything is measured on it. Since seed 9008 a whole document
+series is excluded with any of its documents (series(): e12s40 and e12s42 are one yearbook, and its layout came back in
+seed 9007 as the one swallowed line). Sets drawn before stay as drawn."""
 import csv, glob, hashlib, json, os, random, re, subprocess, sys
 LIB = os.environ.get("LINES_AUDIT_LIB", os.path.expanduser("~/pdfdrill-library"))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -19,8 +21,20 @@ for f in sets:
     for r in csv.reader(open(f), delimiter="\t"):
         if len(r) > 1 and not r[0].startswith("#"):
             excl.add(names.get(r[1], r[1]))
-docs = sorted(d for d in os.listdir(LIB) if d not in excl and os.path.exists(os.path.join(LIB, d, d + ".pdf"))
-              and os.path.exists(os.path.join(LIB, d, d + ".lines.json")))
+
+
+def series(d):
+    """a document series shares one layout (e12s40, e12s42: one yearbook): the folder name without its trailing
+    number. arXiv identifiers are their own series (stripping theirs would group unrelated papers by month)."""
+    if re.fullmatch(r"(arxiv\.)?\d{4}\.\d{4,5}(v\d+)?( \(\d+\))?", d):
+        return d
+    stem = re.sub(r"\d+$", "", d)
+    return stem if len(stem) >= 3 else d
+
+
+exs = {series(d) for d in excl}                     # a held-out set excludes every document of an excluded series
+docs = sorted(d for d in os.listdir(LIB) if d not in excl and series(d) not in exs
+              and os.path.exists(os.path.join(LIB, d, d + ".pdf")) and os.path.exists(os.path.join(LIB, d, d + ".lines.json")))
 rng = random.Random(seed)
 rng.shuffle(docs)
 rows = []
