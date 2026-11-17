@@ -1,6 +1,6 @@
 # GLYPHDRILL3 files the inkdrill build compiles from GD3 (default ../GLYPHDRILL3); written by make repin.
-# commit a8ab33f6468e8e2e37dcc50609d1cc9bb1051d7e 2026-11-15 "T-0144 D-4: TESTSET_SHA = f892aaee... (the real-glyph test set appended by the coordinator; only cm-ams gates), and unseen's (a) also without MTSYN"
-9fbcdc53a16bee41d913d049d9e12ffd12f7ff2384528425fa52f58f1d54ce05  src/gd3_adapter.c
+# commit 90a94e8bc08505ccd8ca0b534f6457f5a49cb8df 2026-11-17 "T-0152: inkcmp lines v7 polarity in gd3 lines (default); v7 column gutters as gd3-bands --gutters on (opt-in)"
+ee9a4cd687bc5acaed3595ce8111e7f4b92581340fe1a1fa5644f241642474d4  src/gd3_adapter.c
 c2cd059c6d91290ce523b4f6596beddaef8b2119f45ddf320b27982f5fe64f02  src/gd3_white.c
 3801246822bcbe440203225e2541348a4a650ea7382de58a57e460d2c4ae97c3  src/gd3_blocks.c
 0dc033313d4c269a9fbc515dc9d4615aeee5a71cc5f73718862a90c88902aa39  src/gd3_rle.h
