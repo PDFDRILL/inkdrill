@@ -473,6 +473,24 @@ Single-column documents: Killing 0.931/0.901, Hilbert 0.873/0.853, Penev 0.857/0
 line, with no `math` and no `diagram`, and m stays at the text's line height. Requiring a rule to be thin at every
 position fails it.
 
+**The YOLO route on held-out 3** (Gemma4 f2b726f, gemma_lines 1db2059, `testpool/heldout3`, read once, rescored
+one to one; my numbers equal gemma4-ee's and the coordinator's):
+
+| stratum | YOLO+Gemma | blob v3 (input-corrected) | gate (within 2 points or ahead) |
+|---|---|---|---|
+| maths | 0.894 / 0.955 | 0.943 / 0.899 | **fails** on precision (-5.6) |
+| german | 0.508 / 0.563 | 0.774 / 0.856 | passes |
+| two_column | 0.867 / 0.936 | 0.868 / 0.849 | **fails** on precision (-8.7) |
+| table | 0.203 / 0.230 | 0.375 / 0.708 | passes |
+| scan | 0.177 / 0.196 | 0.394 / 0.452 | passes |
+| all | 0.479 / 0.528 | 0.619 / 0.743 | ahead |
+
+- The page reported apart, lib:c8284ecd923d p1 (no source PDF; both routes read the inspect render), matched lines:
+  YOLO 46/84, blob v3 28/84 (1/84 as first measured, from report.pdf).
+- Without that page, german is YOLO 0.496/0.534 against blob 0.905/0.973, and all is YOLO 0.476/0.524 against blob
+  0.628/0.755.
+- **v3 is closed: the gate fails on maths and two-column precision.**
+
 **v4 on held-out 4** (drillgroup `results/heldout4-set.tsv`, fca0834, 86 pages from seeds 20261120/21/22; it
 excludes the board set, held-out 1-3 and the development draws). Measured once, with v4 frozen at 0f26ea3:
 
