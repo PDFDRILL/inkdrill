@@ -402,6 +402,22 @@ v3 on the single-column documents: Killing 0.932/0.908, Hilbert 0.873/0.853, Pen
 0.942/0.902, 0.859/0.857, 0.855/0.844). L1 now has a second display, with two narrow parts far apart: exactly two
 equation numbers and two displays. Allowing numbers anywhere fails it.
 
+**v3 on held-out 3** (drillgroup `results/heldout3-set.tsv`, 8626323, seed 20261119, 30 pages; it excludes the
+board set, held-out 1 and 2, and the development draws). Measured once, with v3 frozen at 5245a31:
+
+| stratum (pages) | truth | ours | matched | recall | precision |
+|---|---|---|---|---|---|
+| maths (8) | 282 | 296 | 266 | 0.943 | 0.899 |
+| german (5) | 368 | 272 | 258 | 0.701 | 0.949 |
+| two_column (6) | 622 | 636 | 540 | 0.868 | 0.849 |
+| table (5) | 750 | 397 | 281 | 0.375 | 0.708 |
+| scan (6, reported apart) | 538 | 469 | 212 | 0.394 | 0.452 |
+| born-digital (24) | 2022 | 1601 | 1345 | 0.665 | 0.840 |
+| all (30) | 2560 | 2070 | 1557 | 0.608 | 0.752 |
+
+Time: median 139 ms per page, max 353 ms. The YOLO route on these pages comes from gemma4-ee (frozen); the gate
+waits for it.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.
