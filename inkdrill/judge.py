@@ -37,9 +37,12 @@ CONTRACT unit 5).
 from __future__ import annotations
 
 import collections
+import concurrent.futures
 import difflib
 import html
+import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -79,9 +82,15 @@ def style(font: str) -> str:
             + ("i" if re.search(r"ital|obli|ti\d|mi\d|slant|it$", f) else ""))
 
 
+_STEXT = {}                                           # per judge() call: font_preamble and chars read one page
+
+
 def stext(pdf: str, pages: str) -> str:
-    return subprocess.run(["mutool", "draw", "-F", "stext", "-o", "-", pdf, pages],
-                          capture_output=True, text=True, check=True).stdout
+    key = (os.path.abspath(pdf), pages)
+    if key not in _STEXT:
+        _STEXT[key] = subprocess.run(["mutool", "draw", "-F", "stext", "-o", "-", pdf, pages],
+                                     capture_output=True, text=True, check=True).stdout
+    return _STEXT[key]
 
 
 def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
@@ -128,8 +137,10 @@ def font_preamble(pdf: str, page: int) -> tuple[str, str]:
 
 
 def pgm(pdf: str, page: int, dpi: int, crop: tuple | None = None) -> tuple[int, int, bytes]:
-    """poppler (FreeType, unhinted), anti-aliasing off, grey"""
-    cmd = ["pdftoppm", "-r", str(dpi), "-gray", "-aa", "no", "-aaVector", "no", "-hide-annotations",
+    """poppler (FreeType, unhinted), anti-aliasing off, grey, the CropBox: the frame mutool's stext and trace
+    coordinates are in (without -cropbox poppler renders the MediaBox, and a page cropped inside it -- board
+    lib_d68e0271bd4d p334, CropBox at 43 87 -- had every glyph compared against ink 43 x 95 pt away)"""
+    cmd = ["pdftoppm", "-cropbox", "-r", str(dpi), "-gray", "-aa", "no", "-aaVector", "no", "-hide-annotations",
            "-f", str(page), "-l", str(page)]
     if crop:
         cmd += ["-x", str(crop[0]), "-y", str(crop[1]), "-W", str(crop[2]), "-H", str(crop[3])]
@@ -163,6 +174,269 @@ def score(diff: set) -> tuple[int, int, int]:
     piece = max(collections.Counter(f(p) for p in diff).values(), default=0)
     solid = sum(1 for (x, y) in diff if (x + 1, y) in diff and (x, y + 1) in diff and (x + 1, y + 1) in diff)
     return len(diff), solid, piece
+
+
+INKCMP = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "build", "inkcmp")
+TR = re.compile(r'<page number="(\d+)"|<fill_text [^>]*transform="([^"]+)"|<span font="([^"]+)"[^>]*trm="([^"]+)"|'
+                r'<g unicode="([^"]*)" glyph="([^"]*)" x="([^"]+)" y="([^"]+)"|</fill_text>|'
+                r'<(?:stroke_text|clip_text|clip_stroke_text|ignore_text)\b')
+
+
+def trace(pdf: str, first: int, last: int) -> dict:
+    """page -> [(char, glyph name, origin x pt, origin y pt, font, (a, b, c, d) pt per em)] of the filled text,
+    from `mutool trace`: the glyph names and matrices stext does not give"""
+    x = subprocess.run(["mutool", "trace", pdf, f"{first}-{last}"], capture_output=True, text=True, check=True).stdout
+    out, cur, M, T, font, live = {}, None, None, None, None, False
+    for m in TR.finditer(x):
+        if m[1]:
+            cur = out.setdefault(int(m[1]), [])
+        elif m[2]:
+            M, live = [float(v) for v in m[2].split()], True
+        elif m[3]:
+            font, T = m[3], [float(v) for v in m[4].split()]
+        elif m[6] is not None and m[7] and live and cur is not None:
+            gx, gy = float(m[7]), float(m[8])
+            A = (T[0] * M[0] + T[1] * M[2], T[0] * M[1] + T[1] * M[3], T[2] * M[0] + T[3] * M[2], T[2] * M[1] + T[3] * M[3])
+            cur.append((html.unescape(m[5]), m[6], gx * M[0] + gy * M[2] + M[4], gx * M[1] + gy * M[3] + M[5], font, A))
+        else:
+            live = False
+    return out
+
+
+class Origins:
+    """the traced glyph at a stext origin: nearest within 0.02 pt, the same character first"""
+    def __init__(self, glyphs):
+        self.b = collections.defaultdict(list)
+        for g in glyphs:
+            self.b[(int(g[2] // 1), int(g[3] // 1))].append(g)
+
+    def get(self, x, y, ch):
+        best = None
+        for i in (-1, 0, 1):
+            for j in (-1, 0, 1):
+                for g in self.b.get((int(x // 1) + i, int(y // 1) + j), ()):
+                    d = abs(g[2] - x) + abs(g[3] - y)
+                    if d <= 0.02 and (best is None or (g[0] != ch, d) < best[0]):
+                        best = ((g[0] != ch, d), g)
+        return best[1] if best else None
+
+
+def font_name(path: str) -> str:
+    """the name a font program gives itself: a CFF's first Name INDEX entry, a Type 1 program's /FontName"""
+    with open(path, "rb") as fh:
+        raw = fh.read(65536)
+    if path.endswith(".cff") and len(raw) > 4:
+        hs = raw[2]
+        n, osz = int.from_bytes(raw[hs:hs + 2], "big"), raw[hs + 2] if len(raw) > hs + 2 else 0
+        if n and 1 <= osz <= 4:
+            o = [int.from_bytes(raw[hs + 3 + k * osz:hs + 3 + (k + 1) * osz], "big") for k in range(2)]
+            base = hs + 3 + (n + 1) * osz - 1
+            return raw[base + o[0]:base + o[1]].decode("latin-1")
+        return ""
+    m = re.search(rb"/FontName\s*/([^\s/{}\[\]()<>]+)", raw)
+    return m[1].decode("latin-1") if m else ""
+
+
+def pgm_write(path: str, w: int, h: int, data: bytes) -> None:
+    with open(path, "wb") as fh:
+        fh.write(b"P5\n%d %d\n255\n" % (w, h) + data)
+
+
+def pgms(pdf: str, pages: list, dpi: int, wd: str) -> dict:
+    """page -> (w, h, grey, file) for several pages, one poppler call over their range"""
+    out, pages = {}, sorted(set(pages))
+    for lo, hi in [(pages[0], pages[-1])] if pages else []:   # one call over the range: poppler's start-up costs
+        want = set(pages)                                     # more than the small snippet pages between
+        pre = os.path.join(wd, f"b{lo}")
+        subprocess.run(["pdftoppm", "-cropbox", "-r", str(dpi), "-gray", "-aa", "no", "-aaVector", "no",
+                        "-hide-annotations", "-f", str(lo), "-l", str(hi), pdf, pre], capture_output=True, check=True)
+        for f in os.listdir(wd):
+            m = re.fullmatch(rf"b{lo}-0*(\d+)\.pgm", f)
+            if m and int(m[1]) in want:
+                with open(os.path.join(wd, f), "rb") as fh:
+                    raw = fh.read()
+                h = re.match(rb"P5\s+(\d+)\s+(\d+)\s+255\s", raw)
+                out[int(m[1])] = (int(h[1]), int(h[2]), raw[h.end():], os.path.join(wd, f))
+    return out
+
+
+def glyph_side_a(a_pdf: str, pno: int, wd: str) -> tuple:
+    """what the glyph route needs of the original alone (it runs while pdflatex sets the reading): its font programs,
+    its traced glyphs, and its 400-dpi render"""
+    FA = Fonts(a_pdf, os.path.join(wd, "fontsA"), 0)
+    TA = Origins(trace(a_pdf, pno, pno).get(pno, []))
+    aw, ah, ab = pgm(a_pdf, pno, DPI)
+    a400 = os.path.join(wd, "a400.pgm")
+    pgm_write(a400, aw, ah, ab)
+    return FA, TA, (aw, ah, ab), a400
+
+
+def glyph_scores(side_a: tuple, bpdf: str, ac: list, work: list, wd: str, res) -> tuple:
+    """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
+    rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
+    font, an accent the page drew as a rule) is the page's own ink from one 400-dpi render. Also returns that render
+    and the 400-dpi renders of the snippet pages the formula lines' rule comparison reads."""
+    FA, TA, (aw, ah, ab), a400 = side_a
+    FB = Fonts(bpdf, os.path.join(wd, "fontsB"), len(FA.files))
+    nb = max(w[0] for w in work) + 1
+    need = [i + 1 for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs]
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    bjob = pool.submit(pgms, bpdf, need, DPI, wd) if need else None    # poppler renders while inkcmp rasterises
+    tb = trace(bpdf, 1, nb)
+    # every glyph of the original as a placement, bucketed by its quad (+4 px): a pair's window sees its neighbours'
+    # ink on both sides, as the rendered crops of the reference route do
+    G = 64
+    aplace, abox, abuck = {}, {}, collections.defaultdict(list)
+    for c in ac:
+        g = TA.get(c[1], c[2], html.unescape(c[0]))
+        if g is None:
+            continue
+        aplace[id(c)] = (FA.find(g[4]), g[1], tuple(v * S for v in g[5]), c[1] * S + OX, c[2] * S + OY)
+        q = (c[3] * S - 4, c[4] * S - 4, c[5] * S + 4, c[6] * S + 4)
+        abox[id(c)] = q
+        for gx in range(int(q[0] // G), int(q[2] // G) + 1):
+            for gy in range(int(q[1] // G), int(q[3] // G) + 1):
+                abuck[(gx, gy)].append(c)
+    hit = lambda q, w: q[0] < w[2] and q[2] > w[0] and q[1] < w[3] and q[3] > w[1]
+    jobs, keys = [], []
+    for i, ln, b, ca, cb, pairs, _ in work:
+        TB = Origins(tb.get(i + 1, []))
+        bg = [(q, TB.get(q[1], q[2], html.unescape(q[0]))) for q in cb]
+        for k, (pa, pbb) in enumerate(pairs):
+            X, Y = pa[1] * S + OX, pa[2] * S + OY
+            win = (int(pa[3] * S) - 2, int(pa[4] * S) - 2, int(pa[5] * S) + 3, int(pa[6] * S) + 3)
+            sa = aplace.get(id(pa))
+            gb = TB.get(pbb[1], pbb[2], html.unescape(pbb[0]))
+            # a character with no glyph of its own (a ligature's second letter, a combining slash): its ink is its
+            # neighbours', which the window collects
+            sb = (FB.find(gb[4]), gb[1], tuple(v * S for v in gb[5]), X, Y) if gb else "none"
+            if gb is None:
+                res["b_no_glyph"] += 1
+            if sa is None:
+                res["a_page_ink"] += 1
+            adds = []
+            if sa is not None:
+                seen = {id(pa)}
+                for gx in range(win[0] // G, win[2] // G + 1):
+                    for gy in range(win[1] // G, win[3] // G + 1):
+                        for c in abuck.get((gx, gy), ()):
+                            if id(c) not in seen and hit(abox[id(c)], win):
+                                seen.add(id(c))
+                                adds.append(("A",) + aplace[id(c)])
+            dx, dy = X - pbb[1] * S, Y - pbb[2] * S             # B's frame -> A's window, by this pair's origins
+            for q, g in bg:
+                if q is pbb or g is None:
+                    continue
+                if hit((q[3] * S + dx - 4, q[4] * S + dy - 4, q[5] * S + dx + 4, q[6] * S + dy + 4), win):
+                    adds.append(("B", FB.find(g[4]), g[1], tuple(v * S for v in g[5]), q[1] * S + dx, q[2] * S + dy))
+            jobs.append((sa, sb, win, adds))
+            keys.append(((i, k), len(jobs) - 1))
+    r, _ = glyph_job([FA, FB], jobs, a400)
+    redo = [j for j, v in enumerate(r) if isinstance(v, str) and v.startswith("A")]
+    if redo:                                         # the page's ink where A's own program has no outline
+        r2, _ = glyph_job([FA, FB], [(None, jobs[j][1], jobs[j][2], [a for a in jobs[j][3] if a[0] == "B"])
+                                     for j in redo], a400)
+        for j, v in zip(redo, r2):
+            r[j] = v
+        res["a_page_ink"] += len(redo)
+    scores = {}
+    for key, j in keys:
+        scores[key] = r[j]
+    bp = bjob.result() if bjob else {}
+    pool.shutdown()
+    return scores, (aw, ah, ab, a400), {p - 1: v for p, v in bp.items()}
+
+
+class Fonts:
+    """the font programs a PDF embeds (`mutool extract`), loaded once by `inkcmp glyphs`; a traced font name finds
+    its file by full name, by name without the subset prefix, or by that name without trailing digits (mutool
+    numbers a second instance of a name), among the files that hold the glyph"""
+    def __init__(self, pdf: str, wd: str, base: int = 0):
+        os.makedirs(wd, exist_ok=True)
+        subprocess.run(["mutool", "extract", os.path.abspath(pdf)], cwd=wd, capture_output=True)
+        self.files = sorted(os.path.join(wd, f) for f in os.listdir(wd) if f.endswith((".pfa", ".pfb", ".cff")))
+        self.base = base
+        self.names = {base + i: font_name(f) for i, f in enumerate(self.files)}
+
+    def ids(self):
+        return {self.base + i: f for i, f in enumerate(self.files)}
+
+    def find(self, font: str):
+        """candidate ids, best first"""
+        if not hasattr(self, "_by"):
+            self._by = collections.defaultdict(list)
+            for i, nm in self.names.items():
+                self._by[nm].append(i)
+                self._by[nm.split("+")[-1]].append(i)
+        out = list(self._by.get(font, ()))
+        b = font.split("+")[-1]
+        out += [i for i in self._by.get(b, ()) if i not in out]
+        b2 = re.sub(r"\d+$", "", b)
+        out += [i for i in self._by.get(b2, ()) if i not in out]
+        return out
+
+
+def glyph_job(fonts: list, pairs: list, page_pgm: str | None) -> tuple[list, dict]:
+    """one `inkcmp glyphs` run. pairs: (A side, B side, window[, adds]); a side is (font ids, glyph name, matrix, X, Y)
+    or None (A: the page's ink); adds: ("A"|"B", font ids, glyph name, matrix, X, Y), neighbours' ink in the window. Font candidates are tried in order: the first whose program holds the glyph.
+    Returns per pair (xor, solid, piece) or the reason there is no outline, and the fonts' names."""
+    job, names = ["INKGLYPHS1"], {}
+    for fs in fonts:
+        job += [f"font {i} {f}" for i, f in fs.ids().items()]
+    if page_pgm:
+        job.append(f"page {page_pgm} {INK}")
+    def place(s):
+        if s == "none":
+            return "none - 0 0 0 0 0 0"
+        ids, g, m, X, Y = s
+        return f"{','.join(map(str, ids)) if ids else -2} {g} {m[0]!r} {m[1]!r} {m[2]!r} {m[3]!r} {X!r} {Y!r}"
+    for a, b, w, *more in pairs:
+        sides = ["-1 - 0 0 0 0 0 0" if s is None else place(s) for s in (a, b)]
+        job.append(f"pair {sides[0]} {sides[1]} {w[0]} {w[1]} {w[2]} {w[3]}")
+        for ad in (more[0] if more else ()):
+            job.append(f"add {ad[0]} {place(ad[1:])}")
+    job.append("end")
+    p = subprocess.run([INKCMP, "glyphs"], input="\n".join(job) + "\n", capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError("inkcmp glyphs: " + p.stderr.strip())
+    res = []
+    for ln in p.stdout.splitlines():
+        f = ln.split(" ", 3)
+        if f[0] == "font":
+            if f[2] == "ok":
+                names[int(f[1])] = f[3]
+        elif f[0] == "P":
+            res.append((int(f[1]), int(f[2]), int(f[3])))
+        elif f[0] == "O":
+            res.append(f[1] + " " + (f[2] if len(f) > 2 else "") + (" " + f[3] if len(f) > 3 else ""))
+    return res, names
+
+
+def cover_map(quads, x0: int, y0: int, w: int, h: int) -> bytearray:
+    """1 where a pixel centre (x + 0.5, y + 0.5) lies in one of the float quads, edges included (rule_ink's
+    `covered`), over the w x h pixels from (x0, y0)"""
+    m = bytearray(w * h)
+    for q in quads:
+        a, b = max(math.ceil(q[0] - 0.5), x0), min(math.floor(q[2] - 0.5), x0 + w - 1)
+        c, d = max(math.ceil(q[1] - 0.5), y0), min(math.floor(q[3] - 0.5), y0 + h - 1)
+        if a > b:
+            continue
+        for y in range(c, d + 1):
+            k = (y - y0) * w
+            m[k + a - x0:k + b - x0 + 1] = b"\x01" * (b - a + 1)
+    return m
+
+
+INKTAB = bytes(1 if v < INK else 0 for v in range(256))
+
+
+def ink_xs(row: bytes):
+    """indices of ink samples in a row of grey values"""
+    t = row.translate(INKTAB)
+    i = t.find(1)
+    while i >= 0:
+        yield i
+        i = t.find(1, i + 1)
 
 
 def leaves(page: dict) -> list[dict]:
@@ -334,7 +608,150 @@ def rule_like(comp: list) -> bool:
     return w >= 8 and w >= 3 * h and h <= 6
 
 
-def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False):
+def runs01(t: bytes) -> list:
+    """(first, last) of each run of 1 in a row of 0/1 bytes"""
+    out, i = [], t.find(1)
+    while i >= 0:
+        j = t.find(0, i)
+        if j < 0:
+            j = len(t)
+        out.append((i, j - 1))
+        i = t.find(1, j)
+    return out
+
+
+def and_not(t: bytes, c) -> bytes:
+    """t AND NOT c, bytewise, for rows of 0/1 bytes of one length"""
+    return (int.from_bytes(t, "big") & ~int.from_bytes(c, "big")).to_bytes(len(t), "big")
+
+
+def rule_components(rows: list) -> list:
+    """the 8-connected components of row runs [(y, [(x0, x1), ...]), ...] (y increasing) that are rule_like, as
+    pixel lists in the order of their first run: `[c for c in components(px) if rule_like(c)]` without visiting
+    every pixel"""
+    runs, par = [], []
+
+    def f(k):
+        while par[k] != k:
+            par[k] = par[par[k]]
+            k = par[k]
+        return k
+    prev, prev_y = [], None
+    for y, rr in rows:
+        cur = []
+        for x0, x1 in rr:
+            k = len(runs)
+            runs.append((y, x0, x1))
+            par.append(k)
+            cur.append(k)
+        if prev_y == y - 1:
+            j = 0
+            for k in cur:
+                _, x0, x1 = runs[k]
+                while j < len(prev) and runs[prev[j]][2] < x0 - 1:
+                    j += 1
+                t = j
+                while t < len(prev) and runs[prev[t]][1] <= x1 + 1:
+                    ra, rb = f(k), f(prev[t])
+                    if ra != rb:
+                        par[max(ra, rb)] = min(ra, rb)
+                    t += 1
+        prev, prev_y = cur, y
+    box = {}                                          # root -> [x0, y0, x1, y1], one pass
+    for k, (y, x0, x1) in enumerate(runs):
+        r = f(k)
+        b = box.get(r)
+        if b is None:
+            box[r] = [x0, y, x1, y]
+        else:
+            if x0 < b[0]:
+                b[0] = x0
+            if x1 > b[2]:
+                b[2] = x1
+            b[3] = y                                  # runs come in increasing y
+    keep = {r for r, b in box.items() if (b[2] - b[0] + 1) >= 8 and (b[2] - b[0] + 1) >= 3 * (b[3] - b[1] + 1)
+            and b[3] - b[1] + 1 <= 6}
+    groups = {}
+    for k, (y, x0, x1) in enumerate(runs):
+        r = f(k)
+        if r in keep:
+            groups.setdefault(r, []).extend((x, y) for x in range(x0, x1 + 1))
+    return [groups[r] for r in sorted(groups)]
+
+
+def rule_pixels(acrop, bpage, up, acov, bcov, region) -> tuple:
+    """rule_ink's pixel stage in Python, the reference for `inkcmp rules`: per side the rule-like components of the
+    ink no quad covers (A: in the region; B: the whole snippet page), each with its touch count -- the pixels with a
+    4-neighbour of covered ink. A rule stands free when touch <= 0.3 of its pixels: a glyph's edge outside its quad
+    (TeX's CM under a page's Times) borders glyph ink along its length, a vinculum touches its radical sign only at
+    one end."""
+    aw, ah, ab, cx0, cy0 = acrop
+    pw, ph, pb = bpage
+    xa, ya, xb, yb = region
+    AW = xb - xa + 1
+    am = cover_map(acov, xa, ya, AW, yb - ya + 1)
+    lo, hi = max(xa, -(-(cx0 - up // 2) // up)), min(xb, (aw - 1 - up // 2 + cx0) // up)
+    a_rows = []
+    for y in range(ya, yb + 1):
+        ty = y * up + up // 2 - cy0
+        if not 0 <= ty < ah or lo > hi:
+            continue
+        at = ty * aw + lo * up + up // 2 - cx0
+        k = (y - ya) * AW + lo - xa
+        a_rows.append((y, [(lo + x0, lo + x1) for x0, x1 in
+                           runs01(and_not(ab[at:at + (hi - lo) * up + 1:up].translate(INKTAB), am[k:k + hi - lo + 1]))]))
+
+    def a_cov(x, y):
+        ty = y * up + up // 2 - cy0
+        return (ya <= y <= yb and lo <= x <= hi and 0 <= ty < ah and am[(y - ya) * AW + x - xa] == 1
+                and ab[ty * aw + x * up + up // 2 - cx0] < INK)
+    PW, PH = pw // up, ph // up
+    bm = cover_map(bcov, 0, 0, PW, PH)
+    b_rows = []
+    for y in range(PH):
+        at = (y * up + up // 2) * pw + up // 2
+        b_rows.append((y, runs01(and_not(pb[at:at + (PW - 1) * up + 1:up].translate(INKTAB), bm[y * PW:(y + 1) * PW]))))
+
+    def b_cov(x, y):
+        return 0 <= x < PW and 0 <= y < PH and bm[y * PW + x] == 1 and pb[(y * up + up // 2) * pw + x * up + up // 2] < INK
+
+    def touch(comp, cov):
+        return sum(1 for x, y in comp if any(cov(x + dx, y + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))))
+    return ([(c, touch(c, a_cov)) for c in rule_components(a_rows)],
+            [(c, touch(c, b_cov)) for c in rule_components(b_rows)])
+
+
+def rules_job(requests: list, wd: str) -> list:
+    """`inkcmp rules` for many (page pgm, ink, up, cx0, cy0, quads, region) requests at once ->
+    per request [(pixels, touch)]"""
+    job, last = ["INKRULES1"], None
+    for pg, quads, reg in requests:
+        if pg != last:
+            job.append("page %s %d %d %d %d" % pg)
+            last = pg
+        job.append("job %d %d %d %d" % reg)
+        job += ["quad %r %r %r %r" % tuple(q) for q in quads]
+    job.append("end")
+    p = subprocess.run([INKCMP, "rules"], input="\n".join(job) + "\n", capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError("inkcmp rules: " + p.stderr.strip())
+    out, cur, comp = [], None, None
+    for ln in p.stdout.splitlines():
+        f = ln.split()
+        if f[0] == "job":
+            cur = []
+            out.append(cur)
+        elif f[0] == "comp":
+            comp = []
+            cur.append((comp, int(f[2])))
+        elif f[0] == "run":
+            y, x0, x1 = int(f[1]), int(f[2]), int(f[3])
+            comp.extend((x, y) for x in range(x0, x1 + 1))
+    return out
+
+
+def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False,
+             up=UP, stage=None):
     """Non-glyph ink of a formula line (rules, fraction bars, radical vincula), page against rendering.
     - page rules: the page's ink in the line box (+4 px) that none of the page's own glyph quads covers;
     - rendered rules: the snippet page's ink that no glyph covers, where a paired glyph's cover is its PARTNER's page
@@ -369,26 +786,18 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         ox, oy = pa[1] * S - pbb[1] * S, pa[2] * S - pbb[2] * S
         bcov.append((pa[3] * S - ox - pad, pa[4] * S - oy - pad, pa[5] * S - ox + pad, pa[6] * S - oy + pad))
     bcov += [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in cb if id(c) not in used_b]
-    a_ng, a_cov = set(), set()
+    # the page's ink in the line box (+4 px, + ext rows), and the whole snippet page, sampled at the 400 grid's
+    # pixel centres of a render `up` times finer: the ink no glyph quad covers, as rule-like components with the
+    # count of their pixels that border covered ink. `stage` (side, quads, region) -> [(pixels, touch)] does this
+    # elsewhere (`inkcmp rules`); without it, here.
     ext = max(4, int(0.6 * (b[3] - b[1])))     # an overline over a tight box lies above it; owner() keeps the
-    for y in range(int(b[1]) - ext, int(b[3]) + ext + 1):   # neighbours' rules out
-        ty = y * UP + UP // 2 - cy0
-        for x in range(int(b[0]) - 4, int(b[2]) + 5):
-            tx = x * UP + UP // 2 - cx0
-            if 0 <= ty < ah and 0 <= tx < aw and ab[ty * aw + tx] < INK:
-                (a_cov if covered(acov, x, y) else a_ng).add((x, y))
-    b_ng, b_cov = set(), set()                            # the whole snippet page, B's 400 grid
-    for y in range(0, ph // UP):
-        sy = y * UP + UP // 2
-        for x in range(0, pw // UP):
-            sx = x * UP + UP // 2
-            if pb[sy * pw + sx] < INK:
-                (b_cov if covered(bcov, x, y) else b_ng).add((x, y))
-    def free(comp, cov):
-        """a rule stands free: a glyph's edge outside its quad (TeX's CM under a page's Times) borders glyph ink
-        along its length, a vinculum touches its radical sign only at one end"""
-        touch = sum(1 for x, y in comp if any((x + dx, y + dy) in cov for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))))
-        return touch <= 0.3 * len(comp)
+    ya, yb, xa, xb = int(b[1]) - ext, int(b[3]) + ext, int(b[0]) - 4, int(b[2]) + 4   # neighbours' rules out
+    PW, PH = pw // up, ph // up
+    if stage is not None:
+        a_comps = stage("A", acov, (xa, ya, xb, yb))
+        b_comps = stage("B", bcov, (0, 0, PW - 1, PH - 1))
+    else:
+        a_comps, b_comps = rule_pixels(acrop, bpage, up, acov, bcov, (xa, ya, xb, yb))
     # inline maths: only rules over the maths -- overlapping a maths-font glyph in x (a footnote rule above a
     # "^3" line is not part of a formula); in display lines every rule counts
     mx_a = [(c[3] * S, c[5] * S) for c in ca if re.search(MATHFONT + r"|MSBM|MSAM|EUF|EUS", c[7])]
@@ -396,18 +805,19 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
     over_maths = lambda comp, mx: display or any(r[0] < max(p[0] for p in comp) + 1 and r[1] > min(p[0] for p in comp)
                                                 for r in mx)
     b_rules = []
-    for comp in components(b_ng):
-        if rule_like(comp) and free(comp, b_cov) and over_maths(comp, mx_b):
+    for comp, touch in b_comps:
+        if touch <= 0.3 * len(comp) and over_maths(comp, mx_b):
             xs = [p[0] for p in comp]
             dx, dy = offset_at((min(xs) + max(xs)) / 2)
             b_rules.append([(round(x + dx), round(y + dy)) for x, y in comp])
     b_map = {p for comp in b_rules for p in comp}
     near = lambda pts, x, y: any((x + ddx, y + ddy) in pts for ddx in range(-tol, tol + 1) for ddy in range(-tol, tol + 1))
-    a_rules = [c for c in components(a_ng) if rule_like(c) and free(c, a_cov) and over_maths(c, mx_a)]
+    a_rules = [c for c, touch in a_comps if touch <= 0.3 * len(c) and over_maths(c, mx_a)]
     a_map = {p for comp in a_rules for p in comp}
     def owner(comp):
         xs, ys = [p[0] for p in comp], [p[1] for p in comp]
-        cx, cy = (min(xs) + max(xs) + 1) / 2, (min(ys) + max(ys) + 1) / 2
+        mnx, mxx, mxy = min(xs), max(xs), max(ys)
+        cx, cy = (mnx + mxx + 1) / 2, (min(ys) + mxy + 1) / 2
         inside = [((q[2] - q[0]) * (q[3] - q[1]), li) for li, q in enumerate(boxes or [b])
                   if q[0] <= cx <= q[2] and q[1] <= cy <= q[3]]
         if inside:
@@ -415,16 +825,16 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         below = []                                         # an overline/vinculum: the line of the glyph under it
         for (c, li) in glyphs or []:
             gx0, gy0, gx1, gy1 = c[3] * S, c[4] * S, c[5] * S, c[6] * S
-            if gx1 <= min(xs) or gx0 >= max(xs) + 1:
+            if gx1 <= mnx or gx0 >= mxx + 1:
                 continue
-            gap = gy0 - (max(ys) + 1)
+            gap = gy0 - (mxy + 1)
             if -2 <= gap <= 1.5 * max(gy1 - gy0, 4.0):
                 below.append((gap, li))
         if below:
             return min(below)[1]
         best = None
         for li, q in enumerate(boxes or [b]):
-            if q[2] <= min(xs) or q[0] >= max(xs) + 1:
+            if q[2] <= mnx or q[0] >= mxx + 1:
                 continue
             d = max(q[1] - cy, 0, cy - q[3])
             key = (d, (q[2] - q[0]) * (q[3] - q[1]))
@@ -447,7 +857,8 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
             xs, ys = [p[0] for p in comp], [p[1] for p in comp]
             print(f"R L{i} invented {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
 
-def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> collections.Counter:
+def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render") -> collections.Counter:
+    _STEXT.clear()
     with open(lines_json, encoding="utf-8") as fh:
         doc = json.load(fh)
     pg = next((p for p in doc["pages"] if p.get("page") == pno), None) or doc["pages"][pno - 1]
@@ -476,7 +887,14 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
               f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unpaired_A 0 unpaired_B 0", file=out)
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
-    bpdf, failed, dropped = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
+    side_a = None
+    if route == "glyph":                            # the original's side runs while pdflatex sets the reading
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(compile_lines, [ln["text"] for ln in lv], sizes, pre, wd)
+            side_a = glyph_side_a(a_pdf, pno, wd)
+            bpdf, failed, dropped = fut.result()
+    else:
+        bpdf, failed, dropped = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
     gone = UNMAPPABLE | dropped
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
@@ -499,9 +917,16 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     # overlap, a glyph was paired once per box (board 2312.11532 p7: 3396 pairs of 3325 glyphs)
     boxes = [box(ln) for ln in lv]
     owner = {}
+    cell = 256                                      # boxes by grid cell of the 400 grid, in line order
+    grid = collections.defaultdict(list)
+    for li, b in enumerate(boxes):
+        for gx in range(int(b[0] // cell), int(b[2] // cell) + 1):
+            for gy in range(int(b[1] // cell), int(b[3] // cell) + 1):
+                grid[(gx, gy)].append(li)
     for ci, c in enumerate(ac):
         best = None
-        for li, b in enumerate(boxes):
+        for li in grid.get((int((c[3] + c[5]) / 2 * S // cell), int((c[4] + c[6]) / 2 * S // cell)), ()):
+            b = boxes[li]
             if inside(c, b):
                 a = (b[2] - b[0]) * (b[3] - b[1])
                 if best is None or a < best[0]:
@@ -524,17 +949,22 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
                 best = (gap, owner[bi])
         if best is not None:
             owner[ci] = best[1]
+    of_line = collections.defaultdict(list)          # the page's glyphs per line, in page order
+    for ci, c in enumerate(ac):
+        if ci in owner:
+            of_line[owner[ci]].append(c)
+    work = []                                       # per judged line: (i, ln, b, ca, cb, pairs, U lines)
     for i, ln in enumerate(lv[:len(bc)]):
         if i in failed:
             continue
         b_total += len(bc[i])
         b = boxes[i]
-        ca = sorted((c for ci, c in enumerate(ac) if owner.get(ci) == i), key=lambda c: c[1])
+        ca = sorted(of_line.get(i, ()), key=lambda c: c[1])
         cb = sorted(bc[i], key=lambda c: c[1])
         if not ca or not cb:
             res["lines_empty"] += 1
             continue
-        pairs = []
+        pairs, ulines = [], []
         sm = difflib.SequenceMatcher(a=[c[0] for c in ca], b=[c[0] for c in cb], autojunk=False)
         for op, a0, a1, b0, b1 in sm.get_opcodes():
             if op == "equal" or (op == "replace" and a1 - a0 == b1 - b0):
@@ -542,10 +972,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
             else:
                 res["unpaired_A"] += a1 - a0
                 res["unpaired_B"] += b1 - b0
-                for c in ca[a0:a1]:
-                    print(f"U L{i} A {c[0]}", file=out)
-                for c in cb[b0:b1]:
-                    print(f"U L{i} B {c[0]}", file=out)
+                ulines += [f"U L{i} A {c[0]}" for c in ca[a0:a1]]
+                ulines += [f"U L{i} B {c[0]}" for c in cb[b0:b1]]
         # a rendered accent the page has as ink but not as a glyph (\overline drawn as a rule where the reading
         # wrote \bar, board 2103.01507 p118): placed relative to its base's partner and XORed against the page's
         # ink there, like any glyph. A reading that drops the accent still leaves the page's ink unpaired.
@@ -569,6 +997,54 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
             res["unpaired_B"] -= 1
             res["accents_on_ink"] += 1
         res["lines"] += 1
+        work.append((i, ln, b, ca, cb, pairs, ulines))
+    scores, page400, bpages = {}, None, {}
+    glyph_owners = [(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner]
+    if route == "glyph" and work:
+        scores, page400, bpages = glyph_scores(side_a, bpdf, ac, work, wd, res)
+    stages = {}
+    if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
+        aw, ah, ab, a400 = page400                  # a first pass collects the requests, the second reads them
+        reqs, where = [], {}
+
+        def collect(i):
+            def st(side, quads, reg):
+                f = a400 if side == "A" else bpages[i][3]
+                where[(i, side)] = len(reqs)
+                reqs.append(((f, INK, 1, 0, 0), quads, reg))
+                return []
+            return st
+        for i, ln, b, ca, cb, pairs, _ in work:
+            if is_formula(ln) and pairs:
+                rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], collections.Counter(), io.StringIO(),
+                         boxes=boxes, glyphs=[], display=ln.get("type") in ("math", "equation"), up=1,
+                         stage=collect(i))
+        got = rules_job(reqs, wd) if reqs else []
+        for i, *_ in work:
+            stages[i] = (lambda i: lambda side, quads, reg: got[where[(i, side)]])(i)
+    for i, ln, b, ca, cb, pairs, ulines in work:
+        for u in ulines:
+            print(u, file=out)
+        if route == "glyph":
+            for k, ((t, ax, ay, qx0, qy0, qx1, qy1, fa, _), (tb, bx, by, _, _, _, _, fb, _)) in enumerate(pairs):
+                r = scores[(i, k)]
+                if isinstance(r, str):                  # no outline on the reading's side: not judged
+                    res["no_outline"] += 1
+                    print(f"O L{i} {t} {tb} {r}", file=out)
+                    continue
+                xo, so, pc = r
+                flag = so >= THRESHOLD
+                sa, sb = style(fa) or "-", style(fb) or "-"
+                print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
+                res["glyphs"] += 1
+                if flag:
+                    res["flagged"] += 1
+                    res["style" if sa != sb else "glyph"] += 1
+            if is_formula(ln) and pairs:
+                aw, ah, ab, _ = page400
+                rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
+                         glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i])
+            continue
         pw, ph, pb = pgm(bpdf, i + 1, DPI * UP)
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
         cx0, cy0 = max(0, int(b[0]) * UP - mg), max(0, int(b[1]) * UP - mg)
@@ -597,7 +1073,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
                 res["style" if sa != sb else "glyph"] += 1
         if is_formula(ln) and pairs:
             rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
-                     glyphs=[(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner],
+                     glyphs=glyph_owners,
                      display=ln.get("type") in ("math", "equation"))
     # page-wide counts for the board's ink residual (coordinator, 2026-11-17): every original glyph that paired
     # with nothing (outside any line, in an empty or uncompiled line, or skipped by the alignment) and every
@@ -613,21 +1089,28 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    wd = None
+    wd, route = None, "render"
     if "--work" in argv:
         j = argv.index("--work")
         wd = argv[j + 1]
         del argv[j:j + 2]
+    if "--route" in argv:
+        j = argv.index("--route")
+        route = argv[j + 1]
+        del argv[j:j + 2]
+        if route not in ("glyph", "render"):
+            print("inkcmp-judge: --route glyph|render", file=sys.stderr)
+            return 2
     if len(argv) != 3:
         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
         return 2
     a_pdf, pno, lj = argv[0], int(argv[1]), argv[2]
     if wd:
         os.makedirs(wd, exist_ok=True)
-        judge(a_pdf, pno, lj, wd)
+        judge(a_pdf, pno, lj, wd, route=route)
     else:
         with tempfile.TemporaryDirectory(prefix="inkcmp-judge-") as d:
-            judge(a_pdf, pno, lj, d)
+            judge(a_pdf, pno, lj, d, route=route)
     return 0
 
 

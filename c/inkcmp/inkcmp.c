@@ -4,6 +4,7 @@
 #include "page.h"
 #include "white.h"
 #include "lines.h"
+#include "glyphs.h"
 #include "layout/blocks.h"
 #include <errno.h>
 #include <stdio.h>
@@ -22,6 +23,8 @@ static int usage(void) {
         "       inkcmp space  [--threshold T] [--lh PX] [--vsep-w F] [--vsep-h F] [--hsep-w F] [--hsep-h F]\n"
         "                     [--overlap F] [--max-sep N] < page.pgm\n"
         "       inkcmp lines  [--threshold T] < pages.pgm   (one or more concatenated pages; T default: automatic)\n"
+        "       inkcmp glyphs < job   (glyph rasters from font programs, scored per pair; glyphs.c)\n"
+        "       inkcmp rules  < job   (rule-like ink no glyph covers; rules.c)\n"
         "       T: 1..256 (default 154), ink = pixel < T\n", stderr);
   return 2;
 }
@@ -80,6 +83,12 @@ int main(int argc, char **argv) {
   if (argc < 2) return usage();
   const char *cmd = argv[1];
   if (!strcmp(cmd, "lines")) return lines_main(argc, argv);
+  if (!strcmp(cmd, "glyphs") || !strcmp(cmd, "rules")) {
+    if (argc != 2) return usage();
+    int rc = cmd[0] == 'g' ? ig_main(stdin, stdout, stderr) : ir_main(stdin, stdout, stderr);
+    if (fflush(stdout) || ferror(stdout)) { fputs("inkcmp: write error\n", stderr); return 3; }
+    return rc;
+  }
   int is_rle = !strcmp(cmd, "rle"), is_blocks = !strcmp(cmd, "blocks"), is_white = !strcmp(cmd, "white"),
       is_space = !strcmp(cmd, "space");
   if (!is_rle && !is_blocks && !is_white && !is_space) return usage();

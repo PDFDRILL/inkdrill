@@ -45,6 +45,8 @@ def plant(text, old, new):
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
 class JudgeBornDigital(unittest.TestCase):
+    ROUTE = "render"
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-")
@@ -79,7 +81,7 @@ class JudgeBornDigital(unittest.TestCase):
         wd = os.path.join(self.tmp.name, name)
         os.makedirs(wd)
         out = io.StringIO()
-        res = judge.judge(self.pdf, 1, lj, wd, out=out)
+        res = judge.judge(self.pdf, 1, lj, wd, out=out, route=self.ROUTE)
         rows = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ")]
         return res, rows
 
@@ -93,7 +95,7 @@ class JudgeBornDigital(unittest.TestCase):
         self.assertEqual(res["flagged"], 0)
 
     def planted_run(self):
-        if not hasattr(self.__class__, "_planted"):
+        if "_planted" not in self.__class__.__dict__:
             doc = copy.deepcopy(self.doc)
             planted = []
             for i, ln in enumerate(doc["pages"][0]["lines"]):
@@ -226,7 +228,7 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
         self.assertEqual(judge.style("ABCDEF+LinLibertineT"), "")
 
 
-def _accent_case(tmp, name, page_line, read_line, preamble=""):
+def _accent_case(tmp, name, page_line, read_line, preamble="", route="render"):
     """one-line page set by pdflatex, read back as `read_line`; returns (res, judge output lines)"""
     d = os.path.join(tmp, name)
     os.makedirs(d)
@@ -258,6 +260,7 @@ def _accent_case(tmp, name, page_line, read_line, preamble=""):
 class JudgeAccents(unittest.TestCase):
     """An accent above a tight line box belongs to its base's line; a rendered accent the page has as ink only is
     measured against that ink (board 2103.01507 p118: MathPix's \\bar over the page's \\overline)."""
+    ROUTE = "render"
 
     @classmethod
     def setUpClass(cls):
@@ -268,20 +271,20 @@ class JudgeAccents(unittest.TestCase):
         cls.tmp.cleanup()
 
     def test_bar_pairs_clean(self):
-        res, out = _accent_case(self.tmp.name, "bar", "The mean value $\\bar{M}$ of the sample in question.",
-                                "The mean value \\(\\bar{M}\\) of the sample in question.")
+        res, out = _accent_case(self.tmp.name, "bar" + self.ROUTE, "The mean value $\\bar{M}$ of the sample in question.",
+                                "The mean value \\(\\bar{M}\\) of the sample in question.", route=self.ROUTE)
         self.assertTrue([ln for ln in out if ln.startswith("G L0 &#xaf; &#xaf; ")], "the macron pairs")
         self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["flagged"]), (0, 0, 0))
 
     def test_dropped_bar_leaves_the_page_macron_unpaired(self):
-        res, out = _accent_case(self.tmp.name, "nobar", "The mean value $\\bar{M}$ of the sample in question.",
-                                "The mean value \\(M\\) of the sample in question.")
+        res, out = _accent_case(self.tmp.name, "nobar" + self.ROUTE, "The mean value $\\bar{M}$ of the sample in question.",
+                                "The mean value \\(M\\) of the sample in question.", route=self.ROUTE)
         self.assertIn("U L0 A &#xaf;", out)
         self.assertGreaterEqual(res["a_unpaired"], 1)
 
     def test_bar_over_a_drawn_overline_is_measured_on_ink(self):
-        res, out = _accent_case(self.tmp.name, "over", "The mean value $\\overline{M}$ of the sample in question.",
-                                "The mean value \\(\\bar{M}\\) of the sample in question.")
+        res, out = _accent_case(self.tmp.name, "over" + self.ROUTE, "The mean value $\\overline{M}$ of the sample in question.",
+                                "The mean value \\(\\bar{M}\\) of the sample in question.", route=self.ROUTE)
         self.assertEqual(res["accents_on_ink"], 1)
         self.assertEqual(res["b_unpaired"], 0, "the rendered bar is not invented ink")
 
@@ -455,3 +458,32 @@ class JudgeT1(unittest.TestCase):
             self.assertEqual(res["unmappable"], 0)
             self.assertEqual(res["flagged"], 0, [l for l in out if l.startswith("G ") and l.split()[8] == "1"])
             self.assertEqual(res["b_unpaired"], 0, [l for l in out if l.startswith("U ")])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and os.path.exists(judge.INKCMP),
+                     "needs " + ", ".join(TOOLS) + " and build/inkcmp")
+class JudgeBornDigitalGlyph(JudgeBornDigital):
+    """The glyph-raster route (CONTRACT unit 5) on the same page: every assertion of the rendered route holds, and
+    the two routes flag the same glyphs of the planted reading."""
+    ROUTE = "glyph"
+
+    def test_routes_flag_the_same_glyphs(self):
+        _, _, rows = self.planted_run()
+        doc = copy.deepcopy(self.doc)
+        for ln, (old, new) in zip(doc["pages"][0]["lines"], self.planted_run()[0]):
+            ln["text"] = plant(ln["text"], old, new)
+        lj = os.path.join(self.tmp.name, "routes.lines.json")
+        with open(lj, "w") as fh:
+            json.dump(doc, fh)
+        os.makedirs(os.path.join(self.tmp.name, "routes"))
+        out = io.StringIO()
+        judge.judge(self.pdf, 1, lj, os.path.join(self.tmp.name, "routes"), out=out, route="render")
+        render = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ")]
+        self.assertEqual([r[1:5] + [r[8]] for r in rows], [r[1:5] + [r[8]] for r in render])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and os.path.exists(judge.INKCMP),
+                     "needs " + ", ".join(TOOLS) + " and build/inkcmp")
+class JudgeAccentsGlyph(JudgeAccents):
+    """the accent cases on the glyph-raster route: a bar over a drawn overline is measured on the page's ink"""
+    ROUTE = "glyph"
