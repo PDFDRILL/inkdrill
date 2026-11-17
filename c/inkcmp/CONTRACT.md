@@ -342,6 +342,23 @@ Notes:
   below v1 there (0.942/0.902, 0.859/0.857, 0.855/0.844); the price of not assuming one column.
 - Time: median 117 ms per page, max 146 ms (3500 px cap), of which `ic_space` is about 40 ms.
 
+**v2 on held-out 2** (drillgroup `results/heldout2-set.tsv`, f83e586, seed 20261118, 30 pages; it excludes the
+board set, held-out 1 and the development draws). Measured once, with v2 frozen at d028c8a, rendered at 300 dpi
+with the longer side at most 3500 px, and scored one to one at IoU >= 0.5:
+
+| stratum (pages) | truth | ours | matched | recall | precision |
+|---|---|---|---|---|---|
+| maths (8) | 311 | 319 | 263 | 0.846 | 0.824 |
+| german (5) | 174 | 195 | 140 | 0.805 | 0.718 |
+| two_column (6) | 651 | 654 | 617 | 0.948 | 0.943 |
+| table (5) | 671 | 464 | 410 | 0.611 | 0.884 |
+| scan (6, reported apart) | 364 | 582 | 237 | 0.651 | 0.407 |
+| born-digital (24) | 1807 | 1632 | 1430 | 0.791 | 0.876 |
+| all (30) | 2171 | 2214 | 1667 | 0.768 | 0.753 |
+
+Time: median 131 ms per page, max 148 ms. The YOLO route on these pages follows from gemma4-ee once its column
+version is frozen; until then there is no comparison.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.
