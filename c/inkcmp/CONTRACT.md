@@ -513,6 +513,15 @@ audit sets or the development documents). Result (`vecfig_set.py figure-set-9003
 - CM2526_exercises_08 p1 (5 lines): a header logo image and the page-wide rule under it make one figure with the
   header lines; 1807.03656 p4 (1 line).
 
+**Held out, attempt 3 (the last vector-only one), gate FAILED (2026-11-17).** Fixed and committed before the run
+(bbdc681): a cluster with no image whose area is >= 50% text lines is text (0.35 cost 2 development figures; 0.5 keeps
+26 of 30); a small image at the top of the page is a page element. Fresh set `figure-set-9004.tsv` (seed 9004,
+excluding the 9003 set). Result: 13 of 24 figures whole (54%), 25 body lines swallowed (1809.09528 p5: 17 lines with a
+figure and its caption; p1450-yosef p2: 8). Three held-out attempts failed, each on a different page kind; the idea
+changes (coordinator, 2026-11-17): figure regions come from a learned layout detector on every page, and the PDF's
+paths only refine its boxes. The vector harness stays (`vecfig.py`, `vecfig_set.py`, `figdraw.py`) as the record and
+as the refinement's measure.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
