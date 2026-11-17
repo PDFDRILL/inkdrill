@@ -23,7 +23,9 @@ import re
 import subprocess
 import sys
 
-ROWS = "--no-rows" not in sys.argv              # attempt 3: panels in one row are one figure
+ROWS = "--no-rows" not in sys.argv              # panels in one row are one figure
+BLOCK = "--no-block" not in sys.argv            # held-out attempt 2: a line of a text block is no label
+FRAMED = "--framed" in sys.argv                 # held-out attempt 2b: framed text is not a figure
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INKCMP = os.path.join(ROOT, "build", "inkcmp")
 LIBROOT = os.environ.get("LINES_AUDIT_LIB", os.path.expanduser("~/pdfdrill-library"))
@@ -63,9 +65,13 @@ def cluster(boxes, tol):
     return list(g.values())
 
 
-def paths_of(pdf, n):
+def img_inside(c, b):
+    return c[0] - 1 <= b[0] and b[2] <= c[2] + 1 and c[1] - 1 <= b[1] and b[3] <= c[3] + 1
+
+
+def paths_of(pdf, n, with_images=False):
     tr = subprocess.run(["mutool", "trace", pdf, str(n)], capture_output=True, text=True).stdout
-    out, cur, kind, M = [], None, None, None
+    out, cur, kind, M, images = [], None, None, None, []
     for m in PATH.finditer(tr):
         if m[1]:
             kind, M = m[1], [float(v) for v in m[2].split()]
@@ -75,6 +81,7 @@ def paths_of(pdf, n):
                 xs = [M[4], M[0] + M[4], M[2] + M[4], M[0] + M[2] + M[4]]
                 ys = [M[5], M[1] + M[5], M[3] + M[5], M[1] + M[3] + M[5]]
                 out.append((min(xs), min(ys), max(xs), max(ys)))
+                images.append(out[-1])
         elif m[3] and cur is not None:
             v = [float(x.split("=")[1].strip('"')) for x in m[4].split()]
             for i in range(0, len(v), 2):
@@ -84,7 +91,7 @@ def paths_of(pdf, n):
                 xs, ys = [p[0] for p in cur], [p[1] for p in cur]
                 out.append((min(xs), min(ys), max(xs), max(ys)))
             cur = None
-    return out
+    return (out, images) if with_images else out
 
 
 def main():
@@ -115,7 +122,9 @@ def measure(doc, tol=12.0, sel=None, folder=None):
         m = re.search(r"Page\s+%d CropBox:\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)" % n, info)
         wpt = float(m[3]) - float(m[1]) if m else 612.0
         k = W / wpt
-        pth = [tuple(v * k for v in b) for b in paths_of(pdf, n)]
+        raw, imgs_pt = paths_of(pdf, n, with_images=True)
+        pth = [tuple(v * k for v in b) for b in raw]
+        imgs = [tuple(v * k for v in b) for b in imgs_pt]
         pth = [b for b in pth if not (b[2] - b[0] > 0.9 * W and b[3] - b[1] > 0.9 * H)]
         pgm = subprocess.run(["gs", "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=pgmraw", "-r%.3f" % (k * 72),
                               "-dUseCropBox", f"-dFirstPage={n}", f"-dLastPage={n}", "-sOutputFile=%stdout", pdf],
@@ -126,6 +135,16 @@ def measure(doc, tol=12.0, sel=None, folder=None):
         ink = [(f[0], (int(f[1]) * sx, int(f[2]) * sy, int(f[3]) * sx, int(f[4]) * sy)) for f in
                (ln.split() for ln in out[1:-1])]
         labels = [b for t, b in ink if t in ("text", "math", "equation_number")]
+        lh = sorted(b[3] - b[1] for t, b in ink if t == "text")[len([1 for t, _ in ink if t == "text"]) // 2] \
+            if any(t == "text" for t, _ in ink) else 30
+
+        def in_block(b):
+            """a line with a neighbour line directly above or below it and nearly the same left edge: part of a text
+            block (body, an author block, a prompt), claimed by it, never a label"""
+            return any(t == "text" and c is not b and abs(c[0] - b[0]) <= 0.5 * lh
+                       and (0 <= c[1] - b[3] <= 1.0 * lh or 0 <= b[1] - c[3] <= 1.0 * lh) for t, c in ink)
+        if BLOCK:
+            labels = [b for b in labels if not in_block(b)]
         T = tol * k
         cand = [c for c in cluster(pth, T) if c[2] - c[0] >= 30 * k and c[3] - c[1] >= 30 * k]
         def subcap(c):
@@ -148,6 +167,13 @@ def measure(doc, tol=12.0, sel=None, folder=None):
                         break
                 if merged:
                     break
+        if FRAMED:                                   # a frame around text lines is text: few paths, no image, and
+            def framed(c):                           # three text lines or more inside
+                inside = [b for t, b in ink if t == "text" and c[0] <= (b[0] + b[2]) / 2 <= c[2]
+                          and c[1] <= (b[1] + b[3]) / 2 <= c[3]]
+                np_ = sum(1 for b in pth if c[0] - 1 <= b[0] and b[2] <= c[2] + 1 and c[1] - 1 <= b[1] and b[3] <= c[3] + 1)
+                return len(inside) >= 3 and np_ <= 6 and not any(img_inside(c, b) for b in imgs)
+            cand = [c for c in cand if not framed(c)]
         figs = []
         for c in cand:
             taken = set()
