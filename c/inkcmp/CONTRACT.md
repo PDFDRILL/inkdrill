@@ -487,6 +487,20 @@ p3), text figures whose only drawing is a few rules (2312.11532 p3, p4), and eve
 drawing -- a scan page is one image). Next: the same three documents through inkcmp lines with this as its figure
 source on born-digital pages, so T-0154 D is measured on inkcmp's own output, then the C port.
 
+**Held out, gate FAILED (2026-11-17; coordinator's gate: >= 80% whole, 0 body lines swallowed).** `tools/lines-audit/
+vecfig_set.py audit-confirm-set.tsv 20` -- the first 20 rows of the confirm set (seed 9002, never used for figures)
+whose MathPix page has a diagram or chart, the rule fixed before the run: 18 of 28 figures whole (64%), 17 body lines
+swallowed. My selection let one scan in (lib:651638b87560 p4, a page-size image and an OCR layer); without it 18 of 26
+(69%). The failures by cause:
+- labels swallowing body text (2 pages, 17 lines): 1610.09935 p1 -- a filled background panel behind the figure widens
+  the cluster and the narrow author-block lines beside it pass the width bound; 2410.19056v1 p2 -- a rule-framed text
+  box (a prompt) is a cluster whose labels grow past MathPix's figure. The width bound alone does not tell a label
+  from a short body line.
+- no drawing at all (2 pages, 3 figures): 2303.13542v1 p7, lib:ba6e286cc422 p2 -- the whole page is one text object,
+  its figures drawn with glyphs (Type 3): the known glyph-only gap, now seen on held-out pages.
+- partly found (marx19a p7, entropy-23-01195-v2 p7, lib:6060cf21fa3a p4): not yet looked at.
+So the sub-caption and width rules were fitted to the three development documents; it is not inkcmp's figure source.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

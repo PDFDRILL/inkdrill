@@ -90,13 +90,23 @@ def paths_of(pdf, n):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     doc, tol = args[0], float(args[1]) if len(args) > 1 else 12.0
-    lib = os.path.join(LIBROOT, doc)
-    pdf, mp = os.path.join(lib, doc + ".pdf"), json.load(open(os.path.join(lib, doc + ".lines.json")))
     rng = next((a.split("=")[1] for a in sys.argv if a.startswith("--pages=")), None)
-    pages = mp["pages"]
+    sel = None
     if rng:
         lo, hi = map(int, rng.split("-"))
-        pages = [p for p in pages if lo <= p["page"] <= hi]
+        sel = range(lo, hi + 1)
+    hit5, figs_n, swallowed, nopath = measure(doc, tol, sel)
+    print(f"{doc} TOL {tol}: MathPix figures with IoU >= 0.5: {hit5} of {figs_n}; body lines swallowed: {swallowed}; "
+          f"pages with text but no drawn path: {len(nopath)} {nopath[:12]}")
+
+
+def measure(doc, tol=12.0, sel=None, folder=None):
+    """-> (figures matched, MathPix figures, body lines swallowed, pages with text but no path); folder: the
+    library folder when it is not named like the document"""
+    lib = os.path.join(LIBROOT, folder or doc)
+    stem = os.path.basename(lib)
+    pdf, mp = os.path.join(lib, stem + ".pdf"), json.load(open(os.path.join(lib, stem + ".lines.json")))
+    pages = [p for p in mp["pages"] if sel is None or p["page"] in sel]
     figs_n = hit5 = swallowed = 0
     nopath = []
     for pg in pages:
@@ -176,8 +186,7 @@ def main():
                 print(f"p{n} SWALLOWED body line {ln.get('text', '')[:40]!r}")
         if not pth and labels:
             nopath.append(n)
-    print(f"{doc} TOL {tol}: MathPix figures with IoU >= 0.5: {hit5} of {figs_n}; body lines swallowed: {swallowed}; "
-          f"pages with text but no drawn path: {len(nopath)} {nopath[:12]}")
+    return hit5, figs_n, swallowed, nopath
 
 
 if __name__ == "__main__":
