@@ -447,6 +447,24 @@ Single-column documents: Killing 0.931/0.901, Hilbert 0.873/0.853, Penev 0.857/0
 line, with no `math` and no `diagram`, and m stays at the text's line height. Requiring a rule to be thin at every
 position fails it.
 
+**v4 on held-out 4** (drillgroup `results/heldout4-set.tsv`, fca0834, 86 pages from seeds 20261120/21/22; it
+excludes the board set, held-out 1-3 and the development draws). Measured once, with v4 frozen at 0f26ea3:
+
+| stratum (pages) | truth | ours | matched | recall | precision | dev (v4) |
+|---|---|---|---|---|---|---|
+| maths (24) | 910 | 936 | 807 | 0.887 | 0.862 | 0.919 / 0.899 |
+| german (15) | 828 | 704 | 568 | 0.686 | 0.807 | 0.749 / 0.778 |
+| two_column (18) | 1746 | 1693 | 1443 | 0.826 | 0.852 | 0.882 / 0.819 |
+| table (15) | 1902 | 1553 | 1103 | 0.580 | 0.710 | 0.741 / 0.799 |
+| scan (14, reported apart) | 709 | 855 | 400 | 0.564 | 0.468 | 0.626 / 0.559 |
+| born-digital (72) | 5386 | 4886 | 3921 | 0.728 | 0.802 | 0.800 / 0.816 |
+| all (86) | 6095 | 5741 | 4321 | 0.709 | 0.753 | 0.775 / 0.774 |
+
+Time: median 142 ms per page, max 320 ms.
+- Held-out recall is 3-16 points below dev recall, in every stratum. The dev figures are optimistic by about that much,
+  and tables most of all.
+- The YOLO route on these pages comes from gemma4-ee; the gate waits for it.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.
