@@ -386,6 +386,35 @@ shapes.
 Gate as set ("same findings", median <= 1 s): the findings part corrected -- exact equality cannot hold by
 construction (the render route measures window ink at poppler positions); the time part FAILS.
 
+**Rule 6, the judge's time (2026-11-17, before any several-day step).** State: glyph route, board's 42 judge jobs,
+batch, 1.6-1.7 CPU s/page (load 9-16); 4 processes in parallel 1.45 pages/s (the minimum, 1 page/s on 4 cores, holds;
+the target, 1 CPU s/page, does not). CPU of a median page: pdflatex 0.6, Python 0.6, inkcmp 0.4, mutool 0.3, poppler 0.2.
+1. What others do (from knowledge, figures not re-checked): CDM (Character Detection Matching, 2024) renders both the
+   predicted and the reference formula with LaTeX and matches detected characters (F1); im2latex scoring (Deng et al.
+   2017) renders with pdflatex and compares images; OmniDocBench and olmOCR-bench score text by normalised edit
+   distance, formulas by CDM, tables by TEDS -- none judges a page by its own ink without typesetting the reading
+   again; MathPix publishes edit-distance numbers against reference text. All that render use TeX, at seconds per
+   formula, not per page.
+2. Alternative A (coordinator's): set the reading without pdflatex, with the page's own embedded programs (U9 has the
+   outlines): each reading character -> the page font's glyph for it (ToUnicode/encoding reversed), advanced by
+   /Widths, from the line's first glyph origin. Mechanism: equal characters give the page's own glyph at the page's
+   own advance, so the XOR is exactly 0 there; a wrong character gives another glyph of the same font.
+3. Its limit, measured now: formula lines are 21% of the lines (436 of 2115, MathPix) but carry 59% of the flags (6224
+   of 10501 flagged pairs); maths needs TeX's layout, so pdflatex stays on 22 of 30 pages (21 of 24 for ours) unless
+   maths is set too. And style findings (lost italic/bold) need a font the page may not embed.
+4. Alternative B: the text side (pairing, owners, origins, rules) in C, beside inkcmp glyphs: Python 0.6 -> ~0.05.
+5. Alternative C: pdflatex kept, run once per board run for all pages (the batch does this per preamble group);
+   its content work, not start-up, is what remains (0.4-0.6 per page at load).
+6. Cheapest experiment for A, hours: on the 8 MathPix board pages without formula lines, set the text lines from the
+   page's fonts in Python + inkcmp glyphs and compare findings with the pdflatex route (flags, unpaired, style);
+   wrong if findings differ on more than 1% of pairs or the setter needs more than 0.1 CPU s/page.
+7. Cheapest experiment for B: port the pairing (difflib) alone and time it; wrong if Python's share does not fall by
+   at least half.
+8. Expected board change: none in the residual column (same findings), seconds per page -0.4 (A, text pages only),
+   -0.5 (B, every page).
+9. Order proposed: B first (every page, no semantic change), A only if B leaves the target missed on text pages.
+10. Not done yet: any of them.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
