@@ -483,6 +483,40 @@ document.
 
 In the comparison with YOLO these two pages are also reported apart.
 
+**Second development set (2026-11-17).** It was drawn after held-out 4 showed the first development set 3-16
+points optimistic.
+- `work/run-files/lines-dev2/dev2.tsv`: seeds 7201/7202/7203, chained exclusions of the board, held-out 1-4 and
+  the first development draws.
+- Scan rows are dropped (the coordinator keeps the remaining scan documents for the next held-out), which leaves 64
+  pages: maths 24, two-column 18, table 15, German 7.
+- v4 measures 0.635 / 0.760 on it, below its held-out 4 result: a fresh set predicts held-out again.
+
+**v5 (2026-11-17, `inkcmp lines` now)**, developed on the second development set:
+- **Threshold.** A rendered page of few grey levels has a flat Otsu maximum: every split in the empty gap between ink
+  and paper scores the same. v4 took the first one, which sat at the text's own grey (a table page of black rules
+  and grey-35 text: threshold 30, and 2 lines out of 283). v5 takes the middle of the flat range.
+- **Ruled cells.** Erased vertical rules that span a band and are >= 3 lh long are cell boundaries. Pieces end
+  there, and pieces of a row never join across them. With shorter rules, Penev's scans lost precision 0.819 ->
+  0.667, through brackets and tall strokes taken for rules.
+- **Tried and not taken:** a smaller piece gap (1.0 or 0.7 lh) with narrower separators (0.6 or 0.4 lh). Table recall
+  rose a little, but maths and two-column precision fell. Booktabs-style tables, separated by white space alone,
+  need a table region first.
+
+| version | set | maths | german | two_column | table | scan | all |
+|---|---|---|---|---|---|---|---|
+| v4 | dev2 (64) | 0.864 / 0.810 | 0.422 / 0.527 | 0.741 / 0.748 | 0.468 / 0.785 | - | 0.635 / 0.760 |
+| v5 | dev2 (64) | 0.889 / 0.809 | 0.475 / 0.559 | 0.841 / 0.779 | 0.585 / 0.810 | - | 0.725 / 0.783 |
+| v4 | dev1 (90) | 0.919 / 0.899 | 0.749 / 0.778 | 0.882 / 0.819 | 0.741 / 0.799 | 0.626 / 0.559 | 0.775 / 0.774 |
+| v5 | dev1 (90) | 0.919 / 0.895 | 0.752 / 0.779 | 0.885 / 0.807 | 0.752 / 0.789 | 0.632 / 0.554 | 0.782 / 0.766 |
+
+Single-column documents: Killing 0.930/0.894, Hilbert 0.873/0.853, Penev 0.860/0.817. Time: median about 170 ms,
+max 380 ms per page; the machine was also running other work.
+
+New tests:
+- L6: a ruled table with 2 pt column separation; all 36 cells are lines. Taking the cut out of pieces fails it.
+- L7: the L1 page in three grey levels (text 35, paper 255, a black frame) gives the same 12 text lines as in black
+  and white. Taking the first Otsu maximum fails it (0 lines).
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.

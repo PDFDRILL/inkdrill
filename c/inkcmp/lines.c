@@ -68,13 +68,20 @@ static uint32_t auto_threshold(const uint8_t *g, size_t n) {
   for (size_t i = 0; i < n; i++) hist[g[i]] += 1;
   double tot = 0, N = (double)n;
   for (int i = 0; i < 256; i++) tot += i * hist[i];
-  double wb = 0, sb = 0, best = 0; int t = 0;
+  double wb = 0, sb = 0, best = 0, var[256] = {0}; int t = 0;
   for (int i = 0; i < 256; i++) {
     wb += hist[i];
     if (wb == 0 || wb == N) continue;
     sb += i * hist[i];
     double mb = sb / wb, mf = (tot - sb) / (N - wb), v = wb * (N - wb) * (mb - mf) * (mb - mf);
+    var[i] = v;
     if (v > best) { best = v; t = i; }
+  }
+  {   /* a page of few grey levels (a rendered PDF) has a flat maximum: every split in the empty gap between ink and
+         paper is equally good. Take the middle of that range, not its first value, which sits at the ink. */
+    int lo = t, hi = t;
+    while (hi + 1 < 256 && var[hi + 1] >= best * (1 - 1e-9)) hi++;
+    t = (lo + hi) / 2;
   }
   if (t <= 1) return 128;
   double s = 0, c = 0;
@@ -175,11 +182,29 @@ static int tight(const uint8_t *ink, uint32_t w, int32_t x0, int32_t y0, int32_t
 
 /* step 3: a blocks line cut at white column runs >= need; a column is ink when PIL's box average of the band's
    column rounds to > 0, i.e. count * 255 / h >= 0.5 */
-static int pieces_of(const uint8_t *ink, uint32_t w, Box r, uint32_t need, Boxes *out) {
+/* does an erased table rule (>= 3 lh long) span rows [y0, y1) at a column in [x0, x1)? */
+static int ruled(const Boxes *vr, int32_t x0, int32_t x1, int32_t y0, int32_t y1, double lh) {
+  for (size_t k = 0; k < vr->n; k++) {
+    const Box *v = &vr->b[k];
+    if (v->x1 <= x0 || v->x0 >= x1 || v->y1 - v->y0 < 3 * lh) continue;
+    if (v->y0 <= y0 && v->y1 >= y1) return 1;
+  }
+  return 0;
+}
+
+static int pieces_of(const uint8_t *ink, uint32_t w, Box r, uint32_t need, double lhc, const Boxes *vr, Boxes *out) {
   int32_t bw = r.x1 - r.x0, bh = r.y1 - r.y0;
   if (bw <= 0 || bh <= 0) return 1;
   uint32_t *cnt = calloc((size_t)bw, sizeof *cnt);
-  if (!cnt) return 0;
+  uint8_t *cut = calloc((size_t)bw, 1);
+  if (!cnt || !cut) { free(cnt); free(cut); return 0; }
+  for (size_t k = 0; k < vr->n; k++) {               /* an erased vertical rule through the band is a cell boundary */
+    const Box *v = &vr->b[k];
+    if (v->x1 <= r.x0 || v->x0 >= r.x1) continue;
+    int32_t ov = (v->y1 < r.y1 ? v->y1 : r.y1) - (v->y0 > r.y0 ? v->y0 : r.y0);
+    if (ov < bh || v->y1 - v->y0 < 3 * lhc) continue;    /* a table's rule: spans the band and >= 3 lh */
+    for (int32_t x = v->x0 > r.x0 ? v->x0 : r.x0; x < v->x1 && x < r.x1; x++) cut[x - r.x0] = 1;
+  }
   for (int32_t y = r.y0; y < r.y1; y++) {
     const uint8_t *row = ink + (size_t)y * w + r.x0;
     for (int32_t x = 0; x < bw; x++) cnt[x] += row[x];
@@ -187,18 +212,21 @@ static int pieces_of(const uint8_t *ink, uint32_t w, Box r, uint32_t need, Boxes
   int32_t start = -1, end = 0; uint32_t white = 0;
   for (int32_t i = 0; i < bw + (int32_t)need; i++) {
     int on = i < bw && (double)cnt[i] * 255.0 / bh >= 0.5;
-    if (on) {
+    int hardcut = i < bw && cut[i];
+    if (on && !hardcut) {
       if (start < 0) start = i;
       white = 0; end = i + 1;
     } else if (start >= 0) {
-      if (++white >= need) {
+      if (hardcut) white = need;                     /* end the piece here */
+      else white++;
+      if (white >= need) {
         Box t;
-        if (tight(ink, w, r.x0 + start, r.y0, r.x0 + end, r.y1, &t) && !push(out, t)) { free(cnt); return 0; }
+        if (tight(ink, w, r.x0 + start, r.y0, r.x0 + end, r.y1, &t) && !push(out, t)) { free(cnt); free(cut); return 0; }
         start = -1;
       }
     }
   }
-  free(cnt);
+  free(cnt); free(cut);
   return 1;
 }
 
@@ -287,7 +315,7 @@ static int emit(IcLines *o, size_t *cap, Box b, int type) {
    a vertical white separator of unit 3 lies in the gap (a gutter, a table's column gap); equation numbers and
    page_info never join. Display pieces that overlap in x and lie < 0.5 lh apart become one display. */
 static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, const IcRect *vs, size_t nvs,
-                    IcLines *o) {
+                 const Boxes *vr, IcLines *o) {
   size_t cap = 0, n = lines->n;
   const Box *b = lines->b;
   int *type = calloc(n ? n : 1, sizeof *type);
@@ -381,6 +409,7 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
         int sep = 0;
         for (size_t v = 0; v < nvs && !sep; v++)
           sep = (int32_t)vs[v].x0 >= g0 - 1 && (int32_t)vs[v].x1 <= g1 + 1 && (int32_t)vs[v].y0 <= y0 && (int32_t)vs[v].y1 >= y1;
+        if (!sep) sep = ruled(vr, g0, g1, y0, y1, lh);
         if (sep) break;
         if (bb[nx].x1 > bb[i].x1) bb[i].x1 = bb[nx].x1;
         if (bb[nx].y0 < bb[i].y0) bb[i].y0 = bb[nx].y0;
@@ -439,7 +468,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->threshold = th;
   uint8_t *ink = malloc(N);
   Runs r = {0}; Box *cb = NULL;
-  Boxes pcs = {0}, kept = {0}, figs = {0}, fin = {0};
+  Boxes vrules = {0}, pcs = {0}, kept = {0}, figs = {0}, fin = {0};
   int32_t *hv = NULL;
   double hv_med = 10;
   GD3Blocks B; int have_b = 0;
@@ -514,11 +543,14 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
             for (uint32_t xx = x + 1; xx < W && ink[(size_t)my * W + xx] && tq <= thin; xx++) tq++;
             nthin += tq <= thin;
           }
-          if (2 * nthin >= y - a)
+          if (2 * nthin >= y - a) {
             for (uint32_t yy = a; yy < y; yy++) {
               er[(size_t)yy * W + x] = 1;
               if (x + 1 < W) er[(size_t)yy * W + x + 1] = 1;
             }
+            Box vr = {(int32_t)x, (int32_t)a, (int32_t)x + 2, (int32_t)y};   /* a cell boundary from here on */
+            if (!push(&vrules, vr)) { free(er); goto done; }
+          }
         }
       }
 #undef INK2H
@@ -537,7 +569,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
     const GD3BPara *P = &B.para[p];
     for (uint32_t l = P->first_line; l < P->first_line + P->nlines; l++) {
       Box b = {(int32_t)B.line[l].x0, (int32_t)B.line[l].y0, (int32_t)B.line[l].x1, (int32_t)B.line[l].y1};
-      if (!pieces_of(ink, W, b, need, &pcs)) goto done;
+      if (!pieces_of(ink, W, b, need, lh, &vrules, &pcs)) goto done;
     }
   }
   /* step 4: m, clip, specks */
@@ -590,7 +622,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   IcPage pg = {W, H, r.row_start, r.rs, r.nrun};
   IcSpaceParams sp; ic_space_defaults(&sp); sp.max_sep = 1024;
   if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) goto done;
-  int okt = typed(&fin, &figs, H, lh, S.vsep, S.nvsep, out);
+  int okt = typed(&fin, &figs, H, lh, S.vsep, S.nvsep, &vrules, out);
   ic_space_free(&S);
   if (!okt) goto done;
   ok = 1;
@@ -598,7 +630,7 @@ done:
   free(ink); free(cb); free(hv);
   runs_free(&r);
   if (have_b) gd3_blocks_free(&B);
-  free(pcs.b); free(kept.b); free(figs.b); free(fin.b);
+  free(vrules.b); free(pcs.b); free(kept.b); free(figs.b); free(fin.b);
   if (!ok) { ic_lines_free(out); return 5; }
   return 0;
 }

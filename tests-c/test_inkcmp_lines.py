@@ -209,6 +209,49 @@ def test_L5_ruled_table_cells_and_line_height(page):
     return len(cells)
 
 
+TIGHT = r"""\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\setlength{\tabcolsep}{2pt}
+\begin{document}
+\noindent A ruled table with tight cells: the gap beside a vertical rule is far below a line height, so only the
+rule itself separates the cells.
+
+\begin{center}\begin{tabular}{|c|c|c|c|c|c|}\hline
+""" + "\n".join(" & ".join("v%d%d" % (k, j) for j in range(1, 7)) + " \\\\ \\hline" for k in range(1, 7)) + r"""
+\end{tabular}\end{center}
+\end{document}
+"""
+
+
+def test_L6_tight_ruled_cells_split_at_their_rules(page):
+    pg, lines, words = make_page(TIGHT)
+    got = [b for t, b in lines_of(pg) if t != "page_info"]
+    cells = [b for b, w in words if re.fullmatch(r"v[1-6][1-6]", w)]
+    assert len(cells) == 36, len(cells)
+    for c in cells:
+        assert max(iou(c, b) for b in got) >= 0.5, c
+    return len(cells)
+
+
+def test_L7_few_grey_levels_threshold(page):
+    """A rendered page of three grey levels (text 35, paper 255, a black frame 0) reads like the same page in black and
+    white: Otsu's flat maximum is split in its middle, not at the text's grey."""
+    pg, _, _ = page
+    w, h, px = parse_pgm(pg)
+    bw = bytes(0 if v < 128 else 255 for v in px)
+    grey = bytearray(35 if v < 128 else 255 for v in px)
+    for x in range(20, w - 20):
+        for y in (20, 21, 22, h - 23, h - 22, h - 21):
+            grey[y * w + x] = 0
+    head = b"P5\n%d %d\n255\n" % (w, h)
+    a = [b for t, b in lines_of(head + bw) if t == "text"]
+    b = [b for t, b in lines_of(head + bytes(grey)) if t == "text"]
+    assert len(a) >= 10 and len(b) == len(a), (len(a), len(b))
+    for x in a:
+        assert max(iou(x, y) for y in b) >= 0.9, x
+    return len(a)
+
+
 def test_L4_two_columns_are_read_apart(page):
     pg, lines, _ = make_page(TWOCOL)
     w = int(re.match(rb"P5\s+(?:#[^\n]*\n\s*)*(\d+)", pg)[1])
