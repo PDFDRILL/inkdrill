@@ -277,15 +277,31 @@ def pgms(pdf: str, pages: list, dpi: int, wd: str) -> dict:
     return out
 
 
-def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec") -> tuple:
+class PageInk:
+    """the original's 400-dpi render, made once and only when something reads it (a formula line's rules, an A
+    side with no outline, an accent the page drew as a rule): 0.15-0.27 CPU s, and some pages need none"""
+    def __init__(self, a_pdf: str, pno: int, wd: str):
+        self.a_pdf, self.pno, self.wd, self.v = a_pdf, pno, wd, None
+
+    def get(self) -> tuple:
+        if self.v is None:
+            aw, ah, ab = pgm(self.a_pdf, self.pno, DPI)
+            a400 = os.path.join(self.wd, "a400.pgm")
+            pgm_write(a400, aw, ah, ab)
+            self.v = (aw, ah, ab, a400)
+        return self.v
+
+
+def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec", render: bool) -> tuple:
     """what the glyph route needs of the original alone (it runs while pdflatex sets the reading): its font programs,
-    its traced glyphs (at the specification's origins), and its 400-dpi render"""
+    its traced glyphs (at the specification's origins), and -- when a formula line will read it -- its 400-dpi
+    render"""
     FA = Fonts(a_pdf, os.path.join(wd, "fontsA"), 0, extract=False)
     TA = Origins(spec.traced(pno, trace(a_pdf, pno, pno, spec.trace_text).get(pno, [])))
-    aw, ah, ab = pgm(a_pdf, pno, DPI)
-    a400 = os.path.join(wd, "a400.pgm")
-    pgm_write(a400, aw, ah, ab)
-    return FA, TA, (aw, ah, ab), a400
+    ink = PageInk(a_pdf, pno, wd)
+    if render:
+        ink.get()
+    return FA, TA, ink
 
 
 def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res, bo: int = 0) -> tuple:
@@ -293,7 +309,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
     font, an accent the page drew as a rule) is the page's own ink from one 400-dpi render. Also returns that render
     and the 400-dpi renders of the snippet pages the formula lines' rule comparison reads."""
-    FA, TA, (aw, ah, ab), a400 = side_a
+    FA, TA, ink = side_a
     FB, tb = side_b
     need = [bo + i + 1 for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs]
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -346,11 +362,12 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                     adds.append(("B", FB.find(g[4]), g[1], tuple(v * S for v in g[5]), q[1] * S + dx, q[2] * S + dy))
             jobs.append((sa, sb, win, adds))
             keys.append(((i, k), len(jobs) - 1))
-    r, _ = glyph_job([FA, FB], jobs, a400)
+    need = any(j[0] is None for j in jobs)        # an A side that is the page's ink from the start
+    r, _ = glyph_job([FA, FB], jobs, ink.get()[3] if need else None)
     redo = [j for j, v in enumerate(r) if isinstance(v, str) and v.startswith("A")]
     if redo:                                         # the page's ink where A's own program has no outline
         r2, _ = glyph_job([FA, FB], [(None, jobs[j][1], jobs[j][2], [a for a in jobs[j][3] if a[0] == "B"])
-                                     for j in redo], a400)
+                                     for j in redo], ink.get()[3])
         for j, v in zip(redo, r2):
             r[j] = v
         res["a_page_ink"] += len(redo)
@@ -359,7 +376,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
         scores[key] = r[j]
     bp = bjob.result() if bjob else {}
     pool.shutdown()
-    return scores, (aw, ah, ab, a400), {p - 1 - bo: v for p, v in bp.items()}
+    return scores, ink, {p - 1 - bo: v for p, v in bp.items()}
 
 
 class Spec:
@@ -1002,7 +1019,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             fut = pool.submit(comp, [ln["text"] for ln in lv], sizes, pre, wd)
-            side_a = glyph_side_a(a_pdf, pno, wd, spec_a)
+            side_a = memo(("side_a", a_pdf, pno), glyph_side_a, a_pdf, pno, wd, spec_a,   # once per batch page
+                          any(is_formula(ln) for ln in lv))
             bpdf, failed, dropped, bo = fut.result()
     else:
         bpdf, failed, dropped, bo = comp([ln["text"] for ln in lv], sizes, pre, wd)
@@ -1129,7 +1147,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         scores, page400, bpages = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res, bo)
     stages = {}
     if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
-        aw, ah, ab, a400 = page400                  # a first pass collects the requests, the second reads them
+        aw, ah, ab, a400 = page400.get() if any(is_formula(w[1]) and w[5] for w in work) else (0, 0, b"", "")
+        # a first pass collects the requests, the second reads them
         reqs, where = [], {}
 
         def collect(i):
@@ -1166,7 +1185,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                     res["flagged"] += 1
                     res["style" if sa != sb else "glyph"] += 1
             if is_formula(ln) and pairs:
-                aw, ah, ab, _ = page400
+                aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
                          glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i])
             continue
