@@ -356,8 +356,26 @@ with the longer side at most 3500 px, and scored one to one at IoU >= 0.5:
 | born-digital (24) | 1807 | 1632 | 1430 | 0.791 | 0.876 |
 | all (30) | 2171 | 2214 | 1667 | 0.768 | 0.753 |
 
-Time: median 131 ms per page, max 148 ms. The YOLO route on these pages follows from gemma4-ee once its column
-version is frozen; until then there is no comparison.
+Time: median 131 ms per page, max 148 ms.
+
+**The YOLO route on held-out 2** (Gemma4 c974575, gemma_lines 1db2059 column-aware, `testpool/heldout2/*.sane.lines.json`,
+read once). Scored with the same one-to-one scorer, my numbers equal gemma4-ee's. One scan page has no file
+(Gemma's reading failed) and counts as 0 of its 75 lines.
+
+| stratum | YOLO+Gemma | blob v2 (d028c8a) | gate (within 2 points or ahead) |
+|---|---|---|---|
+| maths | 0.939 / 0.933 | 0.846 / 0.824 | **fails** (-9.3 / -10.9) |
+| german | 0.793 / 0.831 | 0.805 / 0.718 | **fails** on precision (-11.3) |
+| two_column | 0.940 / 0.942 | 0.948 / 0.943 | passes |
+| table | 0.379 / 0.462 | 0.611 / 0.884 | passes |
+| scan | 0.283 / 0.360 | 0.651 / 0.407 | passes |
+| all | 0.644 / 0.712 | 0.768 / 0.753 | ahead |
+
+Time per page: YOLO + lines + sanitize 12.9 s, plus Gemma 83 s; blob v2 131 ms.
+
+**Gate on held-out 2: failed** on maths and German. The cost of v2's column-agnostic typing on maths pages showed
+on the development set too (v1 0.918/0.905 -> v2 0.893/0.841), and v2 does not win it back. The next version
+works on that, on the development draws only.
 
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
