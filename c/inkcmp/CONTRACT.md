@@ -279,6 +279,23 @@ was negative. Each original glyph now belongs to the smallest leaf box that hold
 unchanged. Test: a reading with one line boxed twice pairs no more glyphs than the page has, nor more than the
 clean reading. Pairing per box fails it.
 
+**Accents (2026-11-17, rule 4; found by pdfdrill-a2 on 2103.01507 p118).**
+1. An accent glyph above a tight line box (`\bar{M}`: the macron at 201-202 px, the box from 203) belonged to no
+   line and was unpaired on both sides. An unowned accent (macron, hat, tilde, dot, dieresis, caron, breve, ring,
+   vector arrow, combining marks) now belongs to the line of the nearest owned glyph directly below it, within one
+   glyph height.
+2. On that board page there is no macron glyph at all: it sets `\overline{M}`, a drawn rule, where MathPix wrote
+   `\bar{M}`. A rendered accent with no partner is now placed relative to its base's partner and XORed against the
+   page's ink there (`accents_on_ink`). The bar is measured, not counted as invented ink.
+   - MathPix p118: 26 rendered macrons, b_unpaired 36 -> 10. The 26 are now findings (solid 11, a real difference:
+     the overline is a longer rule at another height). The ink residual is unchanged; the classification is right.
+   - A reading that drops the accent still leaves the page's ink unmeasured (a rule) or the page's macron unpaired
+     (a glyph).
+- The line crop margin is 30 px at 400 dpi (was 7.5), so ink above a tight box is inside the crop. 040123 p2: G rows
+  unchanged.
+- Tests (JudgeAccents): `\bar{M}` read as `\bar{M}` pairs clean; read as `M`, the page's macron is unpaired;
+  `\overline{M}` read as `\bar{M}` gives accents_on_ink 1 and b_unpaired 0. Dropping either mechanism fails them.
+
 **Glyph rasteriser route (rule-6 step 7, scratch, 2026-11-17).** A's and B's glyphs come from their embedded
 Type 1 programs (`mutool extract`, U9 type1 -> charstring -> scan at 400 dpi, both at A's fractional origin), with no
 8x page render. On 040123 p2 (Type 1 only), against the 8x route: flags agree on 2856 of 2857 glyphs, and all 12 of

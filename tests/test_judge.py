@@ -224,3 +224,62 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
         self.assertEqual(judge.style("ABCDEF+LinLibertineTI"), "i")
         self.assertEqual(judge.style("ABCDEF+LinLibertineTB"), "b")
         self.assertEqual(judge.style("ABCDEF+LinLibertineT"), "")
+
+
+def _accent_case(tmp, name, page_line, read_line):
+    """one-line page set by pdflatex, read back as `read_line`; returns (res, judge output lines)"""
+    d = os.path.join(tmp, name)
+    os.makedirs(d)
+    with open(os.path.join(d, "page.tex"), "w") as fh:
+        fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm]{geometry}\n\\pagestyle{empty}\n"
+                 "\\begin{document}\n\\noindent " + page_line + "\n\\end{document}\n")
+    subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                   capture_output=True, check=True)
+    pdf = os.path.join(d, "page.pdf")
+    x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+    b = [tuple(float(v) for v in m) for m in WORD.findall(x)][0]
+    wpt, hpt = judge.page_size(pdf, 1)
+    k = 200 / 72
+    doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": [
+        {"type": "text", "text": read_line, "region": {"top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                                                      "width": int((b[2] - b[0]) * k) + 4,
+                                                      "height": int((b[3] - b[1]) * k) + 4}}]}]}
+    lj = os.path.join(d, "r.lines.json")
+    with open(lj, "w") as fh:
+        json.dump(doc, fh)
+    out = io.StringIO()
+    os.makedirs(os.path.join(d, "w"))
+    res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out)
+    return res, out.getvalue().splitlines()
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeAccents(unittest.TestCase):
+    """An accent above a tight line box belongs to its base's line; a rendered accent the page has as ink only is
+    measured against that ink (board 2103.01507 p118: MathPix's \\bar over the page's \\overline)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-acc-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_bar_pairs_clean(self):
+        res, out = _accent_case(self.tmp.name, "bar", "The mean value $\\bar{M}$ of the sample in question.",
+                                "The mean value \\(\\bar{M}\\) of the sample in question.")
+        self.assertTrue([ln for ln in out if ln.startswith("G L0 &#xaf; &#xaf; ")], "the macron pairs")
+        self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["flagged"]), (0, 0, 0))
+
+    def test_dropped_bar_leaves_the_page_macron_unpaired(self):
+        res, out = _accent_case(self.tmp.name, "nobar", "The mean value $\\bar{M}$ of the sample in question.",
+                                "The mean value \\(M\\) of the sample in question.")
+        self.assertIn("U L0 A &#xaf;", out)
+        self.assertGreaterEqual(res["a_unpaired"], 1)
+
+    def test_bar_over_a_drawn_overline_is_measured_on_ink(self):
+        res, out = _accent_case(self.tmp.name, "over", "The mean value $\\overline{M}$ of the sample in question.",
+                                "The mean value \\(\\bar{M}\\) of the sample in question.")
+        self.assertEqual(res["accents_on_ink"], 1)
+        self.assertEqual(res["b_unpaired"], 0, "the rendered bar is not invented ink")

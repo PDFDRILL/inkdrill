@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import collections
 import difflib
+import html
 import json
 import os
 import re
@@ -223,6 +224,15 @@ def latex_text(s: str) -> str:
     return "".join(out)
 
 
+ACCENTS = set("\u00af\u02c6\u02dc\u00b4\u0060\u02d9\u00a8\u02c7\u02d8\u02da\u02c9\u02ca\u02cb\u2192\u20d7\u007e\u005e")
+
+
+def is_accent(c: str) -> bool:
+    """a spacing or combining accent glyph as mutool reports it (entity-encoded or not)"""
+    c = html.unescape(c)
+    return len(c) == 1 and (c in ACCENTS or 0x0300 <= ord(c) <= 0x036f)
+
+
 LOGERR = re.compile(r"^! (.*)$")
 LOGLINE = re.compile(r"^l\.(\d+)")
 INPUTLINE = re.compile(r"on input line (\d+)")
@@ -247,7 +257,8 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 8) 
                      + "\n\\end{document}\n")
         subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
                        capture_output=True)
-        log = open(os.path.join(wd, "lines.log"), encoding="utf-8", errors="replace").read().splitlines()
+        with open(os.path.join(wd, "lines.log"), encoding="utf-8", errors="replace") as fh:
+            log = fh.read().splitlines()
         new, msg = {}, None
         for ln in log:
             m = LOGERR.match(ln)
@@ -302,7 +313,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     bpdf, failed = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
-                              unpaired_B=0)
+                              unpaired_B=0, accents_on_ink=0)
     b_total = 0                                     # rendered glyphs of the lines that typeset
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}", file=out)
     if len(bc) != len(lv):            # the document itself did not come out page for page: no line is trusted
@@ -322,6 +333,22 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
                 a = (b[2] - b[0]) * (b[3] - b[1])
                 if best is None or a < best[0]:
                     best = (a, li)
+        if best is not None:
+            owner[ci] = best[1]
+    # an accent above its base often lies above a tight line box (\bar{M}: the macron at 201-202 px, the box from
+    # 203): it belongs to the line of the nearest owned glyph directly below it, within one glyph height
+    for ci, c in enumerate(ac):
+        if ci in owner or not is_accent(c[0]):
+            continue
+        cx0, cy1, h = c[3], c[6], max(c[6] - c[4], 1.0)
+        best = None
+        for bi, d in enumerate(ac):
+            if bi not in owner or bi == ci or d[5] <= cx0 or d[3] >= c[5]:
+                continue                            # base glyphs overlapping the accent in x
+            gap = d[4] - cy1                        # base top below accent bottom (pt, y down)
+            dh = max(d[6] - d[4], 1.0)
+            if -0.5 * h <= gap <= dh and (best is None or gap < best[0]):
+                best = (gap, owner[bi])
         if best is not None:
             owner[ci] = best[1]
     for i, ln in enumerate(lv[:len(bc)]):
@@ -346,10 +373,33 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
                     print(f"U L{i} A {c[0]}", file=out)
                 for c in cb[b0:b1]:
                     print(f"U L{i} B {c[0]}", file=out)
+        # a rendered accent the page has as ink but not as a glyph (\overline drawn as a rule where the reading
+        # wrote \bar, board 2103.01507 p118): placed relative to its base's partner and XORed against the page's
+        # ink there, like any glyph. A reading that drops the accent still leaves the page's ink unpaired.
+        used_b = {id(q) for _, q in pairs}
+        for acc in cb:
+            if id(acc) in used_b or not is_accent(acc[0]):
+                continue
+            base = None
+            for pa, pbb in pairs:
+                if pbb[5] <= acc[3] or pbb[3] >= acc[5]:
+                    continue
+                gap = pbb[4] - acc[6]
+                if -0.5 * max(acc[6] - acc[4], 1.0) <= gap <= max(pbb[6] - pbb[4], 1.0) and (base is None or gap < base[0]):
+                    base = (gap, pa, pbb)
+            if base is None:
+                continue
+            _, pa, pbb = base
+            dx, dy = pa[1] - pbb[1], pa[2] - pbb[2]          # B frame -> A frame (pt)
+            pseudo = (acc[0], acc[1] + dx, acc[2] + dy, acc[3] + dx, acc[4] + dy, acc[5] + dx, acc[6] + dy, acc[7], acc[8])
+            pairs.append((pseudo, acc))
+            res["unpaired_B"] -= 1
+            res["accents_on_ink"] += 1
         res["lines"] += 1
         pw, ph, pb = pgm(bpdf, i + 1, DPI * UP)
-        cx0, cy0 = max(0, int(b[0]) * UP - 60), max(0, int(b[1]) * UP - 60)
-        aw, ah, ab = pgm(a_pdf, pno, DPI * UP, (cx0, cy0, int(b[2] - b[0]) * UP + 120, int(b[3] - b[1]) * UP + 120))
+        mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
+        cx0, cy0 = max(0, int(b[0]) * UP - mg), max(0, int(b[1]) * UP - mg)
+        aw, ah, ab = pgm(a_pdf, pno, DPI * UP, (cx0, cy0, int(b[2] - b[0]) * UP + 2 * mg, int(b[3] - b[1]) * UP + 2 * mg))
         for (t, ax, ay, qx0, qy0, qx1, qy1, fa, _), (tb, bx, by, _, _, _, _, fb, _) in pairs:
             X, Y = ax * S + OX, ay * S + OY             # A's origin on the 400 grid
             u, v = bx * S * UP, by * S * UP             # B's origin on the UP x 400 grid
@@ -376,7 +426,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> col
     # with nothing (outside any line, in an empty or uncompiled line, or skipped by the alignment) and every
     # rendered glyph with no partner
     res["a_glyphs"] = len(ac)
-    res["a_unpaired"] = len(ac) - res["glyphs"]
+    res["a_unpaired"] = len(ac) - (res["glyphs"] - res["accents_on_ink"])   # accents on ink pair no A glyph
     res["b_unpaired"] = b_total - res["glyphs"]
     print("JUDGE1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())), file=out)
     status = "OK" if res["glyphs"] else ("NOT_COMPILED" if res["not_compiled"] else "NO_TEXT")
