@@ -636,6 +636,26 @@ and speech bubbles inside a figure are stacked text lines too; and it does not r
 block inkcmp lines types as `math` displays, four centred lines merged into one record (y 386-547 at 250 dpi) -- an
 inkcmp lines defect of its own (centred short lines read as displays), now the next fix.
 
+**Author blocks typed as maths: two ideas failed, nothing committed (2026-11-17).** Red test
+`tools/lines-audit/redtests_authors.py` (every printed author line of MathPix's `authors` records has an inkcmp text
+record at IoU >= 0.5, no math record inside): 2304.03442 p1 2 of 24 (6 math records), 1805.01788 p1 8 of 12 (1) --
+RED, as committed. Cause: a centred author line is indented on both sides of the wider line near it, so step 6 types
+it a display, and stacked displays merge (four author lines one box). Board check of each try: old against new
+`inkcmp lines` on the 30 board pages with a MathPix reference, every changed record against MathPix's type there.
+1. A row of >= 2 boxes, each >= 4 lh wide, >= 4 lh apart, is text (author columns: 5.4 lh apart on 1805.01788,
+   8.5 lh on 2304.03442). Alone: both pages green, but 3 real displays on 1805.01788 p3 become text (a display
+   beside a line of the other page column). Guards tried for that: any tall white between the pieces (author columns
+   have it too: 2304 back to 2/24); step 3a's gutters only (2304.03442 has a 47.5 lh gutter through its author
+   block and figure: 2/24); no piece a body line (>= 80% of its reference's width): 2304 23/24, 1805 12/12, and on
+   the board one display on 1805.01788 p3 split by a paragraph's short last line in the other column.
+2. A centred stack (>= 3 boxes <= 0.5 lh apart, centres within 1 lh) is text: 2304 23/24, 1805 8/12, and 42 board
+   records changed, table cells and two displays on lib:17bb8765932c p30 among them. Fails.
+Both patches are kept outside git (work/run-files). Alternatives, for the coordinator: (a) the layout detector that
+already runs for figures has `plain text` and `isolate_formula` classes: a display candidate inside a `plain text`
+box and in no `isolate_formula` box is text -- couples step 6 to the detector's boxes; (b) for born-digital pages the
+text layer: a centred line whose characters are words is text -- inkcmp lines is ink-only, so this is a hint input;
+(c) position: centred lines between the title and the first body line of page 1.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
