@@ -377,6 +377,31 @@ Time per page: YOLO + lines + sanitize 12.9 s, plus Gemma 83 s; blob v2 131 ms.
 on the development set too (v1 0.918/0.905 -> v2 0.893/0.841), and v2 does not win it back. The next version
 works on that, on the development draws only.
 
+**v3 (2026-11-17, `inkcmp lines` now)** answers held-out 2's failures on maths and German. It is developed on the
+same 90 development pages only; the held-out sets are untouched. Changes from v2:
+- An `equation_number` must also end within 1.5 lh of its reference line's right end, or start within 1.5 lh of its
+  left end (the column edge, as in v1). v2 also took narrow parts of a display as numbers; on the dev maths pages
+  that gave 47 false numbers, which then split their displays.
+- A row that keeps >= 3 boxes after joining is a table row: its pieces are `text` and never merge into a display.
+  Without this, a table column of cells typed `math` merged into one tall box.
+- `ic_space` may return up to 1024 separators (default 64), so tables keep their column gaps.
+- The clip uses the 80th percentile of right ends, not the median. On pages of short lines the median cut every
+  equation number off (3 dev pages, 23 numbers).
+- Tried and left out:
+  - a page_info band (every piece in the outer 7-10%), which traded recall for precision one for one;
+  - joining a list marker across a separator, which lost German and table recall.
+
+Measured on the development set (90 pages, recall / precision):
+
+| version | maths | german | two_column | table | scan | all |
+|---|---|---|---|---|---|---|
+| v2 | 0.893 / 0.841 | 0.744 / 0.759 | 0.881 / 0.781 | 0.688 / 0.656 | 0.613 / 0.510 | 0.746 / 0.689 |
+| v3 | 0.913 / 0.899 | 0.747 / 0.780 | 0.883 / 0.815 | 0.716 / 0.676 | 0.622 / 0.544 | 0.763 / 0.718 |
+
+v3 on the single-column documents: Killing 0.932/0.908, Hilbert 0.873/0.853, Penev 0.856/0.818 (v1:
+0.942/0.902, 0.859/0.857, 0.855/0.844). L1 now has a second display, with two narrow parts far apart: exactly two
+equation numbers and two displays. Allowing numbers anywhere fails it.
+
 Tests (`tests-c/test_inkcmp_lines.py`, against pdftotext's boxes):
 - L1: every type fires; the drawn figure holds its label; the framed note's line is its own ink, not the frame.
 - L2: a gutter shadow and dust change nothing.

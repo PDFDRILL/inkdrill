@@ -291,8 +291,10 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
   size_t cap = 0, n = lines->n;
   const Box *b = lines->b;
   int *type = calloc(n ? n : 1, sizeof *type);
+  long *refs = malloc((n ? n : 1) * sizeof *refs);
   size_t *row = malloc((n ? n : 1) * sizeof *row), *last = malloc((n ? n : 1) * sizeof *last), nrows = 0;
-  if (!type || !row || !last) { free(type); free(row); free(last); return 0; }
+  if (!type || !row || !last || !refs) { free(type); free(row); free(last); free(refs); return 0; }
+  for (size_t i = 0; i < n; i++) refs[i] = -1;
   for (size_t i = 0; i < n; i++) {                   /* rows */
     size_t k;
     for (k = 0; k < nrows; k++) {
@@ -320,10 +322,13 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
       if (ref < 0 || b[j].x1 - b[j].x0 > b[ref].x1 - b[ref].x0) ref = (long)j;
     }
     type[i] = IC_TEXT;
+    refs[i] = ref;
     if (ref >= 0 && b[i].x0 >= b[ref].x0 + 1.5 * lh && b[i].x1 <= b[ref].x1 - 1.5 * lh) type[i] = IC_MATH;
   }
-  for (size_t i = 0; i < n; i++) {                   /* equation numbers beside a display */
+  for (size_t i = 0; i < n; i++) {                   /* equation numbers beside a display, at the column's edge */
     if (type[i] == IC_PAGEINFO || b[i].x1 - b[i].x0 > 4 * lh) continue;
+    long rf = refs[i];
+    if (rf < 0 || !(b[i].x1 >= b[rf].x1 - 1.5 * lh || b[i].x0 <= b[rf].x0 + 1.5 * lh)) continue;
     for (size_t j = 0; j < n; j++) {
       if (j == i || row[j] != row[i] || type[j] != IC_MATH) continue;
       int32_t gap = b[i].x0 >= b[j].x1 ? b[i].x0 - b[j].x1 : b[j].x0 - b[i].x1;
@@ -335,7 +340,7 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
      lies in the gap between them; equation numbers and page_info never join */
   int *gone = calloc(n ? n : 1, sizeof *gone);
   Box *bb = malloc((n ? n : 1) * sizeof *bb);
-  if (!gone || !bb) { free(gone); free(bb); free(type); free(row); free(last); return 0; }
+  if (!gone || !bb) { free(gone); free(bb); free(type); free(row); free(last); free(refs); return 0; }
   memcpy(bb, b, n * sizeof *bb);
   for (size_t i = 0; i < n; i++) {
       if (gone[i] || type[i] == IC_EQNUM || type[i] == IC_PAGEINFO) continue;
@@ -359,10 +364,16 @@ static int typed(const Boxes *lines, const Boxes *figs, uint32_t H, double lh, c
         gone[nx] = 1;
       }
     }
+  /* a row that keeps >= 3 boxes after joining is a table row: its pieces are text, never a display */
+  size_t *cnt = calloc(nrows ? nrows : 1, sizeof *cnt);
+  if (!cnt) { free(gone); free(bb); free(type); free(row); free(last); free(refs); return 0; }
+  for (size_t i = 0; i < n; i++) if (!gone[i] && type[i] != IC_EQNUM && type[i] != IC_PAGEINFO) cnt[row[i]]++;
+  for (size_t i = 0; i < n; i++) if (!gone[i] && cnt[row[i]] >= 3 && type[i] == IC_MATH) type[i] = IC_TEXT;
+  free(cnt);
   for (size_t i = 0; i < n; i++)
-    if (!gone[i] && !emit(o, &cap, bb[i], type[i])) { free(gone); free(bb); free(type); free(row); free(last); return 0; }
+    if (!gone[i] && !emit(o, &cap, bb[i], type[i])) { free(gone); free(bb); free(type); free(row); free(last); free(refs); return 0; }
   free(gone); free(bb);
-  free(type); free(row); free(last);
+  free(type); free(row); free(last); free(refs);
   for (size_t i = 0; i < figs->n; i++) if (!emit(o, &cap, figs->b[i], IC_DIAGRAM)) return 0;
   /* display rows: math pieces that overlap in x and are < 0.5 lh apart vertically are one display */
   int merged = 1;
@@ -491,12 +502,14 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   out->m = (uint32_t)m;
   if (pcs.n) {
     nw = 0;
-    /* the right edge of the rightmost column: pieces > 0.2 W wide that end in the right half */
+    /* the right edge of the rightmost column: the 80th percentile of the right ends of pieces > 0.2 W wide that
+       end in the right half */
     for (size_t i = 0; i < pcs.n; i++)
       if (pcs.b[i].x1 - pcs.b[i].x0 > 0.2 * W && pcs.b[i].x1 > 0.5 * W) hv[nw++] = pcs.b[i].x1;
     if (!nw) hv[nw++] = (int32_t)W;
     qsort(hv, nw, sizeof *hv, cmp_i32);
-    double xr = hv[nw / 2] + 0.5 * lh;
+    double xr = hv[(size_t)(0.8 * (nw - 1) + 0.5)] + 0.5 * lh;   /* 80th percentile: the median cut equation
+                                                                     numbers off pages of short lines */
     for (size_t i = 0; i < pcs.n; i++) {
       Box b = pcs.b[i];
       if (b.x0 >= xr) continue;
@@ -525,7 +538,7 @@ int ic_lines(const uint8_t *grey, uint32_t W, uint32_t H, uint32_t threshold, Ic
   /* step 6: the vertical white separators of unit 3 (gutters, table column gaps), then types */
   IcSpace S;
   IcPage pg = {W, H, r.row_start, r.rs, r.nrun};
-  IcSpaceParams sp; ic_space_defaults(&sp);
+  IcSpaceParams sp; ic_space_defaults(&sp); sp.max_sep = 1024;
   if (ic_space(&pg, (uint32_t)lh ? (uint32_t)lh : 1, &sp, &S)) goto done;
   int okt = typed(&fin, &figs, H, lh, S.vsep, S.nvsep, out);
   ic_space_free(&S);

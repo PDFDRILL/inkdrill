@@ -29,6 +29,10 @@ heights, and their width defines the column.
 \begin{equation}
   E = \sum_{k=1}^{n} a_k x^k
 \end{equation}
+and two short parts of one display, far apart:
+\begin{equation}
+  x = 1, \qquad\qquad\qquad\qquad y = 2
+\end{equation}
 \begin{center}\setlength{\unitlength}{1mm}\begin{picture}(70,40)
   \put(0,0){\line(2,1){70}}\put(0,35){\line(2,-1){70}}\put(35,17){\circle{24}}\put(31,30){Label}
 \end{picture}\end{center}
@@ -113,15 +117,22 @@ def check(got, lines, words):
     for b in para:
         best = max(iou(b, t) for t in text)
         assert best >= 0.7, (b, best)
-    assert len(text) == len(para) + 1, (len(text), len(para))     # + the framed note
-    # the number "(1)" and the display, one box from the upper limit to the lower one
+    assert len(text) == len(para) + 2, (len(text), len(para))     # + the line before display (2), the framed note
+    # the numbers "(1)" and "(2)": exactly these two, at the column edge. Display (2)'s two narrow parts, far apart,
+    # are neither numbers nor two displays
+    nums = [b for b, w in words if w in ("(1)", "(2)")]
     eq = [b for t, b in got if t == "equation_number"]
-    assert len(eq) == 1 and iou(eq[0], num) >= 0.6, (eq, num)
-    disp = [b for t, b in got if t == "math"]
-    sigma = [b for b, w in lines if w == ["n"] or w == ["k=1"]]
-    assert len(disp) == 1 and disp[0][2] < eq[0][0], disp
+    assert len(nums) == 2 and len(eq) == 2 and all(max(iou(e, n) for e in eq) >= 0.6 for n in nums), (eq, nums)
+    disp = sorted(b for t, b in got if t == "math")
+    disp.sort(key=lambda b: b[1])
+    assert len(disp) == 2 and all(d[2] < min(e[0] for e in eq) for d in disp), disp
     tol = 0.3 * (para[0][3] - para[0][1])                 # pdftotext boxes are font boxes, the ink sits inside
+    # display (1): one box from the upper limit to the lower one
+    sigma = [b for b, w in lines if w == ["n"] or w == ["k=1"]]
     assert len(sigma) == 2 and all(disp[0][1] <= b[1] + tol and b[3] - tol <= disp[0][3] for b in sigma), (disp, sigma)
+    # display (2): one box over both parts
+    parts = [b for b, w in words if w in ("x", "=2") and b[1] > disp[0][3]]          # the first and last word
+    assert len(parts) == 2 and all(disp[1][0] - tol <= p[0] and p[2] <= disp[1][2] + tol for p in parts), (disp, parts)
     # the figure holds its label: no text line inside the frame
     fig = [b for t, b in got if t == "diagram"]
     assert len(fig) == 1, fig
