@@ -17,3 +17,7 @@ under `~/inkdrill/work/run-files/lines-audit`, Gemma4 testpool `~/Gemma4`; each 
   `column`, `table`, `table_row`, `table_column`); `yolo.py`: the committed YOLO+Gemma files on the same pages.
 - `miss.py`: every unmatched line by kind (merged, split, wide, shifted, none); `overlay.py`: truth and boxes on the
   page; `pdiff.py`: pages that differ between two runs.
+- `redtests_0864.py` (T-0154): the owner's two 0864 findings as red tests from boxes alone, against MathPix. D (a figure
+  cut at white space, or read as text pieces) is red on `inkcmp lines` -- its figure step; L (paragraph-final lines
+  lost) is green on inkcmp's boxes and red on the Gemma inklines reading (`--reading`) -- gemma_lines' grouping. Red by
+  design, so not in `make test`.
