@@ -442,6 +442,29 @@ On different glyphs it adds 4 flags (f against the ligature fl). The planted CM 
 glyph route (test_every_plant_is_flagged passes there); the render route has no outlines and keeps the miss.
 Oracle for the count: U9's nest() on the Python raster, 1056 placements (tests-c G5).
 
+**Rule 6, inkcmp lines' figure step (2026-11-17; T-0154 test D: 0 of 0864's 6 MathPix figures come out whole).**
+1. What others do (from knowledge, not re-checked): trained detectors (YOLO / DocLayout-YOLO, LayoutLMv3 on DocLayNet)
+   predict one box per figure from pixels -- figure/picture AP about 0.8 on DocLayNet -- having learnt that axes,
+   curves and labels belong together; pdfplumber exposes the PDF's lines, rects and curves but does not group them;
+   PyMuPDF's `cluster_drawings` joins vector paths by distance into figure rectangles; pdfminer reports a form
+   XObject as one LTFigure. None of them separates a figure from text by white space alone, which is what inkcmp does.
+2. Idea: on a born-digital page, group the PDF's own drawn paths (stroke/fill, not clip) by distance, then attach the
+   glyphs that lie within the same distance (labels, tick numbers); ink decides only where there are no paths.
+3. Mechanism: the paths of one figure are drawn together and lie close, whatever white space separates its parts;
+   body text has no paths, so it is not swept in unless the label attachment runs away.
+4. Cheapest experiment, run (`tools/lines-audit/vecfig_0864.py`, 0864 against MathPix's 6 figures, IoU):
+   tolerance 4 pt: 2 of 6 >= 0.5; 8 pt: 2; 12 pt: 4 (p1 chart 0.92, p3 diagram 0.96 -- whole, where inkcmp cuts it
+   at white space -- p4 0.59 and 0.60); 20 pt: 2 (label attachment swallows body text).
+5. Not reached: the p3 figure drawn with glyphs only (no path at all), and the p4 figure MathPix gives as one box over
+   two panels (the paths make two clusters).
+6. So the idea holds where figures are vector drawings, and its open parts are named: label attachment needs a stop
+   (a glyph run that is a text line -- inkcmp's own line boxes -- is not a label), and glyph-only or raster figures
+   stay with the ink route.
+7. Next experiment, hours: label attachment bounded by inkcmp's line boxes (a line wider than 1/3 of the cluster is
+   body text); gate: >= 5 of 6 at IoU >= 0.5 on 0864 without a figure swallowing a body line, then the same on 1805.01788
+   and 2312.11532 before any C.
+8. Board change: none directly (inkcmp lines is the Gemma inklines arm's line step, not the judge); T-0154 D turns green.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's

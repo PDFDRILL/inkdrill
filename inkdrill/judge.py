@@ -1299,6 +1299,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     res["a_glyphs"] = len(ac)
     res["a_unpaired"] = len(ac) - (res["glyphs"] - res["accents_on_ink"])   # accents on ink pair no A glyph
     res["b_unpaired"] = b_total - res["glyphs"]
+    if route == "glyph" and _MEMO is None:         # the page renders were intermediate (about 15 MB a page); a
+        for f in os.listdir(wd):                    # batch shares one page's render between jobs: removed at its end
+            if re.fullmatch(r"a400\.pgm|b\d+-\d+\.pgm", f):
+                os.remove(os.path.join(wd, f))
     print("JUDGE1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())), file=out)
     status = "OK" if res["glyphs"] else ("NOT_COMPILED" if res["not_compiled"] else "NO_TEXT")
     print(f"STATUS {status}", file=out)          # a page with 0 pairs has no residual
@@ -1373,6 +1377,11 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
             stats["batched" if j in given else "alone"] += 1
     finally:
         _MEMO = None
+        for job in jobs:                            # the page renders the jobs shared (glyph route)
+            if os.path.isdir(job[3]):
+                for f in os.listdir(job[3]):
+                    if re.fullmatch(r"a400\.pgm|b\d+-\d+\.pgm", f):
+                        os.remove(os.path.join(job[3], f))
     return stats
 
 
