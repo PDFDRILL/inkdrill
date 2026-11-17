@@ -50,6 +50,8 @@ import sys
 import tempfile
 import unicodedata
 
+from . import textpos
+
 DPI, UP = 400, 8
 S = DPI / 72
 OX = OY = -0.0625
@@ -261,18 +263,18 @@ def pgms(pdf: str, pages: list, dpi: int, wd: str) -> dict:
     return out
 
 
-def glyph_side_a(a_pdf: str, pno: int, wd: str) -> tuple:
+def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec") -> tuple:
     """what the glyph route needs of the original alone (it runs while pdflatex sets the reading): its font programs,
-    its traced glyphs, and its 400-dpi render"""
+    its traced glyphs (at the specification's origins), and its 400-dpi render"""
     FA = Fonts(a_pdf, os.path.join(wd, "fontsA"), 0)
-    TA = Origins(trace(a_pdf, pno, pno).get(pno, []))
+    TA = Origins(spec.traced(pno, trace(a_pdf, pno, pno).get(pno, [])))
     aw, ah, ab = pgm(a_pdf, pno, DPI)
     a400 = os.path.join(wd, "a400.pgm")
     pgm_write(a400, aw, ah, ab)
     return FA, TA, (aw, ah, ab), a400
 
 
-def glyph_scores(side_a: tuple, side_b, bpdf: str, ac: list, work: list, wd: str, res) -> tuple:
+def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
     font, an accent the page drew as a rule) is the page's own ink from one 400-dpi render. Also returns that render
@@ -299,7 +301,7 @@ def glyph_scores(side_a: tuple, side_b, bpdf: str, ac: list, work: list, wd: str
     hit = lambda q, w: q[0] < w[2] and q[2] > w[0] and q[1] < w[3] and q[3] > w[1]
     jobs, keys = [], []
     for i, ln, b, ca, cb, pairs, _ in work:
-        TB = Origins(tb.get(i + 1, []))
+        TB = Origins(spec_b.traced(i + 1, tb.get(i + 1, [])))
         bg = [(q, TB.get(q[1], q[2], html.unescape(q[0]))) for q in cb]
         for k, (pa, pbb) in enumerate(pairs):
             X, Y = pa[1] * S + OX, pa[2] * S + OY
@@ -344,6 +346,43 @@ def glyph_scores(side_a: tuple, side_b, bpdf: str, ac: list, work: list, wd: str
     bp = bjob.result() if bjob else {}
     pool.shutdown()
     return scores, (aw, ah, ab, a400), {p - 1: v for p, v in bp.items()}
+
+
+class Spec:
+    """mutool origin -> the specification's origin (inkdrill.textpos), looked up within 0.002 pt; pages it could
+    not place keep mutool's origins"""
+    def __init__(self, pdf: str, first: int, last, wd: str):
+        os.makedirs(wd, exist_ok=True)
+        self.pages = textpos.origins(pdf, first, last, wd)
+        self.b = collections.defaultdict(dict)
+        for n, rec in self.pages.items():
+            for (x, y), v in rec["map"].items():
+                self.b[n].setdefault((int(x // 1), int(y // 1)), []).append((x, y, v))
+
+    def get(self, page: int, x: float, y: float):
+        cells = self.b.get(page)
+        if not cells:
+            return x, y
+        best = None
+        for i in (-1, 0, 1):
+            for j in (-1, 0, 1):
+                for X, Y, v in cells.get((int(x // 1) + i, int(y // 1) + j), ()):
+                    d = abs(X - x) + abs(Y - y)
+                    if d <= 0.002 and (best is None or d < best[0]):
+                        best = (d, v)
+        return best[1] if best else (x, y)
+
+    def chars(self, page: int, cs: list) -> list:
+        """stext characters moved to their specification origins, quads with them"""
+        out = []
+        for c in cs:
+            sx, sy = self.get(page, c[1], c[2])
+            dx, dy = sx - c[1], sy - c[2]
+            out.append((c[0], sx, sy, c[3] + dx, c[4] + dy, c[5] + dx, c[6] + dy, c[7], c[8]))
+        return out
+
+    def traced(self, page: int, gl: list) -> list:
+        return [(g[0], g[1]) + self.get(page, g[2], g[3]) + (g[4], g[5]) for g in gl]
 
 
 class Fonts:
@@ -865,7 +904,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     k = pw_pt * S / pg["page_width"]                  # lines.json px -> 400-dpi px
     lv = leaves(pg)
     fam, pre = font_preamble(a_pdf, pno)
-    ac = chars(a_pdf, pno, pno)[0]
+    spec_a = Spec(a_pdf, pno, pno, os.path.join(wd, "specA"))
+    ac = spec_a.chars(pno, chars(a_pdf, pno, pno)[0])   # origins as the PDF places them, not as mutool rounds them
 
     def box(ln):
         r = ln["region"]
@@ -890,7 +930,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             fut = pool.submit(compile_lines, [ln["text"] for ln in lv], sizes, pre, wd)
-            side_a = glyph_side_a(a_pdf, pno, wd)
+            side_a = glyph_side_a(a_pdf, pno, wd, spec_a)
             bpdf, failed, dropped = fut.result()
     else:
         bpdf, failed, dropped = compile_lines([ln["text"] for ln in lv], sizes, pre, wd)
@@ -902,6 +942,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                   pool_b.submit(trace, bpdf, 1, None))
         pool_b.shutdown(wait=False)
     bc = chars(bpdf, 1, len(lv)) if os.path.exists(bpdf) else []
+    spec_b = Spec(bpdf, 1, None, os.path.join(wd, "specB")) if bc else None
+    if spec_b:
+        bc = [spec_b.chars(n + 1, cs) for n, cs in enumerate(bc)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
                               unpaired_B=0, accents_on_ink=0, unmappable=0, rules_a=0, rules_missing=0,
                               rules_invented=0)
@@ -1006,7 +1049,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     scores, page400, bpages = {}, None, {}
     glyph_owners = [(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner]
     if route == "glyph" and work:
-        scores, page400, bpages = glyph_scores(side_a, side_b, bpdf, ac, work, wd, res)
+        scores, page400, bpages = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res)
     stages = {}
     if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
         aw, ah, ab, a400 = page400                  # a first pass collects the requests, the second reads them

@@ -370,9 +370,19 @@ sampling poppler pixels at mutool origins, reads as residual.
 Board, 30 pages, MathPix column, against the render route (CropBox fixed):
 - text side (lines, glyphs, unpaired A/B, a_unpaired, b_unpaired, not compiled, accents on ink): equal on 30 of 30;
 - flags: 50235 of 50671 pairs agree (99.14%); 17 pages >= 99.8%; lowest 1511.08771 92.7% (the drift), lib_6d90 93.0%;
-- board residual (findings + unpaired) / glyphs: within 0.01 on 19 of 22 judged pages, max |d| 0.068 (1511.08771);
+- board residual (findings + unpaired) / glyphs: within 0.01 on 19 of 22 judged pages; outside: 1511.08771 p2709
+  (-0.068), lib_d68e0271bd4d p334 (-0.021), BH1-9add65ca p113 (-0.014, an OCR layer over a scan: A is page ink);
 - rules: rules_a/missing equal except BH1 (OCR layer); rules_invented differs on 6 pages;
 - time: 6-231 s -> 0.9-1.9 s per page; median 1.05 s in process (load ~5), CLI 1.50 s wall at load 8-11, CPU 1.98 s.
+The drift's cause (rule 4, fixed in both routes, `inkdrill/textpos.py`): MuPDF keeps /Widths as whole
+thousandths of an em (496.9 -> 497) and places glyphs with them; poppler and Ghostscript use the exact widths. On
+1511.08771's snippet page 12 mutool stands 0.122 pt right of /Widths at the last glyph, exactly what poppler and
+Ghostscript draw. The judge now interprets each page's text operators with the exact widths and moves stext and
+trace origins there (frame fitted to the glyphs after each absolute positioning; a page it cannot follow keeps
+mutool's origins: on the board, the three OCR-layer pages BH1, BH3, lib_025faeafae2f). 1511.08771: render route
+1716 -> 1665 flags, glyph route unchanged (it was consistent with itself); the remaining 138 render-only flags are
+CMR10 against Fraktur parentheses (a style pair) at solid 7-12 against 1-6, rasteriser sampling on different
+shapes.
 Gate as set ("same findings", median <= 1 s): the findings part corrected -- exact equality cannot hold by
 construction (the render route measures window ink at poppler positions); the time part FAILS.
 
