@@ -714,6 +714,16 @@ figure rate), 0.654 with figure-or-table; 9005 is all figure pages by constructi
 figure page, not of the loop. Note: 9005 is no longer held out -- the listing cut and the --blocks attempt were
 measured on it -- so a pass would need a fresh seed.
 
+**Held out, the cascade (figure trigger) on seed 9007, gate FAILED by one line (2026-11-17, load 6).** Fixed before
+the draw: the frame rule in `detector_set.py` (d54885a: a body line inside its figure's own drawn frame -- a path or a
+12 pt vecfig cluster hull covering >= 90% of a MathPix figure -- is part of the figure); on 9005 it changed nothing,
+because e12s40 p1's subtitle sits in no drawn frame (its charts cluster per band, more than 12 pt apart). Set
+`figure-set-9007.tsv` (21ff3ed; 40 pages, no overlap with 9003-9005). Result: 42 of 51 figures whole (82%), 1 body line
+swallowed, 15 listings (3 boxed as figures); the 640 pass ran on 33 of 40; CPU 1.353 s/page on these figure pages,
+**board 0.486 s/page (4 of 30 pages run 640)** -- whole-rate and budget met, swallow 1 not 0. The line: e12s42 p1,
+the same yearbook series as e12s40, the same subtitle ("Tägliche Werte der Monate, ...") between the page title and
+the chart, in no drawn frame. The exclusion is per document, so a series with one layout can recur across seeds.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
