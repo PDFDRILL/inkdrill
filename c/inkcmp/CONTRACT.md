@@ -592,6 +592,18 @@ the route measured on the fresh set is the detector alone, fixed here before the
 its top); Milne-ANT p143's MathPix box cuts its diagram in half and takes the running header; paper-7 p2's "diagram"
 is a block of formulas. All count in the gate.
 
+**Fresh set, seed 9005 (`figure-set-9005.tsv`, 40 born-digital pages, 61 MathPix figures; drawn after the route was
+fixed, dcd002e), the detector alone at 320 x 256, gate FAILED (2026-11-17):** 41 of 61 whole (67%), 26 body lines
+swallowed, 0.310 CPU s/page (one thread, machine load 5-7). Looked at by eye:
+- 10 of the 20 misses are code listings and prompts that MathPix labels diagram (2408.14717v1 p9: 4, 2404.04837v3 p9: 3,
+  2606.17642v1 p16: 3); the detector calls them text, which is what our reading needs (they are read, not drawn).
+  Without them: 41 of 51 (80%).
+- 24 of the 26 swallowed lines are one detector error: 2304.03442 p1, the figure box runs up over the author block
+  (detector y 366 against MathPix 804); e12s40 p1: 2.
+- ajm-1154098926 p30: three panels side by side detected as one figure (IoU 0.23-0.31 each).
+The gate counts all of these. Whether a code listing is a figure (MathPix: yes; this reading: text) is the coordinator's
+call; it decides 13 points of this number.
+
 **Known gap (coordinator, 2026-11-17: listed, no work now).** Pages whose text is an invisible OCR layer over a
 scan (board BH1-9add65ca p113, BH3 p91, lib:025faeafae2f p153) keep mutool's glyph origins: their text operators do
 not follow textpos's interpreter (1200-2360 of their glyphs land > 1 pt from mutool's origin). How far mutool's
