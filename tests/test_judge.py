@@ -228,7 +228,7 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
         self.assertEqual(judge.style("ABCDEF+LinLibertineT"), "")
 
 
-def _accent_case(tmp, name, page_line, read_line, preamble="", route="render"):
+def _accent_case(tmp, name, page_line, read_line, preamble="", route="render", typ="text"):
     """one-line page set by pdflatex, read back as `read_line`; returns (res, judge output lines)"""
     d = os.path.join(tmp, name)
     os.makedirs(d)
@@ -244,7 +244,7 @@ def _accent_case(tmp, name, page_line, read_line, preamble="", route="render"):
     wpt, hpt = judge.page_size(pdf, 1)
     k = 200 / 72
     doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": [
-        {"type": "text", "text": read_line, "region": {"top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+        {"type": typ, "text": read_line, "region": {"top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
                                                       "width": int((b[2] - b[0]) * k) + 4,
                                                       "height": int((b[3] - b[1]) * k) + 4}}]}]}
     lj = os.path.join(d, "r.lines.json")
@@ -729,3 +729,55 @@ class JudgeMagnifiedPage(unittest.TestCase):
                                 text, preamble="\\usepackage[T1]{fontenc}\\usepackage{graphicx}\n")
         self.assertGreater(res["glyphs"], 60)
         self.assertEqual(res["glyph"], 0, [ln for ln in out if ln.startswith("G ") and ln.split()[8] == "1"])
+
+
+class JudgeDisplayStyleRule(unittest.TestCase):
+    """A line typed math or equation is a display (the lines.json schema), set in display style whatever its
+    delimiters, for every column alike: ours writes its displays as $...$ and they were set in text style, every
+    \\frac at script size (board lib:3fe71b4ef018 p328 L20: 34 -> 57 items once the reader built the fraction
+    right). \\[...\\] and $$...$$ are display already and come through unchanged."""
+
+    def test_display_style(self):
+        ds = judge.display_style
+        self.assertEqual(ds("$\\frac{a}{b}$"), "$\\displaystyle \\frac{a}{b}$")
+        self.assertEqual(ds("\\(\\frac{a}{b}\\)"), "\\(\\displaystyle \\frac{a}{b}\\)")
+        self.assertEqual(ds("$x = 1$ (14.4.14)"), "$\\displaystyle x = 1$ (14.4.14)")
+        self.assertEqual(ds("$a$ and $b$"), "$\\displaystyle a$ and $\\displaystyle b$")
+        for same in ("\\[\\frac{a}{b}\\]", "$$\\frac{a}{b}$$", "costs 5\\$ each", "no maths here"):
+            self.assertEqual(ds(same), same)
+
+    def test_by_type_not_by_reader(self):
+        lt = judge.line_tex
+        self.assertEqual(lt({"type": "math", "text": "$\\frac{a}{b}$"}), "$\\displaystyle \\frac{a}{b}$")
+        self.assertEqual(lt({"type": "equation", "text": "\\(x\\)"}), "\\(\\displaystyle x\\)")
+        self.assertEqual(lt({"type": "math", "text": "\\[\\frac{a}{b}\\]"}), "\\[\\frac{a}{b}\\]")   # MathPix: unchanged
+        self.assertEqual(lt({"type": "text", "text": "the ratio $\\frac{a}{b}$ of"}), "the ratio $\\frac{a}{b}$ of")
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeDisplayStyleCases(unittest.TestCase):
+    """end to end, both ways: a display read as a math line written $...$ pairs; inline maths in a text line stays
+    text style and pairs"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-disp-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def flagged(self, out):
+        return [ln for ln in out if ln.startswith("G ") and ln.split()[8] == "1"]
+
+    def test_display_line_typed_math(self):
+        res, out = _accent_case(self.tmp.name, "disp", "$\\displaystyle \\frac{a+b}{c+d} = \\frac{x}{y}$",
+                                "$\\frac{a+b}{c+d} = \\frac{x}{y}$", typ="math")
+        self.assertEqual(res["glyphs"], 9, out)
+        self.assertEqual(res["glyph"], 0, self.flagged(out))
+
+    def test_inline_in_text_line(self):
+        res, out = _accent_case(self.tmp.name, "inl", "The ratio $\\frac{a+b}{c+d}$ is small.",
+                                "The ratio $\\frac{a+b}{c+d}$ is small.", typ="text")
+        self.assertGreater(res["glyphs"], 15)
+        self.assertEqual(res["glyph"], 0, self.flagged(out))

@@ -608,6 +608,42 @@ UNI_TEX["\u03bf"] = ("o", "o")                       # omicron has no command: i
 UNMAPPABLE = {"\ufffd"}             # always dropped: a reader's "glyph I cannot name" (pdfdrill 660ea83c)
 
 
+def display_style(s: str) -> str:
+    """\\displaystyle after every opening inline maths delimiter ($, \\(); \\[...\\], $$...$$ and an escaped \\$
+    unchanged"""
+    out, i = [], 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            out.append(s[i:i + 2])
+            if s[i + 1] == "(":
+                out.append("\\displaystyle ")
+            i += 2
+            continue
+        if s.startswith("$$", i):
+            out.append("$$")
+            i += 2
+            continue
+        if s[i] == "$":
+            out.append("$")
+            j = s.find("$", i + 1)                   # the closing $ of this inline maths
+            if j < 0:
+                i += 1
+                continue
+            out.append("\\displaystyle " + s[i + 1:j] + "$")
+            i = j + 1
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
+def line_tex(ln: dict) -> str:
+    """a reading's line as the judge sets it. A line typed math or equation is a DISPLAY (the lines.json schema)
+    and is set in display style whatever its delimiters, for every column alike: ours writes displays as $...$, and
+    in text style every \\frac came out at script size (board lib:3fe71b4ef018 p328). A text line is unchanged."""
+    return display_style(ln["text"]) if ln.get("type") in ("math", "equation") else ln["text"]
+
+
 def latex_text(s: str, drop: frozenset = frozenset()) -> str:
     """A reading's line as pdflatex input: raw % and # (and & outside maths) escaped, mapped characters (maths mode
     tracked through $, \\( \\), \\[ \\]), compatibility forms through NFKC, characters in UNMAPPABLE or `drop`
@@ -1147,12 +1183,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     side_a = None
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(comp, [ln["text"] for ln in lv], set_sizes, pre, wd)
+            fut = pool.submit(comp, [line_tex(ln) for ln in lv], set_sizes, pre, wd)
             side_a = memo(("side_a", a_pdf, pno), glyph_side_a, a_pdf, pno, wd, spec_a,   # once per batch page
                           any(is_formula(ln) for ln in lv))
             bpdf, failed, dropped, bo = fut.result()
     else:
-        bpdf, failed, dropped, bo = comp([ln["text"] for ln in lv], set_sizes, pre, wd)
+        bpdf, failed, dropped, bo = comp([line_tex(ln) for ln in lv], set_sizes, pre, wd)
     gone = UNMAPPABLE | dropped
     side_b, fut_b = None, None
     if os.path.exists(bpdf):                        # the reading's trace, origins (and fonts) while its stext is read
