@@ -683,37 +683,39 @@ class JudgeStyleNames(unittest.TestCase):
 
 
 class JudgeDesignSize(unittest.TestCase):
-    """A page set in a 9 pt design magnified (board lib:6d90e8d27b8b p174: SFRM0900 at 9.63 pt) is set at the
-    design size and magnified the same: at \\fontsize{9.63} LaTeX takes the 10 pt design (SFRM1000, scripts CMR7
-    for the page's CMR6), and optical-size differences were flagged as glyph findings (p174: 0.2143 -> 0.1053)."""
+    """The snippets are set with fix-cm: at a size that is not one of LaTeX's own (board lib:6d90e8d27b8b p174: body
+    9.63 pt, scripts 6.74 and 4.82 -- LaTeX's 0.7/0.5) the page took its designs by size range (SFRM0900, CMR9, CMR6,
+    CMR5), and the judge's .fd files, which list exact sizes only, took SFRM1000, CMR7 or substituted 6 pt for 6.74.
+    fix-cm declares the same ranges, so the judge sets the page's own fonts at the page's own sizes. (It replaced
+    15e09d9's magnification, which set the 9 pt design scaled by 1.07: scripts 6.42 pt against 6.74.)"""
 
-    def test_design_size_from_the_name(self):
-        for f, d in (("LrjgkhSFRM0900", 9.0), ("JSLHNA+DlgbwdCMR9", 9.0), ("CMR10", 10.0), ("SFRM1095", 10.95),
-                     ("LMRoman10-Regular", 10.0), ("CMBX12", 12.0), ("JywkbpSFSX0900", 9.0)):
-            self.assertEqual(judge.design_size(f), d, f)
-        for f in ("Times-Roman", "NimbusRomNo9L-Regu", "LinLibertineT", "Helvetica"):
-            self.assertIsNone(judge.design_size(f), f)
+    def test_set_size_snaps_to_latex_sizes(self):
+        """a size within 1.5% of one of LaTeX's own is that size: microtype's font expansion sets a 12 pt design
+        at 11.88 and 12.12 pt (board lib:c9daf79960c3 p68), and fix-cm took the 10 pt design for 11.88 (0.0147 ->
+        0.0346); p174's 9.63 pt is 3.7% from 10 and stays"""
+        bp = 72 / 72.27
+        self.assertEqual(judge.set_size(11.879 * bp), 12)
+        self.assertEqual(judge.set_size(12.119 * bp), 12)
+        # within 0.1% of a LaTeX size: the size as it is, as before fix-cm (board lib:3fe71b4ef018 p328: 10.0004 pt
+        # set as exactly 10 moved three pairs of a display, 0.0790 -> 0.0828)
+        self.assertEqual(judge.set_size(9.963), 9.963 * 72.27 / 72)
+        self.assertAlmostEqual(judge.set_size(10.909), 10.95, places=2)    # 11pt class, in bp
+        self.assertAlmostEqual(judge.set_size(9.594), 9.63, places=2)   # p174: not snapped
+        self.assertEqual(judge.set_size(6.0), 6)                     # 6.02 pt: 0.4% from 6, snapped
 
-    def test_magnification(self):
-        def page(font, size, n=50):
-            return [("a", 0, 0, 0, 0, 1, 1, font, size)] * n
-        # sizes as mutool reports them, in bp; design sizes and LaTeX's sizes are TeX pt (x 72.27 / 72)
-        self.assertAlmostEqual(judge.magnification(page("LrjgkhSFRM0900", 9.594)), 1.07, places=3)   # p174
-        self.assertEqual(judge.magnification(page("CMR10", 9.963)), 1.0)       # the design itself: unchanged
-        self.assertEqual(judge.magnification(page("CMR10", 10.06)), 1.0)       # within 1.5%: unchanged
-        # a standard LaTeX size is set by LaTeX's own choice of design, which is what the page's class did: 11pt
-        # (CMR10 at 10.95 pt, scripts CMR8 at 8 pt; board lib:b21e554b9232 p201, 1511.08771 p2709) and \small
-        # code (CMTT8 at 7 pt, lib:d68e0271bd4d p334) -- magnified they were set with CMR7 scripts, 0.0021 -> 0.0311
-        self.assertEqual(judge.magnification(page("CMR10", 10.909)), 1.0)
-        self.assertEqual(judge.magnification(page("CMTT8", 6.974)), 1.0)
-        self.assertEqual(judge.magnification(page("Times-Roman", 9.594)), 1.0)  # no design size in the name
-        mixed = page("LrjgkhSFRM0900", 9.594) + page("DknvqhCMMI9", 9.594, 500)   # maths fonts do not decide
-        self.assertAlmostEqual(judge.magnification(mixed), 1.07, places=3)
+    def test_snippets_load_fix_cm_first(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-fixcm-") as wd:
+            if not shutil.which("pdflatex"):
+                self.skipTest("needs pdflatex")
+            judge.compile_lines(["a $x^{2}$ b"], [9.6301], "", wd)
+            with open(os.path.join(wd, "lines.tex"), encoding="utf-8") as fh:
+                self.assertTrue(fh.read().startswith("\\RequirePackage{fix-cm}\n\\documentclass"))
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
 class JudgeMagnifiedPage(unittest.TestCase):
-    """end to end: a 9 pt page magnified 1.07, read back exactly, pairs with no glyph finding"""
+    """end to end, p174's shape: a page set at 9.63 pt with fix-cm (T1, scripts at LaTeX's ratios), read back exactly,
+    pairs with no glyph finding -- its body in SFRM0900 and its scripts in CMR6/CMMI6 at 6.74 pt"""
 
     @classmethod
     def setUpClass(cls):
@@ -723,11 +725,14 @@ class JudgeMagnifiedPage(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def test_magnified_nine_point(self):
-        text = "Die beidseitige Integration nach Trennung der Variablen liefert $x^{2} = c - t^{2}$ und so fort."
-        res, out = _accent_case(self.tmp.name, "mag", "\\scalebox{1.07}{\\fontsize{9}{11}\\selectfont " + text + "}",
-                                text, preamble="\\usepackage[T1]{fontenc}\\usepackage{graphicx}\n")
-        self.assertGreater(res["glyphs"], 60)
+    def test_page_at_a_non_standard_size(self):
+        text = ("Die Integration liefert $x_{k}^{2} = c_{n} - t_{m}^{2} + a_{ij}^{pq} b_{kl}^{rs} + 12^{34}_{56}$ und so "
+                "fort.")
+        res, out = _accent_case(self.tmp.name, "mag", "\\fontsize{9.63}{11.5}\\selectfont " + text, text,
+                                preamble="\\usepackage{fix-cm}\\usepackage[T1]{fontenc}\n")
+        self.assertGreater(res["glyphs"], 50)
+        fonts = {ln.split()[-1].split("+")[-1] for ln in out if ln.startswith("G ")}
+        self.assertTrue({"SFRM0900", "CMR6"} <= fonts, fonts)            # the fixture is the case it claims
         self.assertEqual(res["glyph"], 0, [ln for ln in out if ln.startswith("G ") and ln.split()[8] == "1"])
 
 
