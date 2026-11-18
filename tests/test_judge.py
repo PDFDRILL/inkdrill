@@ -256,6 +256,51 @@ def _accent_case(tmp, name, page_line, read_line, preamble="", route="render"):
     return res, out.getvalue().splitlines()
 
 
+#: maths symbols a text-layer reading writes as Unicode that pdflatex (utf8) cannot set: the judge dropped them and the
+#: page's glyphs stayed unpaired in every reading (board 1511.08771 p2709: U+2283, U+2295, U+2032; U+2217, U+2261,
+#: U+2200 on other board pages, 2026-11-18)
+MATH_SYMBOLS = {"⊃": "\\supset", "⊕": "\\oplus", "≡": "\\equiv", "∀": "\\forall", "∗": "\\ast"}
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeMathSymbols(unittest.TestCase):
+    """⊃ ⊕ ≡ ∀ ∗ ′ in a reading are set and pair with the page's glyphs, in text and in maths; none is dropped."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-sym-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    PAGE = ("The chain $su_7\\supset so_7$ with $(1)\\oplus(2)$, $a\\equiv b$ for $\\forall x$, $a\\ast b$ and $f'$ "
+            "holds.")
+
+    def check(self, name, read_line):
+        res, out = _accent_case(self.tmp.name, name, self.PAGE, read_line)
+        self.assertEqual([ln for ln in out if ln.startswith("D U+")], [], "no character is dropped")
+        self.assertEqual(res["unmappable"], 0)
+        for ch in list(MATH_SYMBOLS) + ["′"]:
+            ent = "&#x%04x;" % ord(ch)
+            hit = [ln for ln in out if ln.startswith("G L0 ") and ln.split()[2].lower() in (ch, ent)]
+            self.assertTrue(hit, f"U+{ord(ch):04X} on the page pairs")
+
+    def test_text_mode(self):          # as a text-layer reader writes the line
+        self.check("text", "The chain su7⊃so7 with (1)⊕(2), a≡b for ∀x, a∗b and f′ holds.")
+
+    def test_maths_mode(self):         # as the three-page reading of 1511.08771 p2709 wraps it
+        self.check("maths", "The chain $su_7⊃so_7$ with $(1)⊕(2)$, $a≡b$ for $∀x$, $a∗b$ "
+                            "and $f′$ holds.")
+
+    def test_latex_text(self):
+        for ch, cmd in MATH_SYMBOLS.items():
+            self.assertEqual(judge.latex_text("a" + ch + "b"), "a$" + cmd + "$b")
+            self.assertEqual(judge.latex_text("$a" + ch + "b$"), "$a" + cmd + " b$")
+        self.assertEqual(judge.latex_text("f′"), "f$'$")
+        self.assertEqual(judge.latex_text("$f′$"), "$f' $")
+
+
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
 class JudgeAccents(unittest.TestCase):
     """An accent above a tight line box belongs to its base's line; a rendered accent the page has as ink only is

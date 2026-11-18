@@ -544,6 +544,10 @@ UNI_TEX = {
     "\u2022": ("\\textbullet{}", "\\bullet"), "\u20ac": ("\\texteuro{}", "\\text{\\texteuro}"),
     "\u2122": ("\\texttrademark{}", "\\text{\\texttrademark}"), "\u00ae": ("\\textregistered{}", "\\text{\\textregistered}"),
     "\u00a7": ("\\S{}", "\\S"), "\u02c6": ("\\^{}", "\\hat{}"),
+    # dropped on board pages until 2026-11-18 (1511.08771 p2709: U+2283, U+2295, U+2032): the page's glyphs stayed
+    # unpaired in every reading. The prime is the raised script prime the page draws (^\prime), not \prime.
+    "\u2283": ("$\\supset$", "\\supset"), "\u2295": ("$\\oplus$", "\\oplus"), "\u2261": ("$\\equiv$", "\\equiv"),
+    "\u2200": ("$\\forall$", "\\forall"), "\u2217": ("$\\ast$", "\\ast"), "\u2032": ("$'$", "'"),
 }
 GREEK = {"alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3", "delta": "\u03b4", "epsilon": "\u03b5",
          "zeta": "\u03b6", "eta": "\u03b7", "theta": "\u03b8", "iota": "\u03b9", "kappa": "\u03ba", "lambda": "\u03bb",
