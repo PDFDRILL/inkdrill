@@ -1,12 +1,12 @@
 # GLYPHDRILL3 files the inkdrill build compiles from GD3 (default ../GLYPHDRILL3); written by make repin.
-# commit 9389ebffe60571dde413d6a98d1ec8b4af838029 2026-11-17 "T-0154: inkcmp lines takes figure hints (IC_HINT_FIGURE): when given, a layout detector's figure boxes replace step 5's ink figures (the detector cascade, opt-in through inkdrill's inkcmp lines --figures hint; it fails the held-out figure gate by one swallowed line, so it is not the default)"
+# commit fa554594f4fd97da4592819ac4ba7218c53c573c 2026-11-18 "T-0148 (a) speed, inkcmp lines: auto_threshold counts its histogram as integers into four tables (exact: counts < 2^53 convert to the same doubles), the rule erase is branchless (er and ink are 0/1); byte-equal on inkdrill's 30 board pages at 400 dpi, 36 figure pages (seed 9007) at 250 dpi, one inverted page and two hinted runs; histogram 44 -> 8 ms, erase 10 -> 2 ms per 400 dpi board page"
 857364213afe22ed9df6b41c4b95bf551fccaee37911413adb0277ca0ee762d3  src/gd3_adapter.c
 c2cd059c6d91290ce523b4f6596beddaef8b2119f45ddf320b27982f5fe64f02  src/gd3_white.c
 3801246822bcbe440203225e2541348a4a650ea7382de58a57e460d2c4ae97c3  src/gd3_blocks.c
 0dc033313d4c269a9fbc515dc9d4615aeee5a71cc5f73718862a90c88902aa39  src/gd3_rle.h
 8447786100ef90cf1dce7c9c43a43bc57ff6af8e4ebe9603c91bc0e7139e9c69  src/layout/blocks.c
 74d84981f090af0e5f903cf4f96737f756a642adf1ad632c51a0a25d06a208ba  src/layout/blocks.h
-5960cbdef923f7a807de957cfab8abae68f6d7beb3657fd3944ac66d6d290a9c  inkcmp/lines.c
+71172b03b406c43d512eee70ec17a5ffd4cd2814e8cfa46c96654e38a990c8ba  inkcmp/lines.c
 65d29cdedbc37f6c901988322f820b3c8dfbfcceb57f1e18244b54a42c77baa7  inkcmp/lines.h
 501d1975d70c575e3ee127204c57e779262f99bf3aa065fad4d1c3a20cb2fea2  inkcmp/white.c
 ad37128d1a08fb3e46dc7bc7749ce417c936aa4f60bbc91938aaf2e2ea0487cd  inkcmp/white.h
