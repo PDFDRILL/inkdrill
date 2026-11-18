@@ -645,3 +645,87 @@ class JudgeMathFamilies(unittest.TestCase):
     def test_other_maths_fonts_do_not(self):
         for f in ("CMSY10", "CMMI10", "MSBM10", "TeX-mathx12", "LMMathSymbols10-Regular", "TeX-mathit10", "mathpazo"):
             self.assertNotIn(r"\usepackage{mathabx}", self.pick(f), f)
+
+    def test_mathtime_loads_mathptmx(self):
+        """MathTime (MTMI, MTMIB, MTSYN, MTEX; board lib:c57ac038ae5f p293, lib:3fe71b4ef018 p328) has no free
+        version; mathptmx is its Times-based relative: set from CMMI its italics and its \\mathrm words (Times on the
+        page) differ in shape (p293: MathTime flags 127 -> 58, Times-Roman 66 -> 31)"""
+        for f in ("QtxpctLqshvdMTMI", "HcxldrTdxpbjMTMIB", "JnskryTvgfgxMTSYN", "YtllkcRjyfrxMTEX", "MTMI", "MTSY"):
+            self.assertEqual(self.pick(f), [r"\usepackage{mathptmx}"], f)
+        for f in ("CMMI10", "CMSY10", "Times-Roman", "NimbusRomNo9L-Regu", "TeX-matha10"):
+            self.assertNotIn(r"\usepackage{mathptmx}", self.pick(f), f)
+
+
+class JudgeStyleNames(unittest.TestCase):
+    """style() reads the face from the font's own name: a subset tag (ABCDEF+) and a producer's obfuscation prefix
+    (one or two capitalised consonant-only six-letter words: "Lxcbxs", board lib:c57ac038ae5f) are not part of it --
+    "YvftdhLxcbxsTimes-Italic" read "bi" because "cbxs" holds "bx". Small caps are a face of their own ("c")."""
+
+    def test_prefixes_are_not_the_name(self):
+        self.assertEqual(judge.style("YvftdhLxcbxsTimes-Italic"), "i")
+        self.assertEqual(judge.style("KXBANU+YvftdhLxcbxsTimes-Italic"), "i")
+        self.assertEqual(judge.style("XBHUGF+VctcqrYchftkTimes-BoldItalic"), "bi")
+        self.assertEqual(judge.style("FjpnnhJgjywlTimes-Bold"), "b")
+        self.assertEqual(judge.style("HffcmrYvygwvTimes-Roman"), "")
+        self.assertEqual(judge.style("JSLHNA+XtrrcfCMMI6"), "xi")
+
+    def test_real_names_keep_their_words(self):     # a name made of real words is not a prefix
+        self.assertEqual(judge.style("NimbusRomNo9L-MediItal"), "bi")
+        self.assertEqual(judge.style("Helvetica-Bold"), "b")
+        self.assertEqual(judge.style("MediumItalic"), "bi")
+        self.assertEqual(judge.style("CMBX10"), "b")
+
+    def test_small_caps(self):
+        self.assertEqual(judge.style("LnrnjhTimes-RomanSmallCaps"), "c")
+        self.assertEqual(judge.style("LnrnjhTimes-RomanSmallCa"), "c")     # mutool's stext cuts names at 24 (p328)
+        self.assertEqual(judge.style("CMCSC10"), "c")
+        self.assertEqual(judge.style("Times-Roman"), "")
+
+
+class JudgeDesignSize(unittest.TestCase):
+    """A page set in a 9 pt design magnified (board lib:6d90e8d27b8b p174: SFRM0900 at 9.63 pt) is set at the
+    design size and magnified the same: at \\fontsize{9.63} LaTeX takes the 10 pt design (SFRM1000, scripts CMR7
+    for the page's CMR6), and optical-size differences were flagged as glyph findings (p174: 0.2143 -> 0.1053)."""
+
+    def test_design_size_from_the_name(self):
+        for f, d in (("LrjgkhSFRM0900", 9.0), ("JSLHNA+DlgbwdCMR9", 9.0), ("CMR10", 10.0), ("SFRM1095", 10.95),
+                     ("LMRoman10-Regular", 10.0), ("CMBX12", 12.0), ("JywkbpSFSX0900", 9.0)):
+            self.assertEqual(judge.design_size(f), d, f)
+        for f in ("Times-Roman", "NimbusRomNo9L-Regu", "LinLibertineT", "Helvetica"):
+            self.assertIsNone(judge.design_size(f), f)
+
+    def test_magnification(self):
+        def page(font, size, n=50):
+            return [("a", 0, 0, 0, 0, 1, 1, font, size)] * n
+        # sizes as mutool reports them, in bp; design sizes and LaTeX's sizes are TeX pt (x 72.27 / 72)
+        self.assertAlmostEqual(judge.magnification(page("LrjgkhSFRM0900", 9.594)), 1.07, places=3)   # p174
+        self.assertEqual(judge.magnification(page("CMR10", 9.963)), 1.0)       # the design itself: unchanged
+        self.assertEqual(judge.magnification(page("CMR10", 10.06)), 1.0)       # within 1.5%: unchanged
+        # a standard LaTeX size is set by LaTeX's own choice of design, which is what the page's class did: 11pt
+        # (CMR10 at 10.95 pt, scripts CMR8 at 8 pt; board lib:b21e554b9232 p201, 1511.08771 p2709) and \small
+        # code (CMTT8 at 7 pt, lib:d68e0271bd4d p334) -- magnified they were set with CMR7 scripts, 0.0021 -> 0.0311
+        self.assertEqual(judge.magnification(page("CMR10", 10.909)), 1.0)
+        self.assertEqual(judge.magnification(page("CMTT8", 6.974)), 1.0)
+        self.assertEqual(judge.magnification(page("Times-Roman", 9.594)), 1.0)  # no design size in the name
+        mixed = page("LrjgkhSFRM0900", 9.594) + page("DknvqhCMMI9", 9.594, 500)   # maths fonts do not decide
+        self.assertAlmostEqual(judge.magnification(mixed), 1.07, places=3)
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeMagnifiedPage(unittest.TestCase):
+    """end to end: a 9 pt page magnified 1.07, read back exactly, pairs with no glyph finding"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-mag-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_magnified_nine_point(self):
+        text = "Die beidseitige Integration nach Trennung der Variablen liefert $x^{2} = c - t^{2}$ und so fort."
+        res, out = _accent_case(self.tmp.name, "mag", "\\scalebox{1.07}{\\fontsize{9}{11}\\selectfont " + text + "}",
+                                text, preamble="\\usepackage[T1]{fontenc}\\usepackage{graphicx}\n")
+        self.assertGreater(res["glyphs"], 60)
+        self.assertEqual(res["glyph"], 0, [ln for ln in out if ln.startswith("G ") and ln.split()[8] == "1"])

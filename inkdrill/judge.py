@@ -73,11 +73,18 @@ FAMILIES = [  # (regex on the PDF font name, preamble, family)
 ]
 MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|txmi|TXMI", r"\usepackage{newtxmath}"),
            (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}"),
-           (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}")]   # mathabx: its own designs of \in, \geq, ...
+           (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}"),   # mathabx: its own designs of \in, \geq, ...
+           (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}")]   # MathTime: no free version; mathptmx is its Times relative
+
+
+#: a producer's obfuscation prefix: capitalised six-letter words without a vowel ("Yvftdh", "Lxcbxs"), before the name
+PREFIX = re.compile(r"^(?:[A-Z][b-df-hj-np-tv-z]{5})+(?=[A-Z])")
 
 
 def style(font: str) -> str:
-    f = font.lower()
+    """the face a font's name says: x maths, m mono, b bold, i italic, c small caps. Read from the name alone: the
+    subset tag (ABCDEF+) and an obfuscation prefix are cut first -- "YvftdhLxcbxsTimes-Italic" read bold from "cbxs"."""
+    f = PREFIX.sub("", font.split("+")[-1]).lower()
     lib = re.search(r"lin(?:libertine|biolinum)([a-z0-9]*)$", f)       # LinLibertineTI: T (Type 1), B bold, I italic
     if lib:
         suf = lib.group(1)
@@ -85,7 +92,45 @@ def style(font: str) -> str:
     return (("x" if re.search(r"eurm|eusm|eufm|euex|cmmi|cmsy|cmex|msbm|msam", f) else "")
             + ("m" if re.search(r"mono|monl|courier|cmtt|inconsolata|typewriter|tt\d", f) else "")
             + ("b" if re.search(r"bold|medi|bx|black|semibold|demi", f) else "")
-            + ("i" if re.search(r"ital|obli|ti\d|mi\d|slant|it$", f) else ""))
+            + ("i" if re.search(r"ital|obli|ti\d|mi\d|slant|it$", f) else "")
+            + ("c" if re.search(r"smallca|small-caps|csc\d", f) else ""))
+
+
+#: the design size a font's name carries: EC/cm-super (SFRM0900 -> 9, SFRM1095 -> 10.95), Computer Modern (CMR9,
+#: CMBX12), Latin Modern (LMRoman10-Regular); None for a font without optical sizes in its name (Times, Helvetica)
+DESIGN = [(re.compile(r"(?:SF|EC|TC)[A-Z]{2}(\d{4})$"), 100.0),
+          (re.compile(r"CM[A-Z]{1,4}(\d{1,2})$"), 1.0),
+          (re.compile(r"LM(?:Roman|Sans|Mono)[A-Za-z]*(\d{1,2})(?:-|$)"), 1.0)]
+#: a page whose body size differs from its design size by at most this is set at its own size, as before
+MAG_TOL = 0.015
+#: LaTeX's standard sizes (pt): at these the classes and the .fd files choose the design themselves (11pt: CMR10 at
+#: 10.95, scripts CMR8), so the judge's \fontsize chooses as the page did; magnification is for any other size
+STANDARD_PT = (5, 6, 7, 8, 9, 10, 10.95, 12, 14.4, 17.28, 20.74, 24.88)
+
+
+def design_size(font: str) -> float | None:
+    n = font.split("+")[-1]
+    for rx, div in DESIGN:
+        m = rx.search(n)
+        if m:
+            return int(m.group(1)) / div
+    return None
+
+
+def magnification(ac: list) -> float:
+    """how much the page magnifies its body font's design: the commonest (text font, size) of the page's glyphs,
+    its size over the design size in its name (board lib:6d90e8d27b8b p174: SFRM0900 at 9.63 pt -> 1.07). 1.0
+    when the name carries no design size, the two agree within MAG_TOL, or the size is one of LaTeX's own
+    (STANDARD_PT): such a page is set as it always was."""
+    body = collections.Counter((c[7], round(c[8], 4)) for c in ac if not re.search(MATHFONT, c[7]))
+    if not body:
+        return 1.0
+    (font, size), _ = body.most_common(1)[0]
+    d = design_size(font)
+    pt = size * 72.27 / 72                         # mutool's sizes are bp; design sizes are TeX pt
+    if not d or pt <= 0 or abs(pt / d - 1) <= MAG_TOL or any(abs(pt / s - 1) <= 0.005 for s in STANDARD_PT):
+        return 1.0
+    return round(pt / d, 4)
 
 
 _STEXT = {}                                           # per judge() call: font_preamble and chars read one page
@@ -635,19 +680,28 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
     setas = [(dict(), set()) for _ in jobs]          # what each job's lines are set with: a job stopped by its pass
     while any(live):                                  # limit keeps its last set lines (as a run of its own would)
         body, starts, owner_of = [], [], []
-        n = 4 + pre.count("\n") + 1                       # documentclass, usepackage, pre, begin{document}
+        # a size is a number, or (size, magnification) for a page set in a design magnified (`magnification`): its
+        # lines are set at size / magnification in a box scaled by it (graphicx; varwidth keeps displays legal)
+        mags = any(isinstance(sz, tuple) for _, sizes in jobs for sz in sizes)
+        pre_run = ("\\usepackage{graphicx}\n" + pre) if mags else pre
+        n = 4 + pre_run.count("\n") + 1                   # documentclass, usepackage, pre, begin{document}
         for j, (texts, sizes) in enumerate(jobs):
             for i, (t, sz) in enumerate(zip(texts, sizes)):
                 src = "\\mbox{}" if i in setas[j][0] else latex_text(t, frozenset(setas[j][1]))
-                line = "\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}" % (sz * 72.27 / 72,
-                                                                                      sz * 72.27 / 72 * 1.2, src)
+                if isinstance(sz, tuple):
+                    pt = sz[0] / sz[1] * 72.27 / 72
+                    line = ("\\begin{pline}\\scalebox{%.5f}{\\begin{varwidth}{60cm}\\fontsize{%.4f}{%.4f}\\selectfont %s"
+                            "\\end{varwidth}}\\end{pline}" % (sz[1], pt, pt * 1.2, src))
+                else:
+                    line = "\\begin{pline}\\fontsize{%.4f}{%.4f}\\selectfont %s\\end{pline}" % (sz * 72.27 / 72,
+                                                                                          sz * 72.27 / 72 * 1.2, src)
                 starts.append(n)
                 owner_of.append((j, i))
                 n += line.count("\n") + 1
                 body.append(line)
         with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
             fh.write("\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
-                     "\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}\n" + pre + "\n\\begin{document}\n" + "\n".join(body)
+                     "\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
                      + "\n\\end{document}\n")
         subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
                        capture_output=True)
@@ -1023,6 +1077,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                       for gy in range(int(b[1] // 256), int(b[3] // 256) + 1) for ci in cgrid.get((gx, gy), ()))
         cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
+    mag = magnification(ac)                        # a magnified design is set at its design size, magnified alike
+    set_sizes = sizes if mag == 1.0 else [(sz, mag) for sz in sizes]
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
         print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
@@ -1091,12 +1147,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     side_a = None
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(comp, [ln["text"] for ln in lv], sizes, pre, wd)
+            fut = pool.submit(comp, [ln["text"] for ln in lv], set_sizes, pre, wd)
             side_a = memo(("side_a", a_pdf, pno), glyph_side_a, a_pdf, pno, wd, spec_a,   # once per batch page
                           any(is_formula(ln) for ln in lv))
             bpdf, failed, dropped, bo = fut.result()
     else:
-        bpdf, failed, dropped, bo = comp([ln["text"] for ln in lv], sizes, pre, wd)
+        bpdf, failed, dropped, bo = comp([ln["text"] for ln in lv], set_sizes, pre, wd)
     gone = UNMAPPABLE | dropped
     side_b, fut_b = None, None
     if os.path.exists(bpdf):                        # the reading's trace, origins (and fonts) while its stext is read
