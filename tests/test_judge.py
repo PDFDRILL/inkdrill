@@ -943,3 +943,61 @@ class JudgeLineFamily(unittest.TestCase):
         reads[3] = reads[3].replace("Conference", "Conforence")
         res, rows = self.run_case("plant", reads, False)
         self.assertEqual([(r[2], r[3]) for r in rows if r[8] == "1"], [("e", "o")])
+
+
+FIXTURE_T3 = os.path.join(os.path.dirname(__file__), "fixtures", "type3-mpl.pdf")
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS + ("pdffonts",)) and os.path.exists(judge.INKCMP),
+                     "needs " + ", ".join(TOOLS) + ", pdffonts and build/inkcmp")
+class JudgeType3Snap(unittest.TestCase):
+    """poppler draws a Type 3 glyph from its glyph cache at the floor of the device origin, so the page's ink of it
+    sits up to a pixel from where the outline's exact origin puts it (board 2312.11532 p7: matplotlib's DejaVuSerif
+    labels, rotated and upright, B 0.4-1.25 px off). The judge places the reading's glyph there too. Fixture: a
+    matplotlib page (tools/make_type3_fixture.py), DejaVuSerif "Divers" at every quarter-pixel fraction of origin,
+    upright and rotated, read correctly. Snapped, 4 of its 192 DejaVuSerif glyphs flag (outline differences between
+    TeX's DejaVuSerif and matplotlib's); placed at the exact origin, 46."""
+
+    def flags(self):
+        d = tempfile.mkdtemp(prefix="test-judge-t3-", dir=os.environ.get("TMPDIR"))
+        try:
+            st = judge.stext(FIXTURE_T3, "1")
+            wpt, hpt = judge.page_size(FIXTURE_T3, 1)
+            k = 200 / 72
+            lines = []
+            for blk in re.findall(r"<line [^>]*>.*?</line>", st, re.S):
+                cs = [(c, [float(v) for v in q.split()]) for c, q in re.findall(r'<char c="(.*?)" quad="([^"]+)"', blk)]
+                xs = [v for _, q in cs for v in q[0::2]]
+                ys = [v for _, q in cs for v in q[1::2]]
+                lines.append({"type": "text", "text": "".join(c for c, _ in cs).strip(), "region": {
+                    "top_left_x": int(min(xs) * k) - 2, "top_left_y": int(min(ys) * k) - 2,
+                    "width": int((max(xs) - min(xs)) * k) + 4, "height": int((max(ys) - min(ys)) * k) + 4}})
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump({"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k),
+                                      "lines": lines}]}, fh)
+            out = io.StringIO()
+            res = judge.judge(FIXTURE_T3, 1, lj, os.path.join(d, "w"), out=out, route="glyph", setter=False)
+            rows = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ")]
+            return res, sum(1 for r in rows if r[11] == "DejaVuSerif"), \
+                sum(1 for r in rows if r[11] == "DejaVuSerif" and r[8] == "1")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_type3_names(self):
+        self.assertEqual(judge.type3_names(FIXTURE_T3, 1), {"DejaVuSerif", "NimbusRoman-Regular"})
+
+    def test_snapped(self):
+        res, n, flagged = self.flags()
+        self.assertEqual((res["glyphs"], res["a_page_ink"], n), (552, 552, 192))
+        self.assertLessEqual(flagged, 4)
+
+    def test_exact_origin_flags(self):
+        """the other side: B at the exact origin (snap made the identity) flags ten times as many"""
+        real = judge.snap
+        judge.snap = lambda side, adds, X, Y: (side, adds)
+        try:
+            _, _, flagged = self.flags()
+        finally:
+            judge.snap = real
+        self.assertGreaterEqual(flagged, 40)

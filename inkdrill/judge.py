@@ -369,6 +369,27 @@ def along(cs, TA) -> tuple | None:
     return us.most_common(1)[0][0] if us else None
 
 
+def type3_names(pdf: str, page: int) -> set:
+    """the page's Type 3 fonts by name without the subset prefix (a name some other font of the page also carries
+    is left out): poppler draws their glyphs from its glyph cache at the floor of the device origin"""
+    out = subprocess.run(["pdffonts", "-f", str(page), "-l", str(page), pdf], capture_output=True, text=True).stdout
+    kinds = collections.defaultdict(set)
+    for ln in out.splitlines()[2:]:
+        m = re.match(r"(\S+)\s+(Type 3|Type 1C|Type 1|TrueType|CID \S+(?: \S+)?)\s", ln)
+        if m:
+            kinds[m[1].split("+")[-1]].add(m[2])
+    return {n for n, k in kinds.items() if k == {"Type 3"}}
+
+
+def snap(side, adds, X: float, Y: float):
+    """B (and its neighbours) moved to where poppler draws a Type 3 glyph whose origin is (X, Y): the cached glyph
+    at floor of the device origin, X - OX (board 2312.11532 p7, matplotlib's rotated DejaVuSerif labels: B 0.4-1.25
+    px off the page's ink, by the origin's fraction, upright and rotated alike)"""
+    dx, dy = math.floor(X - OX) + OX - X, math.floor(Y - OY) + OY - Y
+    side = side if side == "none" else side[:3] + (side[3] + dx, side[4] + dy)
+    return side, [a if a[0] != "B" else a[:4] + (a[4] + dx, a[5] + dy) for a in adds]
+
+
 def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res, bo: int = 0) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
@@ -394,7 +415,14 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
             for gy in range(int(q[1] // G), int(q[3] // G) + 1):
                 abuck[(gx, gy)].append(c)
     hit = lambda q, w: q[0] < w[2] and q[2] > w[0] and q[1] < w[3] and q[3] > w[1]
-    jobs, keys = [], []
+    jobs, keys, origin = [], [], []                 # origin: per job A's (X, Y) and font name
+    fname = lambda f: f.split("+")[-1]
+    t3c = []
+
+    def t3():                                       # the page's Type 3 names, read once and only when needed
+        if not t3c:
+            t3c.append(type3_names(ink.a_pdf, ink.pno))
+        return t3c[0]
     for i, ln, b, ca, cb, pairs, _ in work:
         TB = Origins(spec_b.traced(bo + i + 1, tb.get(bo + i + 1, [])))
         bg = [(q, TB.get(q[1], q[2], html.unescape(q[0]))) for q in cb]
@@ -439,14 +467,22 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                     continue
                 if hit((q[3] * S + dx - 4, q[4] * S + dy - 4, q[5] * S + dx + 4, q[6] * S + dy + 4), win):
                     adds.append(("B", FB.find(g[4]), g[1], tuple(v * S for v in g[5]), q[1] * S + dx, q[2] * S + dy))
+            if sa is None and fname(pa[7]) in t3():     # the page's ink from the start, drawn snapped
+                sb, adds = snap(sb, adds, X, Y)
             jobs.append((sa, sb, win, adds))
+            origin.append((X, Y, fname(pa[7])))
             keys.append(((i, k), len(jobs) - 1))
     need = any(j[0] is None for j in jobs)        # an A side that is the page's ink from the start
     r, _ = glyph_job([FA, FB], jobs, ink.get()[3] if need else None)
     redo = [j for j, v in enumerate(r) if isinstance(v, str) and v.startswith("A")]
     if redo:                                         # the page's ink where A's own program has no outline
-        r2, _ = glyph_job([FA, FB], [(None, jobs[j][1], jobs[j][2], [a for a in jobs[j][3] if a[0] == "B"])
-                                     for j in redo], ink.get()[3])
+        again = []
+        for j in redo:
+            sb, adds = jobs[j][1], [a for a in jobs[j][3] if a[0] == "B"]
+            if origin[j][2] in t3():
+                sb, adds = snap(sb, adds, origin[j][0], origin[j][1])
+            again.append((None, sb, jobs[j][2], adds))
+        r2, _ = glyph_job([FA, FB], again, ink.get()[3])
         for j, v in zip(redo, r2):
             r[j] = v
         res["a_page_ink"] += len(redo)
