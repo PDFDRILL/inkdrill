@@ -318,6 +318,33 @@ def glyph_side_a(a_pdf: str, pno: int, wd: str, spec: "Spec", render: bool) -> t
     return FA, TA, ink
 
 
+def turn(m) -> tuple | None:
+    """a glyph matrix's direction of writing as a unit vector (x right, y down), or None when it writes left to right
+    upright: a rotated label (a plot's tick, rotatebox; board 0864 p4: dir="0 -1") is compared with the reading's
+    glyph turned the same way, and its line paired along that direction"""
+    a, b = m[0], m[1]
+    n = math.hypot(a, b)
+    if n == 0 or (b == 0 and a > 0):
+        return None
+    return a / n, b / n
+
+
+def turned(v, u) -> tuple:
+    """the vector (x, y) (x right, y down) turned from left-to-right writing into the direction u"""
+    return v[0] * u[0] - v[1] * u[1], v[0] * u[1] + v[1] * u[0]
+
+
+def along(cs, TA) -> tuple | None:
+    """a line's direction of writing: the one most of its glyphs' matrices write in (`turn`), None for left to right"""
+    us = collections.Counter()
+    for c in cs:
+        g = TA.get(c[1], c[2], html.unescape(c[0]))
+        if g is not None:
+            u = turn(g[5])
+            us[None if u is None else (round(u[0], 3), round(u[1], 3))] += 1
+    return us.most_common(1)[0][0] if us else None
+
+
 def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res, bo: int = 0) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
@@ -354,7 +381,13 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
             gb = TB.get(pbb[1], pbb[2], html.unescape(pbb[0]))
             # a character with no glyph of its own (a ligature's second letter, a combining slash): its ink is its
             # neighbours', which the window collects
-            sb = (FB.find(gb[4]), gb[1], tuple(v * S for v in gb[5]), X, Y) if gb else "none"
+            u = turn(sa[2]) if sa is not None else None     # A written rotated: B is turned to A's direction
+            mb = None
+            if gb:
+                mb = tuple(v * S for v in gb[5])
+                if u:
+                    mb = turned(mb[:2], u) + turned(mb[2:], u)
+            sb = (FB.find(gb[4]), gb[1], mb, X, Y) if gb else "none"
             if gb is None:
                 res["b_no_glyph"] += 1
             if sa is None:
@@ -371,6 +404,14 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
             dx, dy = X - pbb[1] * S, Y - pbb[2] * S             # B's frame -> A's window, by this pair's origins
             for q, g in bg:
                 if q is pbb or g is None:
+                    continue
+                if u:                                    # its offset from the pair's origin, turned like the pair
+                    cs = [turned(((x - pbb[1]) * S, (y - pbb[2]) * S), u) for x in (q[3], q[5]) for y in (q[4], q[6])]
+                    o = turned(((q[1] - pbb[1]) * S, (q[2] - pbb[2]) * S), u)
+                    if hit((X + min(c[0] for c in cs) - 4, Y + min(c[1] for c in cs) - 4,
+                            X + max(c[0] for c in cs) + 4, Y + max(c[1] for c in cs) + 4), win):
+                        m = tuple(v * S for v in g[5])
+                        adds.append(("B", FB.find(g[4]), g[1], turned(m[:2], u) + turned(m[2:], u), X + o[0], Y + o[1]))
                     continue
                 if hit((q[3] * S + dx - 4, q[4] * S + dy - 4, q[5] * S + dx + 4, q[6] * S + dy + 4), win):
                     adds.append(("B", FB.find(g[4]), g[1], tuple(v * S for v in g[5]), q[1] * S + dx, q[2] * S + dy))
@@ -1241,6 +1282,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         b_total += len(bc[i])
         b = boxes[i]
         ca = sorted(of_line.get(i, ()), key=lambda c: c[1])
+        u = along(ca, side_a[1]) if side_a is not None else None
+        if u:                                       # a rotated line: its glyphs in the order they are written
+            ca = sorted(ca, key=lambda c: c[1] * u[0] + c[2] * u[1])
         cb = sorted(bc[i], key=lambda c: c[1])
         if not ca or not cb:
             res["lines_empty"] += 1

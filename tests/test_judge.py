@@ -786,3 +786,61 @@ class JudgeDisplayStyleCases(unittest.TestCase):
                                 "The ratio $\\frac{a+b}{c+d}$ is small.", typ="text")
         self.assertGreater(res["glyphs"], 15)
         self.assertEqual(res["glyph"], 0, self.flagged(out))
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and os.path.exists(judge.INKCMP),
+                     "needs " + ", ".join(TOOLS) + " and build/inkcmp")
+class JudgeRotatedGlyph(unittest.TestCase):
+    """a rotated label (a plot's tick, \\rotatebox; board 0864 p4 stext dir="0 -1") read correctly pairs clean on the
+    glyph route: the reading's glyph is compared turned to the page's direction and the line paired along it. Before,
+    every glyph of a 90 degree label was flagged and a 180 degree one paired 3 of 16. A planted letter still flags.
+    Both setters: the page's own font program and pdflatex."""
+    TEXT = "Rotated label 2024"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-rot-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_case(self, name, angle, read, setter):
+        d = os.path.join(self.tmp.name, name)
+        os.makedirs(os.path.join(d, "w"))
+        with open(os.path.join(d, "page.tex"), "w") as fh:
+            fh.write("\\documentclass[10pt]{article}\n\\usepackage[margin=2.5cm]{geometry}\n\\usepackage{graphicx}\n"
+                     "\\pagestyle{empty}\n\\begin{document}\n\\noindent\\rotatebox{%d}{\\mbox{%s}}\n\\end{document}\n"
+                     % (angle, self.TEXT))
+        subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                       capture_output=True, check=True)
+        pdf = os.path.join(d, "page.pdf")
+        cs = judge.chars(pdf, 1, 1)[0]
+        x0, y0 = min(c[3] for c in cs), min(c[4] for c in cs)
+        x1, y1 = max(c[5] for c in cs), max(c[6] for c in cs)
+        wpt, hpt = judge.page_size(pdf, 1)
+        k = 200 / 72
+        doc = {"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k), "lines": [
+            {"type": "text", "text": read, "region": {"top_left_x": int(x0 * k) - 2, "top_left_y": int(y0 * k) - 2,
+                                                      "width": int((x1 - x0) * k) + 4,
+                                                      "height": int((y1 - y0) * k) + 4}}]}]}
+        lj = os.path.join(d, "r.lines.json")
+        with open(lj, "w") as fh:
+            json.dump(doc, fh)
+        out = io.StringIO()
+        res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route="glyph", setter=setter)
+        return res, [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ")]
+
+    def test_rotated_label_pairs_clean(self):
+        for angle in (90, -90, 180):
+            for setter in (True, False):
+                with self.subTest(angle=angle, setter=setter):
+                    res, rows = self.run_case("clean%d%s" % (angle, setter), angle, self.TEXT, setter)
+                    self.assertEqual((res["glyphs"], res["unpaired_A"], res["unpaired_B"]), (16, 0, 0))
+                    self.assertEqual([r[2] for r in rows if r[8] == "1"], [])
+
+    def test_planted_letter_still_flags(self):
+        for setter in (True, False):
+            with self.subTest(setter=setter):
+                res, rows = self.run_case("plant%s" % setter, 90, self.TEXT.replace("ted", "tcd"), setter)
+                self.assertEqual([(r[2], r[3]) for r in rows if r[8] == "1"], [("e", "c")])
