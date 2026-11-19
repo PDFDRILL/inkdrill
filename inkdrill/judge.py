@@ -77,6 +77,30 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
            (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}")]   # MathTime: no free version; mathptmx is its Times relative
 
 
+#: a line set in another family than its page's (a plot's labels, a running head): the NFSS family pdflatex sets it
+#: in, by the PDF font name of most of the line's text glyphs (board 2312.11532 p7: matplotlib's DejaVuSerif on a Times
+#: page; 0864 p4: a Utopia running head). FAMILIES' families by their NFSS names.
+LINE_FAMILIES = [(r"DejaVuSerifCondensed", "DejaVuSerifCondensed-TLF"), (r"DejaVuSerif", "DejaVuSerif-TLF"),
+                 (r"DejaVuSansCondensed", "DejaVuSansCondensed-TLF"), (r"DejaVuSans(?!Mono)", "DejaVuSans-TLF"),
+                 (r"Utopia", "put")]
+NFSS = {"times": "ptm", "helvetica": "phv", "palatino": "ppl", "cm": "cmr", "libertine": "LinuxLibertineT-TLF"}
+NOTEXT = MATHFONT + r"|Inconsolata|Courier|CMTT|Mono|Symbol|Dingbat"
+
+
+def line_family(fonts, fam: str) -> str | None:
+    """the NFSS family a line is set in when most of its text glyphs (fonts: their PDF font names) are in a known
+    family other than the page's `fam`; None otherwise (the line is set in the page's family, as before)"""
+    n = collections.Counter()
+    for f in fonts:
+        f = f.split("+")[-1]
+        if re.search(NOTEXT, f):
+            continue
+        n[next((nf for r, nf in LINE_FAMILIES if re.search(r, f)), None)
+          or next((NFSS[x] for r, _, x in FAMILIES if re.search(r, f)), None)] += 1
+    top = n.most_common(1)[0][0] if n else None
+    return top if top is not None and top != NFSS.get(fam) else None
+
+
 #: a producer's obfuscation prefix: capitalised six-letter words without a vowel ("Yvftdh", "Lxcbxs"), before the name
 PREFIX = re.compile(r"^(?:[A-Z][b-df-hj-np-tv-z]{5})+(?=[A-Z])")
 
@@ -1122,7 +1146,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     def inside(c, b):
         return b[0] <= (c[3] + c[5]) / 2 * S < b[2] and b[1] <= (c[4] + c[6]) / 2 * S < b[3]
 
-    sizes = []
+    sizes, lfams = [], []                          # per line: its size, its glyphs' font names
     cgrid = collections.defaultdict(list)          # glyphs by the cell of their centre, in page order
     for ci, c in enumerate(ac):
         cgrid[(int((c[3] + c[5]) / 2 * S // 256), int((c[4] + c[6]) / 2 * S // 256))].append(ci)
@@ -1133,6 +1157,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                       for gy in range(int(b[1] // 256), int(b[3] // 256) + 1) for ci in cgrid.get((gx, gy), ()))
         cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
         sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
+        lfams.append([ac[ci][7] for ci in near if inside(ac[ci], b)])
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
         print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
@@ -1140,6 +1165,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     set_by = "pdflatex"
+    texts = []
+    for ln, fs in zip(lv, lfams):
+        t, lf = line_tex(ln), line_family(fs, fam)
+        texts.append(t if lf is None else "{\\fontfamily{%s}\\selectfont %s}" % (lf, t))
 
     def reading_of(path):
         """a peer reading of this page: its leaf lines, their boxes (400 grid) and sizes, as for the own reading"""
@@ -1190,7 +1219,11 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
 
     # the route is the page's, not the reading's: every judged reading of this page (this one and its peers) must be
     # free of formula lines and settable, or pdflatex sets them all (coordinator, 2026-11-17: one instrument per page)
-    if setter and lv:
+    # the setter sets every line in the page's one regular font: a page with text in a second family it cannot set
+    # (judged by the page's own glyphs, so every reading of it takes the same route) goes to pdflatex, which sets
+    # each line in its own family (line_family)
+    second = any(line_family([f], fam) for f in {c[7] for c in ac})
+    if setter and lv and not second:
         mine = (lv, [box(ln) for ln in lv], sizes)
         others = [r for r in (reading_of(pth) for pth in (peers or [])) if r is not None]
         if not any(is_formula(x) for r in [mine] + others for x in r[0]):
@@ -1201,12 +1234,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     side_a = None
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(comp, [line_tex(ln) for ln in lv], sizes, pre, wd)
+            fut = pool.submit(comp, texts, sizes, pre, wd)
             side_a = memo(("side_a", a_pdf, pno), glyph_side_a, a_pdf, pno, wd, spec_a,   # once per batch page
                           any(is_formula(ln) for ln in lv))
             bpdf, failed, dropped, bo = fut.result()
     else:
-        bpdf, failed, dropped, bo = comp([line_tex(ln) for ln in lv], sizes, pre, wd)
+        bpdf, failed, dropped, bo = comp(texts, sizes, pre, wd)
     gone = UNMAPPABLE | dropped
     side_b, fut_b = None, None
     if os.path.exists(bpdf):                        # the reading's trace, origins (and fonts) while its stext is read

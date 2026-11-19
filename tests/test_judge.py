@@ -876,3 +876,70 @@ class JudgeRotatedGlyph(unittest.TestCase):
             with self.subTest(setter=setter):
                 res, rows = self.run_case("plant%s" % setter, 90, self.TEXT.replace("ted", "tcd"), setter)
                 self.assertEqual([(r[2], r[3]) for r in rows if r[8] == "1"], [("e", "c")])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and os.path.exists(judge.INKCMP),
+                     "needs " + ", ".join(TOOLS) + " and build/inkcmp")
+class JudgeLineFamily(unittest.TestCase):
+    """a line in another family than its page's (a plot's DejaVuSerif labels on a Times page, board 2312.11532 p7; a
+    Utopia running head, 0864 p4) is set in that family, by the page's own font names; before, every glyph of it was
+    set in Times and flagged. The page's Times line is set as before, and a planted letter still flags. The setter
+    sets one font per page, so such a page goes to pdflatex whichever route was asked for."""
+    LINES = [("times", "The body of the page is set in Times Roman here."),
+             ("times", "Most of its glyphs are Times, as on the board pages,"),
+             ("times", "so the page family is Times and the rest is a second."),
+             ("put", "Proceedings of the Conference on Reading"),
+             ("DejaVuSerif-TLF", "Diversity and coherence 0.15")]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="test-judge-fam-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_case(self, name, reads, setter):
+        d = os.path.join(self.tmp.name, name)
+        os.makedirs(os.path.join(d, "w"))
+        body = "\\\\\n".join(t if f == "times" else "{\\fontfamily{%s}\\selectfont %s}" % (f, t) for f, t in self.LINES)
+        with open(os.path.join(d, "page.tex"), "w") as fh:
+            fh.write("\\documentclass[10pt]{article}\n\\usepackage[T1]{fontenc}\\usepackage{times}\n"
+                     "\\usepackage[margin=2.5cm]{geometry}\n\\pagestyle{empty}\n\\begin{document}\n\\noindent "
+                     + body + "\n\\end{document}\n")
+        subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                       capture_output=True, check=True)
+        pdf = os.path.join(d, "page.pdf")
+        rows = {}
+        for c in judge.chars(pdf, 1, 1)[0]:
+            rows.setdefault(round(c[2]), []).append(c)
+        wpt, hpt = judge.page_size(pdf, 1)
+        k = 200 / 72
+        lines = []
+        for (_, cs), read in zip(sorted(rows.items()), reads):
+            x0, y0 = min(c[3] for c in cs), min(c[4] for c in cs)
+            x1, y1 = max(c[5] for c in cs), max(c[6] for c in cs)
+            lines.append({"type": "text", "text": read, "region": {
+                "top_left_x": int(x0 * k) - 2, "top_left_y": int(y0 * k) - 2,
+                "width": int((x1 - x0) * k) + 4, "height": int((y1 - y0) * k) + 4}})
+        lj = os.path.join(d, "r.lines.json")
+        with open(lj, "w") as fh:
+            json.dump({"pages": [{"page": 1, "page_width": round(wpt * k), "page_height": round(hpt * k),
+                                  "lines": lines}]}, fh)
+        out = io.StringIO()
+        res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route="glyph", setter=setter)
+        return res, [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ")]
+
+    def test_each_line_in_its_family(self):
+        for setter in (True, False):
+            with self.subTest(setter=setter):
+                res, rows = self.run_case("clean%s" % setter, [t for _, t in self.LINES], setter)
+                self.assertEqual(res["glyphs"], sum(len(t.replace(" ", "")) for _, t in self.LINES))
+                self.assertNotIn("setter", res, "a page with a second family is set by pdflatex")
+                self.assertEqual([(r[1], r[2], r[11]) for r in rows if r[8] == "1"], [])
+
+    def test_planted_letter_still_flags(self):
+        reads = [t for _, t in self.LINES]
+        reads[3] = reads[3].replace("Conference", "Conforence")
+        res, rows = self.run_case("plant", reads, False)
+        self.assertEqual([(r[2], r[3]) for r in rows if r[8] == "1"], [("e", "o")])
