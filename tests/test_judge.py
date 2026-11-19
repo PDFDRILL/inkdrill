@@ -1001,3 +1001,38 @@ class JudgeType3Snap(unittest.TestCase):
         finally:
             judge.snap = real
         self.assertGreaterEqual(flagged, 40)
+
+
+@unittest.skipUnless(shutil.which("pdflatex") and shutil.which("mutool"), "needs pdflatex and mutool")
+class JudgeFontPrologue(unittest.TestCase):
+    """pdfTeX writes one font object per TFM with /Widths from the size the document first set it at (one decimal:
+    SFRM1000's v is 527.7 at 10 pt, 527.6 at 10.4 pt), and poppler draws by them: a page's snippet moved with the
+    jobs set before it in a batch (board, reversed order: 10 of 49 judge.out 1 px apart). compile_group's first page
+    sets every TFM at its design size, so a page's widths are the same alone, after a 10.4 pt page and before it."""
+
+    @staticmethod
+    def widths(pdf, page):
+        out = {}
+        res = subprocess.run(["mutool", "show", pdf, "pages/%d/Resources/Font" % page], capture_output=True,
+                             text=True).stdout
+        for o in re.findall(r"/F\d+ (\d+) 0 R", res):
+            d = subprocess.run(["mutool", "show", pdf, o], capture_output=True, text=True).stdout
+            w = re.search(r"/Widths (\d+) 0 R", d)
+            if w:
+                body = subprocess.run(["mutool", "show", pdf, w[1]], capture_output=True, text=True).stdout
+                out[re.search(r"/BaseFont /\w+\+(\S+)", d)[1]] = body.split("\n", 1)[1]
+        return out
+
+    def test_widths_do_not_depend_on_the_group(self):
+        bp = 72 / 72.27
+        ten, big = (["kqvxy However"], [10 * bp]), (["kqvxy However"], [10.4 * bp])
+        got = {}
+        with tempfile.TemporaryDirectory(prefix="test-judge-prologue-") as d:
+            for tag, jobs, at in (("alone", [ten], 0), ("after", [big, ten], 1), ("before", [ten, big], 0)):
+                wd = os.path.join(d, tag)
+                os.makedirs(wd)
+                pdf, res = judge.compile_group(jobs, "", wd)
+                got[tag] = self.widths(pdf, res[at][2] + 1)
+        self.assertIn("SFRM1000", got["alone"])
+        self.assertEqual(got["after"], got["alone"])
+        self.assertEqual(got["before"], got["alone"])

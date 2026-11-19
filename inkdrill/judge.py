@@ -778,6 +778,20 @@ def set_size(sz: float) -> float:
     return near if SNAP_MIN < d <= SNAP else pt    # within SNAP_MIN: rounding, kept as it was (p328's 10.0004)
 
 
+#: pdfTeX writes ONE font object per TFM, whatever sizes use it, with /Widths from the size the document first set it
+#: at (one decimal, so 527.7 at 10 pt and 527.6 at 10.4 pt): a group's snippets moved with the other jobs set before
+#: them, and poppler draws by those widths (board batch, reversed order: 10 of 49 judge.out 1 px apart). Each pass
+#: logs its fonts (tracefnt) and the next sets one glyph of every TFM at its design size on a first page.
+FONTLOG = re.compile(r"External font `(\S+?)(?: at ?[\d.]+pt| scaled \d+)?' loaded as")
+FIRSTCHAR = ("\\makeatletter\\def\\inkfirst#1{\\begingroup\\count@=0 \\loop\\ifnum\\count@<256 \\iffontchar#1\\count@"
+             " #1\\char\\count@\\count@=256 \\fi\\advance\\count@ by 1 \\repeat\\endgroup}\\makeatother")
+
+
+def prologue(tfms) -> str:
+    """the first page: one glyph of each TFM, at its design size, in a fixed order"""
+    return "\\begin{pline}" + "".join("\\font\\inkf=%s \\inkfirst\\inkf" % t for t in sorted(tfms)) + "\\end{pline}"
+
+
 def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12) -> tuple[str, dict, set]:
     """All lines in one pdflatex run (one page per line). A character pdflatex reports it cannot set ("Unicode
     character ... (U+XXXX) not set up") is dropped from every line and the run is repeated; a line whose source raises
@@ -798,10 +812,14 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
     used = [0] * len(jobs)
     live = [True] * len(jobs)
     setas = [(dict(), set()) for _ in jobs]          # what each job's lines are set with: a job stopped by its pass
-    while any(live):                                  # limit keeps its last set lines (as a run of its own would)
+    tfms, more, rounds = set(), True, 0               # the fonts' first page (`prologue`): until it holds them all
+    while any(live) or more:                          # limit keeps its last set lines (as a run of its own would)
         body, starts, owner_of = [], [], []
         pre_run = pre
         n = 5 + pre_run.count("\n") + 1                   # fix-cm, documentclass, usepackage, pre, begin{document}
+        if tfms:
+            body.append(prologue(tfms))
+            n += 1
         for j, (texts, sizes) in enumerate(jobs):
             for i, (t, sz) in enumerate(zip(texts, sizes)):
                 src = "\\mbox{}" if i in setas[j][0] else latex_text(t, frozenset(setas[j][1]))
@@ -814,7 +832,7 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
         with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
             fh.write("\\RequirePackage{fix-cm}\n"     # designs by size range, as the page's own (p174)
                      "\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
-                     "\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
+                     "\\usepackage[loading]{tracefnt}\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}" + FIRSTCHAR + "\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
                      + "\n\\end{document}\n")
         subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
                        capture_output=True)
@@ -851,6 +869,10 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
                     elif i not in failed[j]:          # the group's line number is no part of the line's error
                         new[j].setdefault(i, INPUTLINE.sub("on its input line", msg))
                 msg, uni = None, None
+        got_t = {m[1] for m in FONTLOG.finditer("\n".join(log))}
+        rounds += 1
+        more = not got_t <= tfms and rounds < passes
+        tfms |= got_t
         for j in range(len(jobs)):
             if not live[j]:
                 continue
@@ -865,7 +887,7 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
                 live[j] = False
             if live[j]:
                 setas[j] = (dict(failed[j]), set(drop[j]))
-    first, out = 0, []
+    first, out = (1 if tfms else 0), []               # the fonts' page comes first
     for j, (texts, _) in enumerate(jobs):
         out.append((failed[j], drop[j], first))
         first += len(texts)
@@ -1172,7 +1194,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     fam, pre = memo(("pre", a_pdf, pno), font_preamble, a_pdf, pno)
     spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"), os.path.join(wd, "fontsA"))
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
-    comp = compiler or (lambda texts, sizes, pre, wd: compile_lines(texts, sizes, pre, wd) + (0,))   # them
+    def own(texts, sizes, pre, wd):                 # one page alone: a group of one, the fonts' page included
+        pdf, got = compile_group([(texts, sizes)], pre, wd)
+        return pdf, got[0][0], got[0][1], got[0][2]
+    comp = compiler or own                           # (origins as the PDF places them)
 
     def box(ln):
         r = ln["region"]
@@ -1550,7 +1575,7 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
             gwd = os.path.join(bwd, "group-%d" % g)
             os.makedirs(gwd, exist_ok=True)
             pdf, got = compile_group([reqs[j][:2] for j in js], pre, gwd)
-            want = sum(len(reqs[j][0]) for j in js)
+            want = sum(len(reqs[j][0]) for j in js) + (got[0][2] if got else 0)   # + the fonts' page
             info = subprocess.run(["pdfinfo", pdf], capture_output=True, text=True).stdout if os.path.exists(pdf) else ""
             m = re.search(r"Pages:\s+(\d+)", info)
             if not m or int(m[1]) != want:           # one page's fatal error took the group down: page by page
