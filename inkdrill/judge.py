@@ -659,6 +659,10 @@ def latex_text(s: str, drop: frozenset = frozenset()) -> str:
     out, math, i = [], False, 0
     while i < len(s):
         ch = s[i]
+        if ch == "\\" and i + 1 == len(s):           # a trailing backslash would eat the snippet's own \end{pline}
+            out.append("\\textbackslash{}")         # (MathPix "(solution*\\"): the group ended inside it
+            i += 1
+            continue
         if ch == "\\" and i + 1 < len(s):
             nx = s[i + 1]
             if nx in "([":
@@ -776,13 +780,16 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
                 src = INPUTLINE.search(msg) if msg is not None else None   # "\begin{pline} on input line 220 ..."
                 if src:
                     tl = int(src.group(1))
-                idx = max((k for k, st in enumerate(starts) if st <= tl), default=None)
+                # an error reported at \end{document} (after every line) is no line's own: a line left open earlier
+                # is what reached it, and the line that happened to come last in the group was booked for it (board
+                # 49-job batch: lib:4859edad9294 p1287). Unbooked, the group's PDF comes out short and is set again
+                idx = None if tl >= n else max((k for k, st in enumerate(starts) if st <= tl), default=None)
                 if idx is not None:
                     j, i = owner_of[idx]
                     if uni is not None:
                         newdrop[j].add(uni)
-                    elif i not in failed[j]:
-                        new[j].setdefault(i, msg)
+                    elif i not in failed[j]:          # the group's line number is no part of the line's error
+                        new[j].setdefault(i, INPUTLINE.sub("on its input line", msg))
                 msg, uni = None, None
         for j in range(len(jobs)):
             if not live[j]:

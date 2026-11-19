@@ -579,6 +579,38 @@ class JudgeBatch(unittest.TestCase):
             self.assertNotIn("NOT_COMPILED", single["clean"] + single["accent"])
             self.assertNotIn("D U+", single["clean"] + single["accent"], "and nowhere else")
 
+    def test_trailing_backslash_does_not_leak(self):
+        """a reading line that ends in a backslash (MathPix "(solution*\\") swallowed its own \\end{pline}: the group
+        ended inside it, and the error pdflatex reports at \\end{document} was booked on whichever job's line came
+        last in the group (board 49-job batch: lib:4859edad9294 p1287 line 25 NOT_COMPILED, ours 0.0435 -> 0.0625).
+        Every job's judge.out is the same alone, in a group of two, and with the order reversed."""
+        with tempfile.TemporaryDirectory(prefix="test-judge-batch-bs-") as d:
+            cases = [("slash", "Results of the solution and of the rest.", "Results of the solution and of the rest\\"),
+                     ("last", "The mean value of the sample, and the rest of it.",
+                      "The mean value of the sample, and the rest of it.")]
+            single, jobs = {}, []
+            for name, page, read in cases:
+                _accent_case(d, name, page, read)
+                pdf, lj = os.path.join(d, name, "page.pdf"), os.path.join(d, name, "r.lines.json")
+                os.makedirs(os.path.join(d, name, "one"))
+                out = io.StringIO()
+                judge.judge(pdf, 1, lj, os.path.join(d, name, "one"), out=out, setter=False)
+                single[name] = out.getvalue()
+                jobs.append((pdf, 1, lj))
+            self.assertNotIn("NOT_COMPILED", single["slash"] + single["last"])
+            for tag, order in (("fwd", jobs), ("rev", jobs[::-1])):
+                js = [j + (os.path.join(os.path.dirname(j[0]), tag),) for j in order]
+                st = judge.judge_batch(js, bwd=os.path.join(d, "b-" + tag), setter=False)
+                self.assertEqual((st["batched"], st["groups"]), (2, 1))
+                for j in js:
+                    name = os.path.basename(os.path.dirname(j[0]))
+                    with open(os.path.join(j[3], "judge.out"), encoding="utf-8") as fh:
+                        self.assertEqual(fh.read(), single[name], (tag, name))
+
+    def test_latex_text_trailing_backslash(self):
+        self.assertEqual(judge.latex_text("solution*\\"), "solution*\\textbackslash{}")
+        self.assertEqual(judge.latex_text("a \\(x\\) b"), "a \\(x\\) b")
+
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
 class JudgeSetter(unittest.TestCase):
