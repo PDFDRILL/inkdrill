@@ -11,6 +11,12 @@ CC ?= cc
 CFLAGS ?= -O3 -std=c17 -Wall -Wextra -Wpedantic -Werror
 B = build
 GD3 ?= ../GLYPHDRILL3
+# a missing checkout fails here, by name, rather than as "No rule to make target '../GLYPHDRILL3/inkcmp/page.c'"
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
+ifeq ($(wildcard $(GD3)/inkcmp/page.c),)
+$(error no GLYPHDRILL3 checkout at GD3=$(GD3): set GD3=<GLYPHDRILL3 checkout>, e.g. make GD3=$$HOME/GLYPHDRILL3)
+endif
+endif
 PIN ?= gd3.pin
 GD3_FILES = src/gd3_adapter.c src/gd3_white.c src/gd3_blocks.c src/gd3_rle.h src/layout/blocks.c src/layout/blocks.h \
             inkcmp/lines.c inkcmp/lines.h inkcmp/white.c inkcmp/white.h inkcmp/page.c inkcmp/page.h

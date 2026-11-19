@@ -1,10 +1,13 @@
 # inkdrill
 
 Scan-event topology for document layout analysis and mathematics
-expression recognition. Pure standard library — no numpy, no GPU, no
-build step, no installer.
+expression recognition. The Python is standard library only — no numpy,
+no GPU, no installer. The C judge (`build/inkcmp`) compiles from this
+repository plus pinned sources of a GLYPHDRILL3 checkout (`gd3.pin`);
+`GD3` names that checkout and defaults to `../GLYPHDRILL3`:
 
-    python3 -m unittest discover -s tests -t .        # 740 tests, 23 skip
+    make GD3=<GLYPHDRILL3 checkout>         # e.g. GD3=$HOME/GLYPHDRILL3; checks gd3.pin, builds build/
+    make test GD3=<GLYPHDRILL3 checkout>    # C tests, then python3 -m unittest discover -s tests -t .
 
 The purpose is to **support high-quality scanning by locating errors and
 areas other tools have missed** — a cross-check, not an OCR engine.
