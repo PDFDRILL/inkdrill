@@ -163,6 +163,32 @@ class JudgeBornDigital(unittest.TestCase):
         self.assertEqual({k: res[k] for k in keys}, {k: clean[k] for k in keys})
         self.assertEqual(res["lines"], len(LINES))
 
+    def test_unmeasurable_face_is_never_a_glyph_finding(self):
+        """a paired glyph in a face TeX cannot set (judge.UNSETTABLE; board18 lib:c57ac038ae5f p293: 26 MathTime
+        glyphs flagged against CMEX/CMSY/CMMI) is counted unmeasurable and is never a glyph finding; a page without
+        such a face keeps every count. Here the page's own CMR is declared unsettable for one run."""
+        _, res, _ = self.planted_run()
+        self.assertEqual(res["unmeasurable"], 0)
+        self.assertGreater(res["glyph"], 0)
+        planted_doc = copy.deepcopy(self.doc)
+        for i, ln in enumerate(planted_doc["pages"][0]["lines"]):
+            for j in range(len(PLANTS)):
+                old, new = PLANTS[(i + j) % len(PLANTS)]
+                t = plant(ln["text"], old, new)
+                if t:
+                    ln["text"] = t
+                    break
+        keep = judge.UNSETTABLE
+        judge.UNSETTABLE = re.compile(r"^CMR")
+        try:
+            um, _ = self.run_judge(planted_doc, "unsettable-cmr")
+        finally:
+            judge.UNSETTABLE = keep
+        self.assertEqual(um["glyph"], 0)
+        self.assertEqual(um["unmeasurable"], um["glyphs"])
+        for k in ("glyphs", "flagged", "style", "a_unpaired", "b_unpaired"):
+            self.assertEqual(um[k], res[k], k)
+
     def test_threshold_is_the_frozen_value(self):
         self.assertEqual(judge.THRESHOLD, 7)
         self.assertEqual(judge.UP, 8)
@@ -752,6 +778,21 @@ class JudgeStyleNames(unittest.TestCase):
         self.assertEqual(judge.style("MTSYB"), "xb")
         for name in ("Mtpro", "MTimes-Roman", "Smtmi", "HffcmrYvygwvTimes-Roman"):   # not MathTime
             self.assertNotIn("x", judge.style(name), name)
+
+    def test_unsettable_faces(self):
+        """faces with no font program in the TeX tree: MathTime, Optima, Myriad Pro. The free faces that FAMILIES
+        does not map either (cm-super, newtx, bbold, esint, Belleek) are settable and stay measured."""
+        for name in ("QtxpctLqshvdMTMI", "HcxldrTdxpbjMTMIB", "JnskryTvgfgxMTSYN", "YtllkcRjyfrxMTEX", "MT2SYT",
+                     "ABCDEF+Optima-Bold", "MyriadPro-Bold"):
+            self.assertTrue(judge.unsettable(name), name)
+        for name in ("BLEX", "SFBX1000", "txsys", "rtxr", "BBOLD7", "Gdvdkgesint10", "MTimes-Roman",
+                     "HffcmrYvygwvTimes-Roman", "CMMI10"):
+            self.assertFalse(judge.unsettable(name), name)
+        self.assertTrue(re.search(judge.MATHFONT, "QtxpctLqshvdMTMI"))
+        self.assertFalse(re.search(judge.MATHFONT, "HffcmrYvygwvTimes-Roman"))
+        # MathTime stays in a line's size vote: without it a display line votes for its script size (p328 L20)
+        self.assertFalse(re.search(judge.SIZEVOTE_SKIP, "QtxpctLqshvdMTMI"))
+        self.assertTrue(re.search(judge.SIZEVOTE_SKIP, "JSLHNA+XtrrcfCMMI6"))
 
 
 class JudgeDesignSize(unittest.TestCase):

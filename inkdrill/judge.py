@@ -25,7 +25,9 @@ Then `U L<i> A|B <char>` for unpaired glyphs, `N L<i> NOT_COMPILED <LaTeX error>
 (the other lines still set and pair), a summary line `JUDGE1 lines .. glyphs .. flagged .. not_compiled ..
 a_glyphs .. a_unpaired .. b_unpaired ..` (a_glyphs: all glyphs of the original page; a_unpaired: those that paired
 with nothing; b_unpaired: rendered glyphs with no partner; the board's ink residual is
-(findings + a_unpaired + b_unpaired) / a_glyphs), and
+(findings + a_unpaired + b_unpaired) / a_glyphs; unmeasurable: paired glyphs whose original face TeX cannot
+set (UNSETTABLE: MathTime, Optima, Myriad Pro). They stay in glyphs but are never a glyph finding, and the board takes
+them out of the denominator; a face difference there is still a style finding), and
 `STATUS OK|NOT_COMPILED|NO_TEXT|FONT_UNMAPPED`: a page with 0 paired glyphs has no residual. FONT_UNMAPPED: most of
 the page's text glyphs are in a family TeX cannot set (e.g. a commercial font), so same-font XOR does not apply.
 Line text goes through `latex_text` first: characters pdflatex cannot set (U+2212, Greek, arrows, ...) become LaTeX,
@@ -63,7 +65,22 @@ INK = 154
 THRESHOLD = 7
 CH = re.compile(r'<font name="([^"]*)"(?: size="([\d.]+)")?|<char c="(.*?)" quad="([^"]+)" x="([\d.\-]+)" y="([\d.\-]+)"')
 PGS = re.compile(r"<page [^>]*>(.*?)</page>", re.S)
-MATHFONT = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]"
+MATHFONT = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]|MTMI|MTSY|MTEX|MT2(?:MI|SY|EX)"   # MathTime since 2026-11-21
+#: the maths faces left out of a line's size vote: MATHFONT without MathTime. Leaving MathTime out too put display lines
+#: on their script size (board18 lib:3fe71b4ef018 p328 L20: 32 glyphs at 9.963 pt, 22 at 6.974; without MathTime 19
+#: and 20), so the line was set at 7 pt: MathPix glyph findings 33 -> 66 there.
+SIZEVOTE_SKIP = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]"
+#: faces TeX cannot set: no font program in the TeX tree (kpsewhich, 2026-11-21), so a glyph in one is unmeasurable --
+#: its shape against the stand-in face measures the judge, not the reading (coordinator, 2026-11-21: the per-glyph
+#: form of FONT_UNMAPPED). A list, not "what FAMILIES does not map": on the board18 pages that complement also held
+#: SFBX/SFTI (cm-super), txsys/rtxr (newtx), BBOLD, esint and BLEX (Belleek, MathTime's free relative), all settable.
+UNSETTABLE = re.compile(r"^R?MT2?(?:MI|SY|EX|MS)[A-Z0-9]{0,3}$|^Optima|^MyriadPro", re.I)
+
+
+def unsettable(font: str) -> bool:
+    """a PDF font name (subset tag and obfuscation prefix allowed) in a face TeX cannot set"""
+    return bool(UNSETTABLE.search(PREFIX.sub("", font.split("+")[-1])))
+
 FAMILIES = [  # (regex on the PDF font name, preamble, family)
     (r"NimbusRom|Times|TeXGyreTermes|ptmr|utmr", r"\usepackage{times}", "times"),
     (r"NimbusSan|Helvetica|Arial|TeXGyreHeros|phvr|uhvr", r"\usepackage{helvet}\renewcommand{\familydefault}{\sfdefault}",
@@ -1219,7 +1236,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     cgrid = collections.defaultdict(list)          # glyphs by the cell of their centre, in page order
     for ci, c in enumerate(ac):
         cgrid[(int((c[3] + c[5]) / 2 * S // 256), int((c[4] + c[6]) / 2 * S // 256))].append(ci)
-    nomath = [not re.search(MATHFONT, c[7]) for c in ac]
+    nomath = [not re.search(SIZEVOTE_SKIP, c[7]) for c in ac]
     for ln in lv:
         b = box(ln)
         near = sorted(ci for gx in range(int(b[0] // 256), int(b[2] // 256) + 1)
@@ -1230,7 +1247,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
         print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
-              f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unpaired_A 0 unpaired_B 0", file=out)
+              f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unmeasurable 0 unpaired_A 0 unpaired_B 0", file=out)
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     set_by = "pdflatex"
@@ -1257,7 +1274,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                (x["region"]["top_left_y"] + x["region"]["height"]) * k2) for x in l2]
         s2 = []
         for b in b2:
-            cs = [c[8] for c in ac if inside(c, b) and not re.search(MATHFONT, c[7])]
+            cs = [c[8] for c in ac if inside(c, b) and not re.search(SIZEVOTE_SKIP, c[7])]
             s2.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
         return l2, b2, s2
 
@@ -1327,7 +1344,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     if spec_b:
         bc = [spec_b.chars(bo + n + 1, cs) for n, cs in enumerate(bc)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
-                              unpaired_B=0, accents_on_ink=0, unmappable=0, rules_a=0, rules_missing=0,
+                              unpaired_B=0, accents_on_ink=0, unmappable=0, unmeasurable=0, rules_a=0, rules_missing=0,
                               rules_invented=0)
     b_total = 0                                     # rendered glyphs of the lines that typeset
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}, set by {set_by}",
@@ -1476,9 +1493,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 sa, sb = style(fa) or "-", style(fb) or "-"
                 print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
                 res["glyphs"] += 1
+                um = unsettable(fa)
+                res["unmeasurable"] += um
                 if flag:
                     res["flagged"] += 1
-                    res["style" if sa != sb else "glyph"] += 1
+                    if sa != sb or not um:
+                        res["style" if sa != sb else "glyph"] += 1
             if is_formula(ln) and pairs:
                 aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
@@ -1507,9 +1527,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             sa, sb = style(fa) or "-", style(fb) or "-"
             print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
             res["glyphs"] += 1
+            um = unsettable(fa)
+            res["unmeasurable"] += um
             if flag:
                 res["flagged"] += 1
-                res["style" if sa != sb else "glyph"] += 1
+                if sa != sb or not um:
+                    res["style" if sa != sb else "glyph"] += 1
         if is_formula(ln) and pairs:
             rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
                      glyphs=glyph_owners,
