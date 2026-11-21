@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import unittest
 
-from inkdrill import judge
+from inkdrill import judge, scanjudge
 
 TOOLS = ("pdflatex", "mutool", "pdftoppm", "pdfinfo", "pdftotext")
 LINES = [
@@ -875,6 +875,53 @@ class JudgeUnmappedFamilySetter(unittest.TestCase):
             self.assertIn("set by setter", text)
             self.assertIn("STATUS OK", text)
             self.assertEqual((res["unpaired_A"], res["unpaired_B"], res["glyph"]), (0, 0, 0), text[-900:])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeScanRoute(unittest.TestCase):
+    """--route scan (inkdrill/scanjudge.py): a page judged by its ink alone"""
+    LINE = "Wenn also die Koefficienten gegeben sind, so findet man leicht die Wurzeln der Gleichung."
+
+    def run_scan(self, d, name, read):
+        _accent_case(d, name, self.LINE, read)                  # the fixture (its own glyph-route run included)
+        real = (judge.chars, judge.trace)
+
+        def refuse(*a, **k):
+            raise AssertionError("the scan route read the text layer")
+        judge.chars = judge.trace = refuse                       # G1: only around the scan route
+        try:
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, name, "page.pdf"), 1, os.path.join(d, name, "r.lines.json"),
+                              os.path.join(d, name, "g"), out=out, route="scan")
+        finally:
+            judge.chars, judge.trace = real
+        return res, out.getvalue()
+
+    def residual(self, text):
+        return float(re.search(r"^SCAN1 .* residual (\S+)$", text, re.M)[1])
+
+    def test_scan_route(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-scan-") as d:
+            res, good = self.run_scan(d, "good", self.LINE)
+            _, worse = self.run_scan(d, "drop", "Wenn also die gegeben sind, so findet man die Wurzeln.")
+            _, broken = self.run_scan(d, "broken", "Wenn also \\input{no-such-file-anywhere}")   # fatal at once
+            for t in (good, worse, broken):
+                self.assertIn(scanjudge.BLIND, t)                               # G3
+            self.assertIn("STATUS OK", good)
+            self.assertGreater(res["comps"], 50)
+            self.assertLess(self.residual(good), self.residual(worse))
+            self.assertIn("N L0 NOT_SET", broken)                                # G2: nothing set, all missing
+            real = judge.compile_group                         # G2's other door: no snippet PDF at all (the
+            judge.compile_group = lambda jobs, pre, wd, *a: (os.path.join(wd, "none.pdf"), [({}, set(), 0)])
+            try:                                               # experiment's three documents that broke whole)
+                out = io.StringIO()
+                judge.judge(os.path.join(d, "good", "page.pdf"), 1, os.path.join(d, "good", "r.lines.json"),
+                            os.path.join(d, "good", "g2"), out=out, route="scan")
+            finally:
+                judge.compile_group = real
+            self.assertIn("N L0 NOT_SET", out.getvalue())
+            summary = re.search(r"^SCAN1 .*$", broken, re.M)[0]
+            self.assertEqual(int(re.search(r" missing (\d+)", summary)[1]), int(re.search(r" comps (\d+)", summary)[1]))
 
 
 class CodeLineUnit(unittest.TestCase):

@@ -30,6 +30,8 @@ OFF_THE_CLI_PATH = {
               "(bin/inkcmp-judge, through judge), not by pdflatex",
     "textpos": "the judge's glyph origins from the PDF's text operators "
                "(bin/inkcmp-judge, through judge): mutool rounds /Widths",
+    "scanjudge": "the judge's scan route for a page with no glyph layer "
+                 "(bin/inkcmp-judge --route scan, through judge)",
     "band": "the parallel sweep tier; the CLI does one page at a time "
             "and U8's band tier was measured into the ground",
     "domains": "the Gardenfors design test; an analysis tool for adding "

@@ -1,8 +1,8 @@
 """inkcmp judge, born-digital branch: is a lines.json reading of a PDF page the same ink as the page?
 
-    inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR] [--route glyph|render] [--no-setter]
+    inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR] [--route glyph|render|scan] [--no-setter]
                  [--peers other.lines.json,...]   (the page's other judged readings: one route for all of them)
-    inkcmp-judge --batch <jobs.tsv> [--work DIR] [--route glyph|render]   (one pdflatex per preamble; judge_batch)
+    inkcmp-judge --batch <jobs.tsv> [--work DIR] [--route glyph|render|scan]   (one pdflatex per preamble; judge_batch)
 
 Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per glyph). Steps:
 
@@ -1389,6 +1389,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     """one page. compiler(texts, sizes, preamble, wd) -> (snippet pdf, failed, dropped, first page) sets the
     reading's lines; by default one pdflatex run of this page's lines alone (`judge_batch` sets many pages' lines
     in one run and hands each page its part)"""
+    if route == "scan":                              # a page without a glyph layer (inkdrill/scanjudge.py)
+        from . import scanjudge
+        return collections.Counter(scanjudge.judge_scan(a_pdf, pno, lines_json, wd, out=out))
     if _MEMO is None:
         _STEXT.clear()
     with open(lines_json, encoding="utf-8") as fh:
@@ -1860,8 +1863,8 @@ def main(argv=None) -> int:
         j = argv.index("--route")
         route = argv[j + 1]
         del argv[j:j + 2]
-        if route not in ("glyph", "render"):
-            print("inkcmp-judge: --route glyph|render", file=sys.stderr)
+        if route not in ("glyph", "render", "scan"):
+            print("inkcmp-judge: --route glyph|render|scan", file=sys.stderr)
             return 2
     if batch is not None:
         if argv:
