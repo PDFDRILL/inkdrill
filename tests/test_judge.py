@@ -808,6 +808,23 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
             self.assertEqual([(g[2], g[9]) for g in qu], [("q", "c"), ("u", "c")], qu)
 
 
+class LigatureLetterOrder(unittest.TestCase):
+    """mutool's later letter of a ligature is a zero-width character at the glyph's right edge, which can lie past
+    the next letter's origin (board35 lib:c57ac038ae5f p293: "find", the fi's i at 186.12459, the n at 186.10567):
+    it is moved inside the ligature's advance, so it sorts before the next letter"""
+
+    def test_fi_sorts_before_the_next_letter(self):
+        f = ("f", 180.58539, 145.4, 180.58539, 138.0, 186.12459, 146.0, "Times-Roman", 9.963)
+        i = ("i", 186.12459, 145.4, 186.12459, 140.0, 186.12459, 146.0, "Times-Roman", 9.963)
+        n = ("n", 186.10567, 145.4, 186.10567, 140.0, 191.14575, 146.0, "Times-Roman", 9.963)
+        d = ("d", 191.14575, 145.4, 191.14575, 138.0, 196.1, 146.0, "Times-Roman", 9.963)
+        self.assertEqual("".join(c[0] for c in sorted([f, i, n, d], key=lambda c: c[1])), "fnid")   # the defect
+        got = judge.spelled([f, i, n, d], [])
+        self.assertEqual("".join(c[0] for c in sorted(got, key=lambda c: c[1])), "find")
+        self.assertEqual([c[1] for c in got if c[0] != "i"], [f[1], n[1], d[1]])       # the others stay put
+        self.assertTrue(f[1] < got[1][1] < n[1], got[1])
+
+
 class MathSizesUnit(unittest.TestCase):
     """the page's maths sizes and a formula line's size vote (board 1805.01788 p3)"""
 
@@ -834,6 +851,7 @@ class MathSizesUnit(unittest.TestCase):
         self.assertEqual((judge.vote_size(cs, True), judge.vote_size(cs, False)), (8.966, 7.273))
         self.assertEqual(judge.vote_size([9.963] * 30 + [11.955] * 2, True), 9.963)   # a quarter at least
         self.assertEqual(judge.vote_size([], True), 10.0)
+        self.assertEqual(judge.vote_size([8.903] * 26 + [8.966] * 11 + [5.978] * 2, True), 8.903)  # two families
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))

@@ -172,7 +172,22 @@ def spelled(cs: list, traced: list) -> list:
     rest out, and a reading that writes them scored worse than one that drops them. The missing letters are added
     as zero-width characters within the glyph's advance: at its right edge they would sort past, and take the glyph
     of, the next letter, whose origin is there. Each carries its glyph's name as a tenth field, so its face is the
-    composite's (q.sc_u.sc's u is a small capital)."""
+    composite's (q.sc_u.sc's u is a small capital). The letters mutool gives at the right edge are moved inside the
+    advance too: 0.02 pt past the next letter's origin, an fi's i sorted after the n of "find" and was unpaired in
+    every reading (board35 lib:c57ac038ae5f p293, two)."""
+    cs = list(cs)
+    j = 0
+    while j < len(cs):
+        c, k = cs[j], j + 1
+        while (k < len(cs) and cs[k][3] == cs[k][5] and abs(cs[k][1] - c[5]) < 0.05 and abs(cs[k][2] - c[2]) < 0.05
+               and c[5] - c[1] > 0.1):
+            k += 1                                       # zero-width letters at this glyph's right edge
+        n = k - j - 1
+        for m in range(n):
+            q = cs[j + 1 + m]
+            x = c[1] + (c[5] - c[1]) * (m + 1) / (n + 1)
+            cs[j + 1 + m] = (q[0], x, q[2], x, q[4], x, q[6]) + tuple(q[7:])
+        j = k
     TA = Origins(traced)
     out = []
     for j, c in enumerate(cs):
@@ -910,9 +925,11 @@ def vote_size(cs: list, formula: bool) -> float:
     if not cs:
         return 10.0
     c = collections.Counter(round(x, 4) for x in cs)
-    if formula:
-        return max(z for z, n in c.items() if n >= 0.25 * len(cs))
-    return c.most_common(1)[0][0]
+    mode = c.most_common(1)[0][0]
+    if formula:                 # a base above its scripts; never a second family at the same size (board35 0864 p4
+        big = max(z for z, n in c.items() if n >= 0.25 * len(cs))     # L41: Nimbus 8.903 and CMR9 8.966)
+        return big if big >= 1.15 * mode else mode
+    return mode
 
 
 def set_size(sz: float) -> float:
