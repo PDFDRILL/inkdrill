@@ -1355,10 +1355,31 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
     # line's baseline (the page's commonest origin y): a fraction bar sits on the maths axis, while its nearest glyph
     # is its own numerator or denominator, which a reading of the wrong style moves (board34 lib:6d90e8d27b8b p174
     # L14: the page's \tfrac read as \frac, its four bars set 17 px above or 14 px below the page's single axis)
-    base_y = collections.Counter(round(pa[2], 1) for pa, _ in real).most_common(1)[0][0]
-    mid_dy = statistics.median(pa[2] * S - pbb[2] * S for pa, pbb in real if abs(pa[2] - base_y) <= 0.5)
-    def offset_at(xb):
-        return min(offs, key=lambda o: abs(o[0] - xb))[1], mid_dy
+    def baseline_dy(bar, bars):
+        """the y offset of the row a rendered bar sits over: the glyphs under no other bar than the ones enclosing
+        it, grouped by page origin y, and of their rows (two glyphs at least, where any has two) the one nearest the
+        bar on the rendered side when it is nested, its commonest row when it is not. A numerator or denominator
+        is never a top-level bar's baseline (board
+        lib:3fe71b4ef018 p328 L20: its big numerator is the commonest row, and its offset put the main bar 14 px
+        low), and a fraction nested in a numerator takes the numerator's row (the same line's 1/4)."""
+        x0, x1, yb = bar
+        inside = lambda pb, q: pb[3] * S < q[1] and pb[5] * S > q[0]
+        enclosing = [q for q in bars if q is not bar and q[0] <= x0 and q[1] >= x1]
+        others = [q for q in bars if q is not bar and q not in enclosing]
+        free = [(pa, pb) for pa, pb in real if not inside(pb, bar) and not any(inside(pb, q) for q in others)
+                and all(inside(pb, q) for q in enclosing)] or real
+        rows = collections.defaultdict(list)
+        for pa, pb in free:
+            rows[round(pa[2], 1)].append((pa, pb))
+        if enclosing:                                # nested: the enclosing numerator's (or denominator's) row
+            big = [r for r in rows.values() if len(r) >= 2] or list(rows.values())
+            row = min(big, key=lambda r: abs(statistics.median(pb[2] * S for _, pb in r) - yb))
+        else:                                        # top level: the line's commonest row outside every bar (an
+            row = max(rows.values(), key=len)        # overline's superscript neighbours are not its row: 2103.01507)
+        return statistics.median(pa[2] * S - pb[2] * S for pa, pb in row)
+
+    def offset_at(xb, bar=None, bars=()):
+        return min(offs, key=lambda o: abs(o[0] - xb))[1], baseline_dy(bar, bars)
     covered = lambda q, x, y: any(r[0] <= x + 0.5 <= r[2] and r[1] <= y + 0.5 <= r[3] for r in q)
     acov = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in ca]
     accq = []
@@ -1406,11 +1427,14 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         return touch > 0 and any(q[0] <= min(xs) and max(xs) + 1 <= q[2] and q[1] <= min(ys) and max(ys) + 1 <= q[3]
                                  for q in own_b)
     b_rules = []
-    for comp, touch in b_comps:
-        if touch <= 0.3 * len(comp) and over_maths(comp, mx_b) and not glyph_piece(comp, touch):
-            xs = [p[0] for p in comp]
-            dx, dy = offset_at((min(xs) + max(xs)) / 2)
-            b_rules.append([(round(x + dx), round(y + dy)) for x, y in comp])
+    kept = [comp for comp, touch in b_comps
+            if touch <= 0.3 * len(comp) and over_maths(comp, mx_b) and not glyph_piece(comp, touch)]
+    bars = [(min(p[0] for p in c), max(p[0] for p in c) + 1, (min(p[1] for p in c) + max(p[1] for p in c) + 1) / 2)
+            for c in kept]
+    for comp, bar in zip(kept, bars):
+        xs = [p[0] for p in comp]
+        dx, dy = offset_at((min(xs) + max(xs)) / 2, bar, bars)
+        b_rules.append([(round(x + dx), round(y + dy)) for x, y in comp])
     b_map = {p for comp in b_rules for p in comp}
     near = lambda pts, x, y: any((x + ddx, y + ddy) in pts for ddx in range(-tol, tol + 1) for ddy in range(-tol, tol + 1))
     a_rules = [c for c, touch in a_comps if touch <= 0.3 * len(c) and over_maths(c, mx_a)]
@@ -1713,7 +1737,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             else:
                 ua += ca[a0:a1]
                 ub += cb[b0:b1]
-        pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
+        if is_formula(ln):                           # maths only: in prose the x order is the reading order
+            pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
         res["unpaired_A"] += len(ua)
         res["unpaired_B"] += len(ub)
         ulines += [f"U L{i} A {c[0]}" for c in ua]

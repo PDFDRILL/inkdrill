@@ -1021,6 +1021,37 @@ class RepairByPosition(unittest.TestCase):
         self.assertEqual(judge.repair(same, [], [], a, b)[0], same)
 
 
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeBarBaselineOutsideFractions(unittest.TestCase):
+    """the baseline a rendered bar moves by is taken outside every fraction: a display whose numerator holds most of
+    its glyphs (board lib:3fe71b4ef018 p328 L20) put the bar by the numerator's offset, 14 px low there"""
+
+    def test_numerator_heavy_display(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-numbar-") as d:
+            page = "$\\displaystyle A = \\tfrac{abcdefghijklmnop + qrstuvw}{x + y}$"
+            read = "\\[ A = \\frac{abcdefghijklmnop + qrstuvw}{x + y} \\]"
+            _accent_case(d, "n", page, read, "\\usepackage{amsmath}\n", typ="math")
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, "n", "page.pdf"), 1, os.path.join(d, "n", "r.lines.json"),
+                              os.path.join(d, "n", "g"), out=out, route="glyph", setter=False)
+            rl = [ln for ln in out.getvalue().splitlines() if ln[:2] == "R "]
+            self.assertEqual(res["rules_a"], 1, rl)
+            self.assertEqual(res["rules_missing"], 0, rl)                     # the page's bar is met
+            long = [r for r in rl if r.split()[2] == "invented" and int(r.split()[5]) - int(r.split()[3]) > 40]
+            self.assertEqual(long, [])                                        # and no rendered bar is left over
+
+    def test_prose_is_not_repaired(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-prose-") as d:
+            rest = " cat sat on a mat with care and then it went off to find another quiet place to rest"
+            _accent_case(d, "p", "the" + rest, "teh" + rest)          # long: 3 % of it is wider than a letter
+            out = io.StringIO()
+            judge.judge(os.path.join(d, "p", "page.pdf"), 1, os.path.join(d, "p", "r.lines.json"),
+                        os.path.join(d, "p", "g"), out=out, route="glyph", setter=False)
+            text = out.getvalue()
+            self.assertIn("U L0 A e", text)                                    # the swap stays visible: the e is
+            self.assertIn("U L0 B e", text)                                    # not matched again on a prose line
+
+
 class CodeLineUnit(unittest.TestCase):
     """a code line is the characters it is (board RE4B-DE p559)"""
 
