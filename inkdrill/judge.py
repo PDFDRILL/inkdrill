@@ -50,6 +50,7 @@ import json
 import math
 import os
 import re
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -1191,8 +1192,14 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
     if not real:
         return
     offs = sorted(((pbb[3] + pbb[5]) / 2 * S, pa[1] * S - pbb[1] * S, pa[2] * S - pbb[2] * S) for pa, pbb in real)
-    def offset_at(xb):                                   # the offset of the paired glyph nearest in x (B frame)
-        return min(offs, key=lambda o: abs(o[0] - xb))[1:]
+    # a rendered rule moves by the x offset of the paired glyph nearest in x, and by the y offset of the glyphs on the
+    # line's baseline (the page's commonest origin y): a fraction bar sits on the maths axis, while its nearest glyph
+    # is its own numerator or denominator, which a reading of the wrong style moves (board34 lib:6d90e8d27b8b p174
+    # L14: the page's \tfrac read as \frac, its four bars set 17 px above or 14 px below the page's single axis)
+    base_y = collections.Counter(round(pa[2], 1) for pa, _ in real).most_common(1)[0][0]
+    mid_dy = statistics.median(pa[2] * S - pbb[2] * S for pa, pbb in real if abs(pa[2] - base_y) <= 0.5)
+    def offset_at(xb):
+        return min(offs, key=lambda o: abs(o[0] - xb))[1], mid_dy
     covered = lambda q, x, y: any(r[0] <= x + 0.5 <= r[2] and r[1] <= y + 0.5 <= r[3] for r in q)
     acov = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in ca]
     accq = []

@@ -809,6 +809,27 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeFractionBarOnTheAxis(unittest.TestCase):
+    """a display line's text-style fractions read as display-style \\frac (board34 lib:6d90e8d27b8b p174 L14): the
+    numerals are glyph findings, the bars lie on the same maths axis and match; a bar placed by its own numeral's
+    offset was a missing and an invented rule per fraction"""
+
+    def test_style_of_a_fraction_moves_glyphs_not_its_bar(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-axis-") as d:
+            tail = ", \\mathrm{also} \\ln |x| = c + \\ln |t + 1| - t + \\ln |t + 1|"     # p174's baseline, as there
+            page = "$\\displaystyle \\int \\tfrac{dx}{x} = \\int \\tfrac{t^2}{t+1}\\, dt = \\tfrac{1}{2} t^2 + c" + tail + "$"
+            read = "\\[ \\int \\frac{dx}{x} = \\int \\frac{t^2}{t+1}\\, dt = \\frac{1}{2} t^2 + c" + tail + " \\]"
+            _accent_case(d, "f", page, read, "\\usepackage{amsmath}\n", typ="math")
+            buf = io.StringIO()
+            res = judge.judge(os.path.join(d, "f", "page.pdf"), 1, os.path.join(d, "f", "r.lines.json"),
+                              os.path.join(d, "f", "g"), out=buf, route="glyph", setter=False)
+            out = buf.getvalue().splitlines()
+            self.assertEqual(res["rules_a"], 3, out[-12:])                    # the fixture holds three bars
+            self.assertGreater(res["glyph"], 0, out[-12:])                    # and the wrong style is found
+            self.assertEqual((res["rules_missing"], res["rules_invented"]), (0, 0), [ln for ln in out if ln[:2] == "R "])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
 class JudgeEsintIntegrals(unittest.TestCase):
     """esint's integrals are named acute and circumflex and have no ToUnicode map (board lib:6d90e8d27b8b p174): the
     outline decides, so both sides read them as integrals and a correct \\int reading pairs them as glyphs"""
