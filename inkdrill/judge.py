@@ -1146,13 +1146,26 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         a_comps, b_comps = rule_pixels(acrop, bpage, up, acov, bcov, (xa, ya, xb, yb))
     # inline maths: only rules over the maths -- overlapping a maths-font glyph in x (a footnote rule above a
     # "^3" line is not part of a formula); in display lines every rule counts
-    mx_a = [(c[3] * S, c[5] * S) for c in ca if re.search(MATHFONT + r"|MSBM|MSAM|EUF|EUS", c[7])]
-    mx_b = [(c[3] * S, c[5] * S) for c in cb if re.search(MATHFONT + r"|MSBM|MSAM|EUF|EUS", c[7])]
+    # The page decides what is maths: a rendered glyph whose page partner is a maths glyph is maths too, whatever its
+    # own face (MathTime is set by mathptmx in Times italic and Symbol: board18 lib:c57ac038ae5f p293 L5 and L27 read
+    # their \frac bars missing)
+    mf = MATHFONT + r"|MSBM|MSAM|EUF|EUS"
+    mx_a = [(c[3] * S, c[5] * S) for c in ca if re.search(mf, c[7])]
+    mx_b = ([(c[3] * S, c[5] * S) for c in cb if re.search(mf, c[7])]
+            + [(pbb[3] * S, pbb[5] * S) for pa, pbb in pairs if re.search(mf, pa[7])])
     over_maths = lambda comp, mx: display or any(r[0] < max(p[0] for p in comp) + 1 and r[1] > min(p[0] for p in comp)
                                                 for r in mx)
+    # a piece of a rendered glyph's own ink that its partner's quad leaves out: inside the glyph's own quad and joined
+    # to covered ink (p293: StandardSymL's alpha reaches 4 px above MathTime's, a 14 x 3 cap touching on 7 px). A rule
+    # stands free of glyph ink (an overline under TeX's tall M quad: touch 0) or leaves the quad (a fraction bar).
+    own_b = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in cb]
+    def glyph_piece(comp, touch):
+        xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+        return touch > 0 and any(q[0] <= min(xs) and max(xs) + 1 <= q[2] and q[1] <= min(ys) and max(ys) + 1 <= q[3]
+                                 for q in own_b)
     b_rules = []
     for comp, touch in b_comps:
-        if touch <= 0.3 * len(comp) and over_maths(comp, mx_b):
+        if touch <= 0.3 * len(comp) and over_maths(comp, mx_b) and not glyph_piece(comp, touch):
             xs = [p[0] for p in comp]
             dx, dy = offset_at((min(xs) + max(xs)) / 2)
             b_rules.append([(round(x + dx), round(y + dy)) for x, y in comp])

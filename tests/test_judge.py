@@ -6,6 +6,7 @@ MathPix-shaped lines.json: one region per printed line (pdftotext -bbox-layout, 
 holding the source text of that line. Needs pdflatex, mutool, pdftoppm, pdfinfo and pdftotext; skips when
 any of them is missing.
 """
+import collections
 import copy
 import io
 import json
@@ -1117,3 +1118,54 @@ class JudgeFontPrologue(unittest.TestCase):
         self.assertIn("SFRM1000", got["alone"])
         self.assertEqual(got["after"], got["alone"])
         self.assertEqual(got["before"], got["alone"])
+
+
+class JudgeRuleOverPageMaths(unittest.TestCase):
+    """rule_ink on a MathTime page (board18 lib:c57ac038ae5f p293, L5 d/dalpha and L27 r/r): the reading's \\frac bar is
+    drawn, but the judge sets MathTime maths with mathptmx (NimbusRomNo9L-ReguItal, StandardSymL), which no MATHFONT
+    entry names, so the bar was not "over maths" on the reading's side and the page's bar read MISSING. A rendered
+    glyph whose page partner is a maths glyph is maths. Sizes from that page at 400 dpi: page bar 50 x 4 px (L5),
+    rendered bar 55 x 3 px."""
+
+    W, H = 400, 200
+
+    def draw(self, rects):
+        img = bytearray(b"\xff" * self.W * self.H)
+        for x0, y0, x1, y1 in rects:
+            for y in range(y0, y1):
+                img[y * self.W + x0:y * self.W + x1] = b"\x00" * (x1 - x0)
+        return bytes(img)
+
+    def run_rules(self, font_a, font_b, taller=0):
+        """taller: the rendered numerator's ink and own quad reach that many px above its page partner's quad (p293
+        L4/L5: StandardSymL's alpha top at y32 where MathTime's quad, mapped back, starts at y36)"""
+        S = judge.S
+        num, den, bar_a, bar_b = (160, 40, 190, 90), (160, 110, 195, 150), (150, 97, 200, 101), (148, 98, 203, 101)
+        num_b = (num[0], num[1] - taller, num[2], num[3])
+        # the rendered ink: its body, and over it a 14 x 3 cap that meets the body along 7 px (p293: touch 7 of 42)
+        ink_b = [num] if not taller else [(160, 39, 175, 90), (175, 40, 190, 90), (168, 36, 182, 39)]
+        def ch(cid, q, font):
+            return (cid, q[0] / S, q[3] / S, q[0] / S, q[1] / S, q[2] / S, q[3] / S, font, 9.96)
+        ca = [ch(0, num, font_a), ch(1, den, font_a)]
+        cb = [ch(0, num_b, font_b), ch(1, den, font_b)]
+        acrop = (self.W, self.H, self.draw([num, den, bar_a]), 0, 0)
+        bpage = (self.W, self.H, self.draw(ink_b + [den, bar_b]))
+        res, out = collections.Counter(), io.StringIO()
+        judge.rule_ink(5, (100, 30, 300, 160), ca, cb, list(zip(ca, cb)), acrop, bpage, res, out, up=1)
+        return res
+
+    def test_bar_over_page_maths_is_found(self):
+        res = self.run_rules("QtxpctLqshvdMTMI", "StandardSymL-Slant_167")
+        self.assertEqual((res["rules_a"], res["rules_missing"], res["rules_invented"]), (1, 0, 0))
+
+    def test_bar_over_text_on_both_sides_stays_out(self):
+        res = self.run_rules("HffcmrYvygwvTimes-Roman", "NimbusRomNo9L-Regu")
+        self.assertEqual((res["rules_a"], res["rules_missing"], res["rules_invented"]), (0, 0, 0))
+
+    def test_rendered_glyph_top_past_its_partner_quad_is_not_a_rule(self):
+        res = self.run_rules("QtxpctLqshvdMTMI", "StandardSymL-Slant_167", taller=4)
+        self.assertEqual((res["rules_a"], res["rules_missing"], res["rules_invented"]), (1, 0, 0))
+
+    def test_bar_over_maths_on_both_sides_is_found(self):
+        res = self.run_rules("CMMI10", "CMMI10")
+        self.assertEqual((res["rules_a"], res["rules_missing"], res["rules_invented"]), (1, 0, 0))
