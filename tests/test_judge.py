@@ -780,6 +780,33 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
             res, out = self.run_case(d, "sc", "Definition 1 (\\textsc{fairness of attention}). A ranking offers this.")
             self.assertEqual((res["glyph"], res["style"]), (0, 0), out[-800:])
 
+    def test_composite_glyph_pairs_one_letter_per_name_part(self):
+        """q.sc_u.sc is one glyph whose ToUnicode reads q (board 1805.01788 p3, Equity): the correct reading pairs
+        both letters, and the reading that drops the u leaves the page's u unpaired, never the reverse"""
+        self.assertEqual((judge.name_letters("q.sc_u.sc"), judge.name_letters("f_f_i"), judge.name_letters("q.sc"),
+                          judge.name_letters("uni0041_uni0042")), ("qu", "ffi", "", ""))
+        with tempfile.TemporaryDirectory(prefix="test-judge-qu-") as d:
+            page = "Definition 1 (\\textsc{equity of attention}). A ranking offers this."
+            got = {}
+            for name, read in (("qu", "Definition 1 (\\textsc{equity of attention}). A ranking offers this."),
+                               ("q", "Definition 1 (\\textsc{eqity of attention}). A ranking offers this.")):
+                _accent_case(d, name, page, read, "\\usepackage{libertine}\n")
+                out = io.StringIO()
+                res = judge.judge(os.path.join(d, name, "page.pdf"), 1, os.path.join(d, name, "r.lines.json"),
+                                  os.path.join(d, name, "g"), out=out, route="glyph", setter=False)
+                trace = judge.trace_text(os.path.join(d, name, "page.pdf"), 1, 1)
+                self.assertIn('glyph="q.sc_u.sc"', trace)          # the fixture holds the composite
+                got[name] = (res["unpaired_A"], res["unpaired_B"])
+            self.assertEqual(got, {"qu": (0, 0), "q": (1, 0)}, got)
+            # read plain, the composite's u is a small capital on the page's side, like its q
+            _accent_case(d, "plain", page, "Definition 1 (equity of attention). A ranking offers this.",
+                         "\\usepackage{libertine}\n")
+            out = io.StringIO()
+            judge.judge(os.path.join(d, "plain", "page.pdf"), 1, os.path.join(d, "plain", "r.lines.json"),
+                        os.path.join(d, "plain", "g"), out=out, route="glyph", setter=False)
+            qu = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith(("G L0 q ", "G L0 u "))]
+            self.assertEqual([(g[2], g[9]) for g in qu], [("q", "c"), ("u", "c")], qu)
+
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
 class JudgeBiolinumLine(unittest.TestCase):

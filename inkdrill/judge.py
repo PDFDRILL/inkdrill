@@ -156,6 +156,38 @@ def glyph_face(glyph: str) -> str:
     return "c" if re.search(r"\.(?:sc|smcp|c2sc)(?:$|[._])", glyph or "") else ""
 
 
+def name_letters(glyph: str) -> str:
+    """the letters a composite glyph's NAME spells, one per part (q.sc_u.sc -> qu, f_f_i -> ffi), or "" when a part
+    is not one letter (uni00E9, a.alt is one part)"""
+    parts = [p.split(".")[0] for p in (glyph or "").split("_")]
+    return "".join(parts) if len(parts) > 1 and all(len(p) == 1 for p in parts) else ""
+
+
+def spelled(cs: list, traced: list) -> list:
+    """the page's characters with each composite glyph's letters, one character per part of its name. mutool gives
+    a ligature's later letters from the ToUnicode map, as zero-width characters at the glyph's right edge (f_i: f,
+    then i); a map that has only the first letter (Libertine's q.sc_u.sc reads q, board 1805.01788 p3) leaves the
+    rest out, and a reading that writes them scored worse than one that drops them. The missing letters are added
+    as zero-width characters within the glyph's advance: at its right edge they would sort past, and take the glyph
+    of, the next letter, whose origin is there. Each carries its glyph's name as a tenth field, so its face is the
+    composite's (q.sc_u.sc's u is a small capital)."""
+    TA = Origins(traced)
+    out = []
+    for j, c in enumerate(cs):
+        out.append(c)
+        g = TA.get(c[1], c[2], c[0])
+        word = name_letters(g[1]) if g is not None and g[0] == c[0] else ""
+        if not word or word[0] != c[0]:
+            continue
+        rest, k = word[1:], j + 1
+        while rest and k < len(cs) and cs[k][0] == rest[0]:     # the letters the map already gave
+            rest, k = rest[1:], k + 1
+        for m, ch in enumerate(rest):       # inside the glyph's advance: after it, before the next glyph's origin
+            x = c[1] + (c[5] - c[1]) * (m + 1) / (len(rest) + 1)
+            out.append((ch, x, c[2], x, c[4], x, c[6], c[7], c[8], g[1]))   # its glyph's name, for glyph_face
+    return out
+
+
 def face(font: str, glyph: str = "") -> str:
     """a paired glyph's face for the style count: its font's (style) and its glyph name's (glyph_face)"""
     f, g = style(font), glyph_face(glyph)
@@ -487,7 +519,8 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                 if u:
                     mb = turned(mb[:2], u) + turned(mb[2:], u)
             sb = (FB.find(gb[4]), gb[1], mb, X, Y) if gb else "none"
-            names[(i, k)] = (sa[1] if sa is not None else "", gb[1] if gb else "")
+            names[(i, k)] = (sa[1] if sa is not None else pa[9] if len(pa) > 9 else "",   # an added letter of a
+                             gb[1] if gb else pbb[9] if len(pbb) > 9 else "")              # composite: its name
             if gb is None:
                 res["b_no_glyph"] += 1
             if sa is None:
@@ -1259,6 +1292,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     fam, pre = memo(("pre", a_pdf, pno), font_preamble, a_pdf, pno)
     spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"), os.path.join(wd, "fontsA"))
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
+    ac = spelled(ac, spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, [])))
     def own(texts, sizes, pre, wd):                 # one page alone: a group of one, the fonts' page included
         pdf, got = compile_group([(texts, sizes)], pre, wd)
         return pdf, got[0][0], got[0][1], got[0][2]
@@ -1382,7 +1416,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         side_b = (Fonts(bpdf, os.path.join(wd, "fontsB"), len(side_a[0].files), extract=False),
                   trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text))
     if spec_b:
-        bc = [spec_b.chars(bo + n + 1, cs) for n, cs in enumerate(bc)]
+        tr_b = side_b[1] if side_b else trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text)
+        bc = [spelled(spec_b.chars(bo + n + 1, cs), spec_b.traced(bo + n + 1, tr_b.get(bo + n + 1, [])))
+              for n, cs in enumerate(bc)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
                               unpaired_B=0, accents_on_ink=0, unmappable=0, unmeasurable=0, rules_a=0, rules_missing=0,
                               rules_invented=0)
@@ -1519,7 +1555,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         for u in ulines:
             print(u, file=out)
         if route == "glyph":
-            for k, ((t, ax, ay, qx0, qy0, qx1, qy1, fa, _), (tb, bx, by, _, _, _, _, fb, _)) in enumerate(pairs):
+            for k, ((t, ax, ay, qx0, qy0, qx1, qy1, fa, *_), (tb, bx, by, _, _, _, _, fb, *_)) in enumerate(pairs):
                 r = scores[(i, k)]
                 if isinstance(r, str):                  # no outline on the reading's side: not judged
                     res["no_outline"] += 1
@@ -1549,7 +1585,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
         cx0, cy0 = max(0, int(b[0]) * UP - mg), max(0, int(b[1]) * UP - mg)
         aw, ah, ab = pgm(a_pdf, pno, DPI * UP, (cx0, cy0, int(b[2] - b[0]) * UP + 2 * mg, int(b[3] - b[1]) * UP + 2 * mg))
-        for (t, ax, ay, qx0, qy0, qx1, qy1, fa, _), (tb, bx, by, _, _, _, _, fb, _) in pairs:
+        for (t, ax, ay, qx0, qy0, qx1, qy1, fa, *_), (tb, bx, by, _, _, _, _, fb, *_) in pairs:
             X, Y = ax * S + OX, ay * S + OY             # A's origin on the 400 grid
             u, v = bx * S * UP, by * S * UP             # B's origin on the UP x 400 grid
             diff = set()
