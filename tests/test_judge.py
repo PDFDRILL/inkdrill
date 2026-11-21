@@ -152,6 +152,17 @@ class JudgeBornDigital(unittest.TestCase):
         self.assertEqual(dia["lines"], len(LINES) - 1)
         self.assertGreater(dia["a_unpaired"], 30)
 
+    def test_page_info_line_without_region_stays_out(self):
+        """a page_info line with text but region None (Gemma4 board18g, 1805.01788 p3 and lib:5a5c76391c9c p4:
+        TypeError at 65f1cf4) is left out, as every line without a region was before; the rest is judged"""
+        clean, _ = self.run_judge(self.doc, "with-all")
+        doc = copy.deepcopy(self.doc)
+        doc["pages"][0]["lines"].append({"type": "page_info", "text": "SIGIR '18, July 8-12", "region": None})
+        res, _ = self.run_judge(doc, "noregion-page-info")
+        keys = ("lines", "glyphs", "a_unpaired", "b_unpaired", "flagged", "glyph", "a_glyphs")
+        self.assertEqual({k: res[k] for k in keys}, {k: clean[k] for k in keys})
+        self.assertEqual(res["lines"], len(LINES))
+
     def test_threshold_is_the_frozen_value(self):
         self.assertEqual(judge.THRESHOLD, 7)
         self.assertEqual(judge.UP, 8)

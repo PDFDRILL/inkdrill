@@ -638,9 +638,13 @@ def ink_xs(row: bytes):
         i = t.find(1, i + 1)
 
 
-def leaves(page: dict) -> list[dict]:
+def leaves(page: dict, placed: bool = True) -> list[dict]:
+    """the judged lines: text, no children, not a diagram. page_info is judged like text (65f1cf4). With
+    `placed`, a line with no region box is left out, whatever its type: Gemma4 writes page_info lines with
+    region None (board18g 1805.01788 p3, lib:5a5c76391c9c p4), which 65f1cf4 let through to box()."""
     return [ln for ln in page["lines"]
-            if ln.get("text") and not ln.get("children_ids") and ln["type"] != "diagram"]
+            if ln.get("text") and not ln.get("children_ids") and ln["type"] != "diagram"
+            and (not placed or isinstance(ln.get("region"), dict))]
 
 #: characters pdflatex (utf8, OT1/T1) cannot set, as LaTeX: (in text mode, in maths mode). Found in the 30 board
 #: readings (2026-11-17): U+2212 alone dropped whole pages. Compatibility forms (ligatures, full-width) go through
@@ -1241,7 +1245,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         if p2 is None or not p2.get("page_width"):
             return None
         l2 = leaves(p2)
-        if not l2 or not all(isinstance(x.get("region"), dict) for x in l2):
+        if not l2 or not all(isinstance(x.get("region"), dict)
+                             for x in leaves(p2, placed=False) if x["type"] != "page_info"):
             return None                              # not judged (no geometry): it chooses nothing
         k2 = pw_pt * S / p2["page_width"]
         b2 = [(x["region"]["top_left_x"] * k2, x["region"]["top_left_y"] * k2,
