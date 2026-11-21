@@ -144,6 +144,19 @@ def style(font: str) -> str:
             + ("c" if re.search(r"smallca|small-caps|csc\d", f) else ""))
 
 
+def glyph_face(glyph: str) -> str:
+    """the face a glyph's NAME adds to its font's: a small capital (e.sc, q.sc_u.sc) is c. Libertine keeps its small
+    caps in the text font's own program, so the font name reads plain (board 1805.01788 p3: 56 small capitals of an
+    acmart definition head, LinLibertineT, read as plain letters and flagged as glyph findings)"""
+    return "c" if re.search(r"\.(?:sc|smcp|c2sc)(?:$|[._])", glyph or "") else ""
+
+
+def face(font: str, glyph: str = "") -> str:
+    """a paired glyph's face for the style count: its font's (style) and its glyph name's (glyph_face)"""
+    f, g = style(font), glyph_face(glyph)
+    return (f + g if g not in f else f) or "-"
+
+
 _STEXT = {}                                           # per judge() call: font_preamble and chars read one page
 _MEMO = None                                          # judge_batch: the original's side, kept between its two passes
 
@@ -442,6 +455,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                 abuck[(gx, gy)].append(c)
     hit = lambda q, w: q[0] < w[2] and q[2] > w[0] and q[1] < w[3] and q[3] > w[1]
     jobs, keys, origin = [], [], []                 # origin: per job A's (X, Y) and font name
+    names = {}                                      # (line, pair) -> the glyph names (A, B), for glyph_face
     fname = lambda f: f.split("+")[-1]
     t3c = []
 
@@ -466,6 +480,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                 if u:
                     mb = turned(mb[:2], u) + turned(mb[2:], u)
             sb = (FB.find(gb[4]), gb[1], mb, X, Y) if gb else "none"
+            names[(i, k)] = (sa[1] if sa is not None else "", gb[1] if gb else "")
             if gb is None:
                 res["b_no_glyph"] += 1
             if sa is None:
@@ -517,7 +532,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
         scores[key] = r[j]
     bp = bjob.result() if bjob else {}
     pool.shutdown()
-    return scores, ink, {p - 1 - bo: v for p, v in bp.items()}
+    return scores, ink, {p - 1 - bo: v for p, v in bp.items()}, names
 
 
 class Spec:
@@ -1471,7 +1486,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     scores, page400, bpages = {}, None, {}
     glyph_owners = [(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner]
     if route == "glyph" and work:
-        scores, page400, bpages = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res, bo)
+        scores, page400, bpages, gnames = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res, bo)
     stages = {}
     if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
         aw, ah, ab, a400 = page400.get() if any(is_formula(w[1]) and w[5] for w in work) else (0, 0, b"", "")
@@ -1508,7 +1523,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 # a glyph whose outline has another number of holes is another glyph, however thin the stroke that
                 # makes the difference (e -> c: the crossbar, solid 4 at 10 pt)
                 flag = so >= THRESHOLD or (holes is not None and holes[0] != holes[1])
-                sa, sb = style(fa) or "-", style(fb) or "-"
+                ga, gb = gnames.get((i, k), ("", ""))
+                sa, sb = face(fa, ga), face(fb, gb)
                 print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
                 res["glyphs"] += 1
                 um = unsettable(fa)

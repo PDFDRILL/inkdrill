@@ -754,6 +754,33 @@ class JudgeSetter(unittest.TestCase):
                 self.assertIn("set by " + want, out.getvalue(), name)
 
 
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeSmallCapsByGlyphName(unittest.TestCase):
+    """Libertine's small capitals are glyphs of the text font's own program (t.sc in LinLibertineT): read plain, they
+    are style findings, never glyph findings; read with \\textsc, nothing is flagged (board 1805.01788 p3, 56)."""
+
+    def run_case(self, d, name, read):
+        _accent_case(d, name, "Definition 1 (\\textsc{fairness of attention}). A ranking offers this.", read,
+                     "\\usepackage{libertine}\n")
+        out = io.StringIO()
+        res = judge.judge(os.path.join(d, name, "page.pdf"), 1, os.path.join(d, name, "r.lines.json"),
+                          os.path.join(d, name, "g"), out=out, route="glyph", setter=False)
+        return res, out.getvalue()
+
+    def test_small_caps_read_plain_are_style(self):
+        self.assertEqual((judge.glyph_face("t.sc"), judge.glyph_face("q.sc_u.sc"), judge.glyph_face("t"),
+                          judge.glyph_face("f_i"), judge.glyph_face("scaron")), ("c", "c", "", "", ""))
+        self.assertEqual((judge.face("LinLibertineT", "e.sc"), judge.face("CMCSC10", "e"), judge.face("CMR10")),
+                         ("c", "c", "-"))
+        with tempfile.TemporaryDirectory(prefix="test-judge-sc-") as d:
+            res, out = self.run_case(d, "plain", "Definition 1 (fairness of attention). A ranking offers this.")
+            self.assertGreaterEqual(res["style"], 15, out[-800:])
+            self.assertEqual(res["glyph"], 0, [ln for ln in out.splitlines() if ln.startswith("G ")
+                                               and ln.split()[8] == "1"])
+            res, out = self.run_case(d, "sc", "Definition 1 (\\textsc{fairness of attention}). A ranking offers this.")
+            self.assertEqual((res["glyph"], res["style"]), (0, 0), out[-800:])
+
+
 class JudgeMathFamilies(unittest.TestCase):
     """A page set with mathabx (fonts TeX-matha/TeX-mathb, or matha/mathb) is judged with mathabx loaded: its \\in
     and \\geq are its own designs, and set from Computer Modern they differ in shape -- board lib:c9daf79960c3 p68
