@@ -6,8 +6,9 @@
 
 Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per glyph). Steps:
 
-1. Each lines.json leaf line (text, no children_ids, not page_info/diagram) becomes one page of a
-   `standalone` document (env `pline`) set in the page's own font family (`font_preamble`) at the size
+1. Each lines.json leaf line (text, no children_ids, not diagram; a page_info line with text is judged like
+   text, 2026-11-21) becomes one page of a `standalone` document (env `pline`) set in the page's own font
+   family (`font_preamble`) at the size
    the original uses there (mutool stext font size, bp -> TeX pt by 72.27/72). One pdflatex run.
 2. Glyph origins come from the content streams (mutool stext `<char x y>`) of both PDFs. Within a line,
    the glyphs are paired in x order by difflib (equal runs, and replace runs of equal length).
@@ -639,7 +640,7 @@ def ink_xs(row: bytes):
 
 def leaves(page: dict) -> list[dict]:
     return [ln for ln in page["lines"]
-            if ln.get("text") and not ln.get("children_ids") and ln["type"] not in ("page_info", "diagram")]
+            if ln.get("text") and not ln.get("children_ids") and ln["type"] != "diagram"]
 
 #: characters pdflatex (utf8, OT1/T1) cannot set, as LaTeX: (in text mode, in maths mode). Found in the 30 board
 #: readings (2026-11-17): U+2212 alone dropped whole pages. Compatibility forms (ligatures, full-width) go through

@@ -137,6 +137,21 @@ class JudgeBornDigital(unittest.TestCase):
         self.assertLessEqual(res["glyphs"], clean["glyphs"])
         self.assertEqual(res["a_glyphs"], res["glyphs"] + res["a_unpaired"])
 
+    def test_page_info_line_is_judged_as_text(self):
+        """a running head typed page_info is the same ink as typed text (0864 p4, pdfdrill 68f2b43e: the IJCAI
+        head typed page_info cost ours +0.022 when the judge dropped page_info leaves). Diagram lines stay out."""
+        clean, _ = self.run_judge(self.doc, "as-text")
+        doc = copy.deepcopy(self.doc)
+        doc["pages"][0]["lines"][0].update(type="page_info", subtype="header")
+        res, _ = self.run_judge(doc, "as-page-info")
+        keys = ("lines", "glyphs", "a_unpaired", "b_unpaired", "flagged", "glyph", "a_glyphs")
+        self.assertEqual({k: res[k] for k in keys}, {k: clean[k] for k in keys})
+        self.assertEqual(res["a_unpaired"], 0)
+        doc["pages"][0]["lines"][0]["type"] = "diagram"
+        dia, _ = self.run_judge(doc, "as-diagram")
+        self.assertEqual(dia["lines"], len(LINES) - 1)
+        self.assertGreater(dia["a_unpaired"], 30)
+
     def test_threshold_is_the_frozen_value(self):
         self.assertEqual(judge.THRESHOLD, 7)
         self.assertEqual(judge.UP, 8)
