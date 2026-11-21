@@ -313,8 +313,26 @@ def stext(pdf: str, pages: str) -> str:
     return _STEXT[key]
 
 
+MATH_ALPHA = re.compile(r"&#x(1d[4-7][0-9a-f]{2});", re.I)
+
+
+def math_alpha(c: str) -> str:
+    """a Mathematical Alphanumeric Symbol (U+1D400-U+1D7FF) as its letter, in mutool's spelling (ASCII bare, others
+    &#x..;): 𝑖 -> i, 𝛼 -> α. The style the code point carries is the face of the font that draws it, and the G line
+    already compares faces by font name. The judge sets the reading's ASCII i in LinLibertineI, whose ToUnicode says
+    U+1D456; the page (txfonts) says i for the same glyph (board 1805.01788 p3: 20 of 35 unpaired_B were these)"""
+    m = MATH_ALPHA.fullmatch(c)
+    if not m:
+        return c
+    f = unicodedata.normalize("NFKC", chr(int(m.group(1), 16)))
+    if len(f) != 1:
+        return c                                   # unassigned (U+1D455, a reserved hole: h is U+210E) stays
+    return f if " " < f < "\x7f" else f"&#x{ord(f):x};"
+
+
 def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
-    """per page: (char, origin x, origin y, quad x0, y0, x1, y1, font, size bp)"""
+    """per page: (char, origin x, origin y, quad x0, y0, x1, y1, font, size bp); a maths alphanumeric is read as its
+    letter (math_alpha)"""
     out = []
     for body in PGS.findall(stext(pdf, f"{first}-{last}")):
         cs, font, size = [], "", 0.0
@@ -325,7 +343,7 @@ def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
             if c.strip() == "":
                 continue
             qv = [float(v) for v in q.split()]
-            cs.append((c, float(ox), float(oy), min(qv[0::2]), min(qv[1::2]), max(qv[0::2]), max(qv[1::2]), font, size))
+            cs.append((math_alpha(c), float(ox), float(oy), min(qv[0::2]), min(qv[1::2]), max(qv[0::2]), max(qv[1::2]), font, size))
         out.append(cs)
     return out
 

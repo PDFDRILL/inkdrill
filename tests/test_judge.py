@@ -1288,6 +1288,33 @@ class JudgeNewtxLibertine(unittest.TestCase):
             self.assertNotIn(judge.NEWTX_LIBERTINE, pre)
 
 
+class JudgeMathAlphanumerics(unittest.TestCase):
+    """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
+    ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of
+    35 unpaired_B) left both sides unpaired. Here the page sets i and j as Libertine text italics, mapped ASCII."""
+
+    def test_fold(self):
+        self.assertEqual([judge.math_alpha(c) for c in ("&#x1d456;", "&#x1D457;", "&#x1d6fc;", "&#x1d7d9;", "&#x1d455;",
+                                                         "&#x2212;", "i")],
+                         ["i", "j", "&#x3b1;", "1", "&#x1d455;", "&#x2212;", "i"])
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_libertine_maths_letters_pair_with_ascii(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-malpha-") as d:
+            pre = "\\usepackage{libertine}\\usepackage[libertine]{newtxmath}\n"
+            _accent_case(d, "a", "For every $x$, \\textit{i} and \\textit{j} here.",   # $x$: the page's maths font
+                         "For every \\(x\\), \\(i\\) and \\(j\\) here.", pre)
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, "a", "page.pdf"), 1, os.path.join(d, "a", "r.lines.json"),
+                              os.path.join(d, "a", "g"), out=out, route="glyph", setter=False)
+            lines = out.getvalue().splitlines()
+            self.assertEqual([ln for ln in lines if ln.startswith("U ")], [])
+            ij = sorted(ln.split()[2] for ln in lines if ln.startswith("G ") and ln.split()[2] in "ij"
+                        and ln.split()[4] == "1")
+            self.assertEqual(ij, ["i", "j"], lines)
+            self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0))
+
+
 class JudgeMathFamilies(unittest.TestCase):
     """A page set with mathabx (fonts TeX-matha/TeX-mathb, or matha/mathb) is judged with mathabx loaded: its \\in
     and \\geq are its own designs, and set from Computer Modern they differ in shape -- board lib:c9daf79960c3 p68
