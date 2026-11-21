@@ -809,6 +809,28 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeEsintIntegrals(unittest.TestCase):
+    """esint's integrals are named acute and circumflex and have no ToUnicode map (board lib:6d90e8d27b8b p174): the
+    outline decides, so both sides read them as integrals and a correct \\int reading pairs them as glyphs"""
+
+    def test_esint_integral_reads_as_integral(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-esint-") as d:
+            line = "Es gilt $\\int x\\,dx = \\int t\\,dt$ hier und dort."
+            _accent_case(d, "e", line, "Es gilt \\(\\int x\\,dx = \\int t\\,dt\\) hier und dort.", "\\usepackage{esint}\n")
+            pdf = os.path.join(d, "e", "page.pdf")
+            self.assertIn('glyph="acute"', judge.trace_text(pdf, 1, 1))     # the fixture holds the named integral
+            self.assertIn(r"\usepackage{esint}", judge.font_preamble(pdf, 1)[1])
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, os.path.join(d, "e", "r.lines.json"), os.path.join(d, "e", "g"), out=out,
+                              route="glyph", setter=False)
+            text = out.getvalue()
+            ints = [ln for ln in text.splitlines() if ln.startswith("G L0 &#x222b; &#x222b; 1 ")]
+            self.assertEqual(len(ints), 2, text[-1500:])
+            self.assertEqual((res["unpaired_A"], res["unpaired_B"], res["glyph"]), (0, 0, 0), text[-1500:])
+            self.assertNotIn("&#xb4;", text)
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
 class JudgeBiolinumLine(unittest.TestCase):
     """a Biolinum line on a Libertine page (acmart's title, board 1805.01788 p3) is set in Biolinum, not in the
     page's Libertine serif"""

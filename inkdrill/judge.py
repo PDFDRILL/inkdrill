@@ -92,7 +92,8 @@ FAMILIES = [  # (regex on the PDF font name, preamble, family)
 MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|txmi|TXMI", r"\usepackage{newtxmath}"),
            (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}"),
            (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}"),   # mathabx: its own designs of \in, \geq, ...
-           (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}")]   # MathTime: no free version; mathptmx is its Times relative
+           (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}"),  # MathTime: no free version; mathptmx is its Times relative
+           (r"esint\d*$", r"\usepackage{esint}")]          # its integrals (board lib:6d90e8d27b8b p174), not CMEX's
 #: maths letters in Libertine (LinLibertineI 5 7 from an older newtx, LibertineMathMI from today's): newtxmath with
 #: its libertine option. Plain newtxmath sets them in Times-like NewTXMI (board 1805.01788 p3: 20 maths italics
 #: flagged with equal styles)
@@ -185,6 +186,21 @@ def spelled(cs: list, traced: list) -> list:
         for m, ch in enumerate(rest):       # inside the glyph's advance: after it, before the next glyph's origin
             x = c[1] + (c[5] - c[1]) * (m + 1) / (len(rest) + 1)
             out.append((ch, x, c[2], x, c[4], x, c[6], c[7], c[8], g[1]))   # its glyph's name, for glyph_face
+    return out
+
+
+#: fonts whose glyph names do not say what the glyph is: every glyph of esint is an integral sign, whatever its name
+#: (board lib:6d90e8d27b8b p174: a custom subset's `acute` and `circumflex` are the text and display integrals, and
+#: with no ToUnicode map stext reads them as accents). The outline decides, so they read as U+222B.
+NAMELESS = ((re.compile(r"esint\d*$", re.I), "&#x222b;"),)
+
+
+def by_outline(cs: list) -> list:
+    """the page's characters with those of a NAMELESS font replaced by what its outlines draw"""
+    out = []
+    for c in cs:
+        hit = next((ch for r, ch in NAMELESS if r.search(c[7].split("+")[-1])), None)
+        out.append(c if hit is None or c[0] == hit else (hit,) + tuple(c[1:]))
     return out
 
 
@@ -1293,6 +1309,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"), os.path.join(wd, "fontsA"))
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
     ac = spelled(ac, spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, [])))
+    ac = by_outline(ac)
     def own(texts, sizes, pre, wd):                 # one page alone: a group of one, the fonts' page included
         pdf, got = compile_group([(texts, sizes)], pre, wd)
         return pdf, got[0][0], got[0][1], got[0][2]
@@ -1417,7 +1434,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                   trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text))
     if spec_b:
         tr_b = side_b[1] if side_b else trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text)
-        bc = [spelled(spec_b.chars(bo + n + 1, cs), spec_b.traced(bo + n + 1, tr_b.get(bo + n + 1, [])))
+        bc = [by_outline(spelled(spec_b.chars(bo + n + 1, cs), spec_b.traced(bo + n + 1, tr_b.get(bo + n + 1, []))))
               for n, cs in enumerate(bc)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
                               unpaired_B=0, accents_on_ink=0, unmappable=0, unmeasurable=0, rules_a=0, rules_missing=0,
