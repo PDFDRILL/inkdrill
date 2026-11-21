@@ -23,7 +23,8 @@ Output, one line per paired glyph:
     G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font> <x0 y0 x1 y1>
 Then `U L<i> A|B <char> <x0 y0 x1 y1>` for unpaired glyphs. The box is the glyph's quad box in the R lines' frame (the
 page at 400 dpi, px): the page glyph's on G and side-A U lines, the rendered glyph's carried into the page by its line's
-median pair offset on side-B U lines (fields appended 2026-11-21, so a parser by index from the front still reads), `N L<i> NOT_COMPILED <LaTeX error>` for a line pdflatex could not set
+median pair offset on side-B U lines (fields appended 2026-11-21, so a parser by index from the front still reads), `N L<i> NOT_COMPILED <LaTeX error> <x0 y0 x1 y1>` (the line's region box, same frame: read it as the last four
+fields) for a line pdflatex could not set
 (the other lines still set and pair), a summary line `JUDGE1 lines .. glyphs .. flagged .. not_compiled ..
 a_glyphs .. a_unpaired .. b_unpaired ..` (a_glyphs: all glyphs of the original page; a_unpaired: those that paired
 with nothing; b_unpaired: rendered glyphs with no partner; the board's ink residual is
@@ -1664,8 +1665,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     if len(bc) != len(lv):            # the document itself did not come out page for page: no line is trusted
         failed = {i: failed.get(i, "no snippet page (document failed)") for i in range(len(lv))}
         bc = []
-    for i, e in sorted(failed.items()):
-        print(f"N L{i} NOT_COMPILED {e}", file=out)
+    for i, e in sorted(failed.items()):              # the line's region box last (the error text has spaces)
+        q = box(lv[i])
+        print(f"N L{i} NOT_COMPILED {e} {math.floor(q[0])} {math.floor(q[1])} {math.ceil(q[2])} {math.ceil(q[3])}",
+              file=out)
     res["not_compiled"] = len(failed)
     # characters dropped from the snippets (U+FFFD, and any pdflatex said it cannot set): the page's glyphs there
     # stay unpaired original ink, counted once

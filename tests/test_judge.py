@@ -10,6 +10,7 @@ import collections
 import copy
 import io
 import json
+import math
 import os
 import re
 import time
@@ -269,6 +270,7 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
                                                   "width": int((b[2] - b[0]) * k) + 4,
                                                   "height": int((b[3] - b[1]) * k) + 4}}
             for t, b in zip(texts, boxes)]}]}
+        cls.doc = doc
         lj = os.path.join(d, "r.lines.json")
         with open(lj, "w") as fh:
             json.dump(doc, fh)
@@ -293,6 +295,16 @@ class JudgeLinesThatDoNotCompile(unittest.TestCase):
         self.assertEqual(paired, {"L0", "L2"}, "lines 0 and 2 typeset and pair")
         self.assertEqual(self.res["flagged"], 0)
         self.assertIn("STATUS OK", self.out)
+
+    def test_broken_line_carries_its_region_box(self):
+        """an N line ends in its line's region box in the G/U/R frame (the page at 400 dpi), so board_run places it
+        by position, not by L-number"""
+        n = [ln.split() for ln in self.out if ln.startswith("N ")][0]
+        g = self.doc["pages"][0]["lines"][1]["region"]
+        k = 400 / 200
+        want = [math.floor(g["top_left_x"] * k), math.floor(g["top_left_y"] * k),
+                math.ceil((g["top_left_x"] + g["width"]) * k), math.ceil((g["top_left_y"] + g["height"]) * k)]
+        self.assertEqual([int(v) for v in n[-4:]], want, n)
 
     def test_unpaired_ink_is_counted(self):
         """the board's ink residual needs every original glyph that paired with nothing: the broken line's own"""
