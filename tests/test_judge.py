@@ -824,15 +824,17 @@ class JudgeCommaUnderABaselineBox(unittest.TestCase):
             k = pg["page_width"] / judge.page_size(pdf, 1)[0]                  # pt -> lines.json px
             base = max(c[2] for c in judge.chars(pdf, 1, 1)[0])               # the baseline, pt
             r = pg["lines"][0]["region"]
-            r["height"] = int(base * k) + 1 - r["top_left_y"]                 # the box ends there, as ours' did
-            with open(lj, "w") as fh:
-                json.dump(doc, fh)
-            commas = [c for c in judge.chars(pdf, 1, 1)[0] if c[0] == ","]
-            self.assertEqual(len(commas), 3)
-            self.assertTrue(all((c[4] + c[6]) / 2 * k > r["top_left_y"] + r["height"] for c in commas))   # centres below
-            out = io.StringIO()
-            res = judge.judge(pdf, 1, lj, os.path.join(d, "c", "g"), out=out, route="glyph", setter=False)
-            self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0), out.getvalue()[-600:])
+            top = r["top_left_y"]
+            for n, end in enumerate((int(base * k) + 1, int(base * k))):    # at the baseline, as ours' L54; one
+                r["height"] = end - top                                      # reading pixel above it, as its L5
+                with open(lj, "w") as fh:
+                    json.dump(doc, fh)
+                commas = [c for c in judge.chars(pdf, 1, 1)[0] if c[0] == ","]
+                self.assertEqual(len(commas), 3)
+                self.assertTrue(all((c[4] + c[6]) / 2 * k > end for c in commas))         # centres below the box
+                out = io.StringIO()
+                res = judge.judge(pdf, 1, lj, os.path.join(d, "c", "g%d" % n), out=out, route="glyph", setter=False)
+                self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0), (end, out.getvalue()[-600:]))
 
 
 class CodeLineUnit(unittest.TestCase):

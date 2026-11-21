@@ -1572,7 +1572,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             owner[ci] = best[1]
     # a box that ends at the baseline leaves out what hangs below it: a comma's centre lies under the box its origin
     # is in (board37 1805.01788 p3 L54: ours' box to y 520, the commas' centres at 521; 38 commas unpaired in ours
-    # where MathPix's deeper boxes paired them). Such a glyph belongs to the smallest box holding its origin.
+    # where MathPix's deeper boxes paired them). Such a glyph belongs to the smallest box holding its origin, to
+    # within one of the reading's pixels (its integer coordinates: L5's box ends 0.8 px above the comma's origin).
     for ci, c in enumerate(ac):
         if ci in owner:
             continue
@@ -1580,7 +1581,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         best = None
         for li in grid.get((int(cx // cell), int(oy // cell)), ()):
             b = boxes[li]
-            if b[0] <= cx < b[2] and b[1] <= oy < b[3]:
+            if b[0] <= cx < b[2] and b[1] - k <= oy < b[3] + k:     # k: one reading pixel, its coordinates' rounding
                 a = (b[2] - b[0]) * (b[3] - b[1])
                 if best is None or a < best[0]:
                     best = (a, li)
