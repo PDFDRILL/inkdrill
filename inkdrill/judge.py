@@ -224,6 +224,19 @@ def by_outline(cs: list) -> list:
     return out
 
 
+#: Computer Modern and its relatives: on a page set in another text family, a digit in one of these was set as maths
+CM_DIGITS = r"^(?:CMR|CMMI|CMBX|CMSL|LMRoman|LMMath|SFRM)\d*"
+
+
+def maths_digit(t: str, tb: str, fa: str, fb: str, fam: str) -> bool:
+    """a digit the page set in maths (Computer Modern on a page whose text family is not CM) and the reading wrote as
+    text (set in the page's text family): the same character in another face, so a style finding, not a glyph
+    finding (board 0864 p4: "15 cases", "760", typed as $15$; 28 CMR10 digits flagged in all three columns)"""
+    na, nb = fa.split("+")[-1], fb.split("+")[-1]
+    return (t == tb and len(t) == 1 and t.isdigit() and fam not in ("cm", "unmapped")
+            and bool(re.match(CM_DIGITS, na)) and not re.match(CM_DIGITS, nb))
+
+
 def face(font: str, glyph: str = "") -> str:
     """a paired glyph's face for the style count: its font's (style) and its glyph name's (glyph_face)"""
     f, g = style(font), glyph_face(glyph)
@@ -1717,6 +1730,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 flag = so >= THRESHOLD or (holes is not None and holes[0] != holes[1])
                 ga, gb = gnames.get((i, k), ("", ""))
                 sa, sb = face(fa, ga), face(fb, gb)
+                if maths_digit(t, tb, fa, fb, fam) and "x" not in sa:
+                    sa = "x" if sa == "-" else sa + "x"  # a digit the page set as maths, the reading as text
                 print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
                 res["glyphs"] += 1
                 um = unsettable(fa)

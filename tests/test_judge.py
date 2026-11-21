@@ -951,6 +951,29 @@ class JudgePdflatexNeverHangs(unittest.TestCase):
             self.assertFalse(os.path.exists(pdf))
 
 
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeMathsDigitsReadAsText(unittest.TestCase):
+    """numbers the author typed as maths on a Times page ($15$ cases, board 0864 p4) and a reading wrote as text: the
+    same digits in another face, style findings, never glyph findings"""
+
+    def test_maths_digits_are_style(self):
+        self.assertTrue(judge.maths_digit("7", "7", "ABCDEF+CMR10", "NimbusRomNo9L-Regu", "times"))
+        self.assertFalse(judge.maths_digit("7", "7", "CMR10", "CMR10", "times"))       # set as maths on both sides
+        self.assertFalse(judge.maths_digit("7", "7", "CMR10", "NimbusRomNo9L-Regu", "cm"))   # a CM page: text too
+        self.assertFalse(judge.maths_digit("a", "a", "CMR10", "NimbusRomNo9L-Regu", "times"))
+        with tempfile.TemporaryDirectory(prefix="test-judge-mdig-") as d:
+            line = "In particular, $15$ cases have at least a factor of $2$ and $760$ more."
+            _accent_case(d, "m", line, "In particular, 15 cases have at least a factor of 2 and 760 more.",
+                         "\\usepackage{times}\n")
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, "m", "page.pdf"), 1, os.path.join(d, "m", "r.lines.json"),
+                              os.path.join(d, "m", "g"), out=out, route="glyph", setter=False)
+            digits = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ") and ln.split()[2].isdigit()]
+            self.assertEqual(len(digits), 6)
+            self.assertTrue(all(g[9] == "x" and g[10] == "-" for g in digits), digits)
+            self.assertEqual(res["glyph"], 0, [g for g in digits if g[8] == "1"])
+
+
 class CodeLineUnit(unittest.TestCase):
     """a code line is the characters it is (board RE4B-DE p559)"""
 
