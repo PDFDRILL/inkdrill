@@ -711,6 +711,27 @@ class JudgeSetter(unittest.TestCase):
                 self.assertEqual((rf["a_unpaired"], rf["b_unpaired"]), (res["a_unpaired"], res["b_unpaired"]), name)
                 self.assertEqual((rf["glyphs"], rf["glyph"], rf["style"]), (res["glyphs"], 0, style), name)
 
+    def test_texttt_on_a_cmtt_page_is_set_in_cmtt(self):
+        """a CMTT page's \\texttt is set in OT1 cmtt, not T1's cm-super sftt: board lib:d68e0271bd4d p334 (CMTT8
+        at 7 pt, pdflatex route) had 10 glyph findings, m and -, in typewriter lines that read the face right"""
+        with tempfile.TemporaryDirectory(prefix="test-judge-tt-") as d:
+            fam, pre = judge.font_preamble(*self.page(d, "cmtt"))
+            self.assertIn(judge.OT1_TT, pre)
+            page = "{\\scriptsize \\texttt{metadata dc-element m-m mm--m} 92 DC $x$}"
+            res, out = self.run_case(d, "tt", page, "\\texttt{metadata dc-element m-m mm--m} 92 DC \\(x\\)")
+            self.assertIn("set by pdflatex", out)
+            self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["glyph"], res["style"]), (0, 0, 0, 0),
+                             [ln for ln in out.split("\n") if ln.startswith("G ") and ln.split()[8] == "1"])
+
+    def page(self, d, name):
+        _accent_case(d, name, "Some \\texttt{typewriter} text.", "Some text.")
+        return os.path.join(d, name, "page.pdf"), 1
+
+    def test_no_ot1_tt_without_cmtt(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-tt-") as d:
+            _accent_case(d, "rm", "Some plain text here.", "Some plain text here.")
+            self.assertNotIn(judge.OT1_TT, judge.font_preamble(os.path.join(d, "rm", "page.pdf"), 1)[1])
+
     def test_one_route_per_page(self):
         """the route is the page's: a text-only reading goes to pdflatex when a peer reading of the same page has a
         formula line (coordinator, 2026-11-17: the columns of a page are judged by one instrument)"""
