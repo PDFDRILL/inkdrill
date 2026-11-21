@@ -671,8 +671,8 @@ class JudgeSetter(unittest.TestCase):
     a clean reading has no flag, a planted letter is flagged, a character the page never printed comes from the TeX
     tree's Type 1 of the same font, and a page with a formula line is still set by pdflatex."""
 
-    def run_case(self, d, name, page, read):
-        res, out = _accent_case(d, name, page, read)
+    def run_case(self, d, name, page, read, preamble=""):
+        res, out = _accent_case(d, name, page, read, preamble)
         return res, "\n".join(out)
 
     def test_setter_clean_planted_fallback_and_formula(self):
@@ -692,6 +692,24 @@ class JudgeSetter(unittest.TestCase):
             res, out = self.run_case(d, "formula", "Let $x$ be a ring here.", "Let \\(x\\) be a ring here.")
             self.assertNotIn("setter", res)
             self.assertIn("set by pdflatex", out)
+
+    def test_text_face_commands_set_in_the_face(self):
+        """a reading's \\textbf{..} (pdfdrill 35340ad3 writes the face into the text) is set in the page's bold font,
+        never as the characters \\ t e x t b f { }: board 2311.09533v3 p10 gained 9 or 18 unpaired B glyphs on 7
+        lines (b_unpaired 5 -> 86). The same line read without the command pairs as many glyphs, and is flagged in
+        style only where the face was not read."""
+        with tempfile.TemporaryDirectory(prefix="test-judge-faces-") as d:
+            page = "\\textbf{Query:} where did the rings and \\textit{fields} go here."
+            times = "\\usepackage{times}\n"                 # the board page's Nimbus: its TeX-tree copy has a backslash
+            res, out = self.run_case(d, "plain", page, "Query: where did the rings and fields go here.", times)
+            self.assertEqual(res.get("setter"), 1, out[:300])
+            self.assertGreaterEqual(res["style"], 6, "read without its face, Query: and fields are style findings")
+            nested = "\\textbf{Query\\textit{:}} where did the rings and \\textit{fields} go here."
+            for name, read, style in (("faced", page, 0), ("nested", nested, 1)):   # the colon read bold italic
+                rf, out = self.run_case(d, name, page, read, times)
+                self.assertEqual(rf.get("setter"), 1, out[:300])
+                self.assertEqual((rf["a_unpaired"], rf["b_unpaired"]), (res["a_unpaired"], res["b_unpaired"]), name)
+                self.assertEqual((rf["glyphs"], rf["glyph"], rf["style"]), (res["glyphs"], 0, style), name)
 
     def test_one_route_per_page(self):
         """the route is the page's: a text-only reading goes to pdflatex when a peer reading of the same page has a

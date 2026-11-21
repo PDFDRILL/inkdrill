@@ -7,6 +7,9 @@ experiment A, tools/judge_setter.py: 99.79% of flags equal on the 6 text-only bo
 
 How: one PDF page per reading line, as compile_lines makes them, so the judge reads it unchanged.
 - The font: the page's regular text font (style '-', not maths) with the most traced glyphs.
+- A group in \\textbf, \\textit, \\texttt or \\textsc (pdfdrill 35340ad3 writes the face into the text): the
+  page's font of that face with the most traced glyphs, as pdflatex honours the command; a face the page has no
+  program of is set in the regular font, the command stripped and its argument kept. Never drawn as characters.
 - Each character: the glyph the page itself traces for it in that font, with the page's advance (trace `adv`) and
   the page's own kerning between glyph pairs (learned from consecutive traced glyphs); ligatures where the page uses
   them; a space advances 0.25 em.
@@ -91,6 +94,47 @@ def advances(trace_text: str) -> dict:
     return out
 
 
+#: the text-face commands a reading writes (pdfdrill 35340ad3 writes \\textbf{..} and kin into lines.json text): the
+#: setter sets the group in the page's font of that face, as pdflatex does
+FACES = {"textbf": "b", "textit": "i", "texttt": "m", "textsc": "c"}
+
+
+def faced(t: str) -> list:
+    """a reading's text line as [(face, text)]: the four text-face commands read as faces (style() letters, nested
+    faces combined: \\textbf{\\textit{..}} is "bi"), their braces gone; escapes and any other command stay text"""
+    out, stack, buf, i = [], [], [], 0
+
+    def face():
+        return "".join(c for c in "mbic" if any(c in f for f in stack if f))
+
+    def flush():
+        if buf:
+            out.append((face(), "".join(buf)))
+            buf.clear()
+    while i < len(t):
+        m = re.match(r"\\(textbf|textit|texttt|textsc)\s*\{", t[i:])
+        if m:
+            flush()
+            stack.append(FACES[m[1]])
+            i += m.end()
+        elif t[i] == "\\" and i + 1 < len(t):
+            buf.append(t[i:i + 2])
+            i += 2
+        elif t[i] == "{":
+            flush()
+            stack.append("")
+            i += 1
+        elif t[i] == "}" and stack:
+            flush()
+            stack.pop()
+            i += 1
+        else:
+            buf.append(t[i])
+            i += 1
+    flush()
+    return out
+
+
 def plain(t: str) -> str:
     """a text line of the reading as characters (the escapes MathPix's text lines use, entities)"""
     t = re.sub(r"\\([%&$#_{}])", r"\1", t)
@@ -114,52 +158,76 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
     letter spacing in em (the same line is also justified by Tc: d->o 5.20 pt on the page, 4.85 without it). The
     learned kerning is net of each baseline's own letter spacing."""
     count = collections.Counter(g[4] for g in traced)
-    regular = [f for f, _ in count.most_common() if not style(f.split("+")[-1]) and not re.search(mathfont, f)]
+    text_fonts = [f for f, _ in count.most_common() if not re.search(mathfont, f)]
+    regular = [f for f in text_fonts if not style(f.split("+")[-1])]
     if not regular:
         return None
     R = regular[0]
-    ids = fonts.find(R)
-    if not ids:
-        return None
-    path = fonts.ids()[ids[0]]
-    uni, lig_names = {}, set()
-    for g in traced:
-        if g[4] == R:
-            if g[1] in LIGS:                         # traced under its first letter: kept apart, never for that letter
-                lig_names.add(g[1])
-            else:
-                uni.setdefault(html.unescape(g[0]), g[1])
-    adv, kern_obs, prev, cur, em = {}, collections.defaultdict(collections.Counter), None, None, 1.0
-    kern_raw = []
-    for m in re.finditer(r'<span font="([^"]+)"[^>]*trm="([^"]+)"|<g unicode="[^"]*" glyph="([^"]*)" x="([^"]+)" '
-                         r'y="([^"]+)" adv="([^"]+)"|</span>', trace_text):
-        if m[1]:
-            cur, prev = m[1], None
-            t = [float(v) for v in m[2].split()]
-            em = abs(t[0]) or abs(t[1]) or 1.0
-        elif m[3] is not None:
-            x, y, a = float(m[4]), float(m[5]), float(m[6])
-            if cur == R:
-                adv.setdefault(m[3], a)
-                if prev and abs(y - prev[2]) < 1e-3:
-                    k = (x - prev[1]) / em - prev[3]
-                    if abs(k) < 0.15:
-                        kern_raw.append((round(y, 2), (prev[0], m[3]), k))
-            prev = (m[3], x, y, a)
-        else:
-            prev = None
-    by_base = collections.defaultdict(list)
-    for yb, _, k in kern_raw:
-        by_base[yb].append(k)
-    base_tc = {yb: sorted(v)[len(v) // 2] for yb, v in by_base.items()}
-    for yb, pq, k in kern_raw:
-        kern_obs[pq][round(k - base_tc[yb], 3)] += 1
-    kern = {pq: c.most_common(1)[0][0] for pq, c in kern_obs.items() if abs(c.most_common(1)[0][0]) >= 0.005}
-    fb = {"path": None, "font": None, "adv": {}}
+    progs = {}
 
-    def fallback(name):
+    def program(F):
+        """a page font's own program and what the page shows of it: glyphs by character, advances, kerning"""
+        if F in progs:
+            return progs[F]
+        ids = fonts.find(F)
+        if not ids:
+            progs[F] = None
+            return None
+        path = fonts.ids()[ids[0]]
+        uni, lig_names = {}, set()
+        for g in traced:
+            if g[4] == F:
+                if g[1] in LIGS:                     # traced under its first letter: kept apart, never for that letter
+                    lig_names.add(g[1])
+                else:
+                    uni.setdefault(html.unescape(g[0]), g[1])
+        adv, kern_obs, prev, cur, em = {}, collections.defaultdict(collections.Counter), None, None, 1.0
+        kern_raw = []
+        for m in re.finditer(r'<span font="([^"]+)"[^>]*trm="([^"]+)"|<g unicode="[^"]*" glyph="([^"]*)" x="([^"]+)" '
+                             r'y="([^"]+)" adv="([^"]+)"|</span>', trace_text):
+            if m[1]:
+                cur, prev = m[1], None
+                t = [float(v) for v in m[2].split()]
+                em = abs(t[0]) or abs(t[1]) or 1.0
+            elif m[3] is not None:
+                x, y, a = float(m[4]), float(m[5]), float(m[6])
+                if cur == F:
+                    adv.setdefault(m[3], a)
+                    if prev and abs(y - prev[2]) < 1e-3:
+                        k = (x - prev[1]) / em - prev[3]
+                        if abs(k) < 0.15:
+                            kern_raw.append((round(y, 2), (prev[0], m[3]), k))
+                prev = (m[3], x, y, a)
+            else:
+                prev = None
+        by_base = collections.defaultdict(list)
+        for yb, _, k in kern_raw:
+            by_base[yb].append(k)
+        base_tc = {yb: sorted(v)[len(v) // 2] for yb, v in by_base.items()}
+        for yb, pq, k in kern_raw:
+            kern_obs[pq][round(k - base_tc[yb], 3)] += 1
+        kern = {pq: c.most_common(1)[0][0] for pq, c in kern_obs.items() if abs(c.most_common(1)[0][0]) >= 0.005}
+        progs[F] = {"path": path, "uni": uni, "ligs": lig_names, "adv": adv, "kern": kern,
+                    "fb": {"path": None, "font": None, "adv": {}}}
+        return progs[F]
+    if program(R) is None:
+        return None
+    face_font = {"": R}
+
+    def font_of(face):
+        """the page's font of a face (its most traced); a face the page has no font program of is set in R, the
+        command stripped and its argument kept"""
+        if face not in face_font:
+            face_font[face] = next((f for f in text_fonts if style(f.split("+")[-1]) == face and program(f)), None)
+            if face_font[face] is None:
+                stats["setter_face_stripped"] += 1
+                face_font[face] = R
+        return face_font[face]
+
+    def fallback(F, name):
+        fb = progs[F]["fb"]
         if fb["font"] is None:
-            fb["path"] = tex_type1(R)
+            fb["path"] = tex_type1(F)
             fb["font"] = type1.load(fb["path"]) if fb["path"] else False
         f = fb["font"]
         if not f or name not in f.charstrings:
@@ -167,8 +235,16 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         if name not in fb["adv"]:
             fb["adv"][name] = charstring.outline(f, name).width * f.font_matrix[0]
         return fb["adv"][name]
-    codes = [{}, {}]                                   # font 0: the page's program, font 1: the TeX-tree program
-    glyphs = [[], []]
+    slots, slot_of, codes, glyphs = [], {}, [], []     # (page font, False): its own program; True: the TeX tree's
+
+    def slot(F, tex):
+        if (F, tex) not in slot_of:
+            slot_of[(F, tex)] = len(slots)
+            slots.append((F, tex))
+            codes.append({})
+            glyphs.append([])
+        return slot_of[(F, tex)]
+    slot(R, False)                                     # /F1
 
     def code(f, g):
         if g not in codes[f]:
@@ -177,30 +253,37 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         return codes[f][g]
     pages = []
     for li, (text, size) in enumerate(zip(texts, sizes)):
-        here = lig_names if line_ligs is None else lig_names & line_ligs[li]
-        s, items, i = plain(text), [], 0             # (font, code, advance em, text) or (None, None, 0.25, " ")
-        while i < len(s):
-            lig = next((l for l in LIGS if s.startswith(l, i) and l in here), None)
-            if lig:
-                items.append((0, code(0, lig), adv.get(lig, 0.5), lig))
-                i += len(lig)
-                continue
-            c = s[i]
-            i += 1
-            if c.isspace():
-                items.append((None, None, line_gaps[li] if line_gaps else 0.25, " "))
-                continue
-            g = uni.get(c)
-            if g is not None:
-                items.append((0, code(0, g), adv.get(g, 0.5), c))
-                continue
-            name = glyph_name(c)
-            a = fallback(name) if name else None
-            if a is None:
-                stats["setter_missing"] += 1
-                return None
-            stats["setter_fallback"] += 1
-            items.append((1, code(1, name), a, c))
+        items = []                                   # (slot, code, advance em, text) or (None, None, 0.25, " ")
+        for face, part in faced(text):
+            F = font_of(face)
+            pr = progs[F]
+            here = pr["ligs"] if line_ligs is None else pr["ligs"] & line_ligs[li]
+            s, i = plain(part), 0
+            while i < len(s):
+                lig = next((l for l in LIGS if s.startswith(l, i) and l in here), None)
+                if lig:
+                    f = slot(F, False)
+                    items.append((f, code(f, lig), pr["adv"].get(lig, 0.5), lig))
+                    i += len(lig)
+                    continue
+                c = s[i]
+                i += 1
+                if c.isspace():
+                    items.append((None, None, line_gaps[li] if line_gaps else 0.25, " "))
+                    continue
+                g = pr["uni"].get(c)
+                if g is not None:
+                    f = slot(F, False)
+                    items.append((f, code(f, g), pr["adv"].get(g, 0.5), c))
+                    continue
+                name = glyph_name(c)
+                a = fallback(F, name) if name else None
+                if a is None:
+                    stats["setter_missing"] += 1
+                    return None
+                stats["setter_fallback"] += 1
+                f = slot(F, True)
+                items.append((f, code(f, name), a, c))
         pages.append((items, size))
     objs = []
 
@@ -208,7 +291,7 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         objs.append(b if isinstance(b, bytes) else b.encode("latin-1"))
         return len(objs)
 
-    def font_obj(prog_path, base, names, advs, cff):
+    def font_obj(prog_path, base, names, advs, cff, uni):
         with open(prog_path, "rb") as fh:
             prog = fh.read()
         ff = obj(b"<< /Length %d %s>>\nstream\n" % (len(prog), b"/Subtype /Type1C " if cff else b"") + prog
@@ -233,9 +316,16 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                    "/Type /Encoding /Differences [1 %s] >> /FontDescriptor %d 0 R /ToUnicode %d 0 R >>"
                    % (base, max(1, len(names)), " ".join("%g" % (advs(g) * 1000) for g in names) or "0",
                       " ".join("/" + g for g in names), fd, tu))
-    f1 = font_obj(path, R.split("+")[-1].replace(" ", ""), glyphs[0], lambda g: adv.get(g, 0.5), path.endswith(".cff"))
-    f2 = font_obj(fb["path"], os.path.basename(fb["path"]).split(".")[0].upper(), glyphs[1],
-                  lambda g: fb["adv"][g], False) if glyphs[1] else None
+    fids = []
+    for F, tex in slots:
+        pr = progs[F]
+        if tex:
+            fb = pr["fb"]
+            fids.append(font_obj(fb["path"], os.path.basename(fb["path"]).split(".")[0].upper(), glyphs[len(fids)],
+                                 lambda g, fb=fb: fb["adv"][g], False, pr["uni"]))
+        else:
+            fids.append(font_obj(pr["path"], F.split("+")[-1].replace(" ", ""), glyphs[len(fids)],
+                                 lambda g, pr=pr: pr["adv"].get(g, 0.5), pr["path"].endswith(".cff"), pr["uni"]))
     kids = []
     pages_id = len(objs) + 2 * len(pages) + 1
     for li, (items, size) in enumerate(pages):
@@ -260,17 +350,18 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                 ops.append("[%s] TJ /F%d %.4f Tf" % (" ".join(parts), f + 1, size))
                 parts, cur_f = [], f
             g = glyphs[f][c - 1]
-            k = kern.get((last, g)) if (last and f == 0) else None
+            F, tex = slots[f]
+            k = progs[F]["kern"].get((last[1], g)) if (last and last[0] == f) else None
             if k:
                 flush()
                 parts.append("%d" % round(-k * 1000))
             run.append(c)
-            last = g if f == 0 else None
+            last = None if tex else (f, g)
         flush()
         ops.append("[%s] TJ ET" % " ".join(parts))
         cs = " ".join(ops)
         st = obj(b"<< /Length %d >>\nstream\n" % len(cs) + cs.encode("latin-1") + b"\nendstream")
-        res = "/F1 %d 0 R" % f1 + (" /F2 %d 0 R" % f2 if f2 else "")
+        res = " ".join("/F%d %d 0 R" % (n + 1, fid) for n, fid in enumerate(fids))
         kids.append(obj("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %.3f %.3f] /Resources << /Font << %s >> >> "
                         "/Contents %d 0 R >>" % (pages_id, w, h, res, st)))
     assert len(objs) + 1 == pages_id
@@ -287,5 +378,5 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
     pdf = os.path.join(wd, "set.pdf")
     with open(pdf, "wb") as fh:
         fh.write(out)
-    stats["setter_font_" + ("cff" if path.endswith(".cff") else "t1")] += 1
+    stats["setter_font_" + ("cff" if progs[R]["path"].endswith(".cff") else "t1")] += 1
     return pdf
