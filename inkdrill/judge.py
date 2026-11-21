@@ -872,6 +872,49 @@ SNAP = 0.015
 SNAP_MIN = 0.001
 
 
+#: maths italic letters, whose sizes on a page are its text, script and scriptscript sizes
+MATHLETTER = r"CMMI|MTMI|MT2MI|EURM|rtxmi|ntxmi|NewTXMI|zplm|pxmi|LinLibertineI\d*$|LibertineMathMI"
+
+
+def math_sizes(ac: list) -> str:
+    """the page's own maths sizes, as \\DeclareMathSizes for its body size: the commonest maths-letter size between 0.65
+    and 0.95 of the body size is its script size, the one below 0.9 of that its scriptscript size (or half the body
+    size where the page has none: 5.5 pt under 9 pt is 0.61 of it). A package's sizes change between versions: newtxmath sets 9 pt scripts at 6.6 pt
+    today and set them at 7.3 pt in 2018 (board 1805.01788 p3: 25 maths italics in LibertineMathMI7 at 6.575 bp
+    against the page's LinLibertineI7 at 7.273, flagged as glyph findings). "" when the page has too few to tell,
+    or when its maths is MathTime, which mathptmx only stands in for: at the page's sizes its Symbol letters move
+    against their neighbours (board35 lib:c57ac038ae5f p293: an alpha out of order, two pieces of glyphs read as
+    rules, both columns worse)."""
+    if any(re.search(r"MTMI|MT2MI|MTSY|MTEX", c[7]) for c in ac):
+        return ""
+    body = collections.Counter(round(c[8], 3) for c in ac if c[8] > 0)
+    if not body:
+        return ""
+    T = body.most_common(1)[0][0]
+    ms = collections.Counter(round(c[8], 3) for c in ac if re.search(MATHLETTER, c[7].split("+")[-1]))
+    s1 = [(n, z) for z, n in ms.items() if 0.65 * T <= z < 0.95 * T]
+    if not s1 or max(s1)[0] < 5:
+        return ""
+    s1 = max(s1)[1]
+    s2 = [(n, z) for z, n in ms.items() if 0.35 * T <= z < 0.9 * s1]
+    s2 = max(s2)[1] if s2 and max(s2)[0] >= 3 else 0.5 * T
+    pt = lambda z: round(z * 72.27 / 72, 2)
+    t = set_size(T)
+    return "\\DeclareMathSizes{%g}{%g}{%g}{%g}" % (round(t, 2), round(t, 2), pt(s1), pt(s2))
+
+
+def vote_size(cs: list, formula: bool) -> float:
+    """a line's size from its glyphs' (bp): the commonest; on a formula line the largest that holds a quarter of
+    them, since its scripts can outnumber its base (board 1805.01788 p3 L4, a_{i1}/r_{i1}: 12 glyphs at the
+    script size, 11 at the text size; set at the script size, its letters and scripts were all too small)"""
+    if not cs:
+        return 10.0
+    c = collections.Counter(round(x, 4) for x in cs)
+    if formula:
+        return max(z for z, n in c.items() if n >= 0.25 * len(cs))
+    return c.most_common(1)[0][0]
+
+
 def set_size(sz: float) -> float:
     """a line's size (bp, as mutool reports it) as the size the judge sets it at (pt)"""
     pt = sz * 72.27 / 72
@@ -1317,6 +1360,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
     ac = spelled(ac, spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, [])))
     ac = by_outline(ac)
+    ms = math_sizes(ac)                              # the page's maths sizes, after its packages' own
+    if ms and fam != "unmapped":
+        pre = pre + "\n" + ms if pre else ms
     def own(texts, sizes, pre, wd):                 # one page alone: a group of one, the fonts' page included
         pdf, got = compile_group([(texts, sizes)], pre, wd)
         return pdf, got[0][0], got[0][1], got[0][2]
@@ -1340,7 +1386,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         near = sorted(ci for gx in range(int(b[0] // 256), int(b[2] // 256) + 1)
                       for gy in range(int(b[1] // 256), int(b[3] // 256) + 1) for ci in cgrid.get((gx, gy), ()))
         cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
-        sizes.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
+        sizes.append(vote_size(cs, is_formula(ln)))
         lfams.append([ac[ci][7] for ci in near if inside(ac[ci], b)])
     if fam == "unmapped":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
@@ -1371,9 +1417,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                (x["region"]["top_left_x"] + x["region"]["width"]) * k2,
                (x["region"]["top_left_y"] + x["region"]["height"]) * k2) for x in l2]
         s2 = []
-        for b in b2:
+        for x, b in zip(l2, b2):
             cs = [c[8] for c in ac if inside(c, b) and not re.search(SIZEVOTE_SKIP, c[7])]
-            s2.append(collections.Counter(round(x, 4) for x in cs).most_common(1)[0][0] if cs else 10.0)
+            s2.append(vote_size(cs, is_formula(x)))
         return l2, b2, s2
 
     def try_set(l2, b2, s2, d2):

@@ -808,6 +808,53 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
             self.assertEqual([(g[2], g[9]) for g in qu], [("q", "c"), ("u", "c")], qu)
 
 
+class MathSizesUnit(unittest.TestCase):
+    """the page's maths sizes and a formula line's size vote (board 1805.01788 p3)"""
+
+    def glyphs(self, *spec):
+        return [("x", 0, 0, 0, 0, 1, 1, font, size) for font, size, n in spec for _ in range(n)]
+
+    def test_script_size_measured_from_the_maths_letters(self):
+        ac = self.glyphs(("ABCDEF+LinLibertineT", 8.966, 200), ("GMLQBI+LinLibertineI", 8.966, 35),
+                         ("IVFFFD+LinLibertineI7", 7.273, 49), ("XYZ+LinLibertineT", 7.273, 30))
+        self.assertEqual(judge.math_sizes(ac), r"\DeclareMathSizes{9}{9}{7.3}{4.5}")
+        ac += self.glyphs(("ZDIDON+LinLibertineI5", 5.479, 4))
+        self.assertEqual(judge.math_sizes(ac), r"\DeclareMathSizes{9}{9}{7.3}{5.5}")
+        self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 9.963, 300), ("CMMI10", 9.963, 20),
+                                                       ("CMMI7", 6.974, 12))), r"\DeclareMathSizes{10}{10}{7}{5}")
+        self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 9.963, 300), ("CMMI7", 6.974, 4))), "")
+        self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 9.963, 300))), "")
+        self.assertEqual(judge.math_sizes(self.glyphs(("Times-Roman", 9.963, 300), ("QtxpctLqshvdMTMI", 7.572, 93),
+                                                       ("QtxpctLqshvdMTMI", 9.963, 83))), "")    # MathTime: none
+        self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 10.062, 300), ("CMMI7", 6.974, 26),
+                                                       ("CMMI6", 5.978, 6))), r"\DeclareMathSizes{10}{10}{7}{6}")
+
+    def test_formula_line_takes_its_base_size(self):
+        cs = [8.966] * 11 + [7.273] * 12
+        self.assertEqual((judge.vote_size(cs, True), judge.vote_size(cs, False)), (8.966, 7.273))
+        self.assertEqual(judge.vote_size([9.963] * 30 + [11.955] * 2, True), 9.963)   # a quarter at least
+        self.assertEqual(judge.vote_size([], True), 10.0)
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgePageMathSizes(unittest.TestCase):
+    """a page whose maths sizes are not its package's (2018's newtxmath set 9 pt scripts at 7.3 pt, today's at 6.6:
+    board 1805.01788 p3): the scripts are set at the page's sizes, so a correct reading's scripts pair cleanly"""
+
+    def test_scripts_at_the_page_size(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-msz-") as d:
+            line = "Here $a_{i} + b_{j}^{k} = c_{m} + d_{n} + e_{p} + f_{q}$ holds for all of them."
+            _accent_case(d, "s", line, "Here \\(a_{i} + b_{j}^{k} = c_{m} + d_{n} + e_{p} + f_{q}\\) holds for all of them.",
+                         "\\DeclareMathSizes{10}{10}{8}{6}\n")
+            pdf = os.path.join(d, "s", "page.pdf")
+            self.assertIn("CMMI8", subprocess.run(["pdffonts", pdf], capture_output=True, text=True).stdout)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, os.path.join(d, "s", "r.lines.json"), os.path.join(d, "s", "g"), out=out,
+                              route="glyph", setter=False)
+            flagged = [ln for ln in out.getvalue().splitlines() if ln.startswith("G ") and ln.split()[8] == "1"]
+            self.assertEqual((res["glyph"], res["style"]), (0, 0), flagged)
+
+
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
 class JudgeFractionBarOnTheAxis(unittest.TestCase):
     """a display line's text-style fractions read as display-style \\frac (board34 lib:6d90e8d27b8b p174 L14): the
