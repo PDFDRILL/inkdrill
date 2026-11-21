@@ -10,6 +10,8 @@ How: one PDF page per reading line, as compile_lines makes them, so the judge re
 - A group in \\textbf, \\textit, \\texttt or \\textsc (pdfdrill 35340ad3 writes the face into the text): the
   page's font of that face with the most traced glyphs, as pdflatex honours the command; a face the page has no
   program of is set in the regular font, the command stripped and its argument kept. Never drawn as characters.
+- A text superscript (a footnote marker, written as maths: ${}^{30}$, or \\textsuperscript): set in its face's font
+  at the page's own superscript scale and rise (sup_metrics), so a line holding one is not a formula line.
 - Each character: the glyph the page itself traces for it in that font, with the page's advance (trace `adv`) and
   the page's own kerning between glyph pairs (learned from consecutive traced glyphs); ligatures where the page uses
   them; a space advances 0.25 em.
@@ -29,6 +31,16 @@ import subprocess
 from . import charstring, type1
 
 LIGS = ("ffi", "ffl", "ff", "fi", "fl")
+
+
+def lig_of(name: str) -> str | None:
+    """the ligature a glyph name stands for: fi, or f_i as fonts that name a ligature by its letters do (board
+    lib:69bc5c71b881 p16, CircularStd: f_f, f_i, f_f_i, f_l); None for any other glyph"""
+    if name in LIGS:
+        return name
+    parts = (name or "").split("_")
+    j = "".join(parts)
+    return j if len(parts) > 1 and all(len(q) == 1 for q in parts) and j in LIGS else None
 NAME = {".": "period", ",": "comma", ":": "colon", ";": "semicolon", "-": "hyphen", "(": "parenleft",
         ")": "parenright", "[": "bracketleft", "]": "bracketright", "/": "slash", "?": "question", "!": "exclam",
         "'": "quoteright", "’": "quoteright", "‘": "quoteleft", "“": "quotedblleft",
@@ -41,7 +53,8 @@ NAME = {".": "period", ",": "comma", ":": "colon", ";": "semicolon", "-": "hyphe
         "<": "less", ">": "greater", "|": "bar", "\\": "backslash", "~": "asciitilde", "^": "asciicircum",
         "`": "grave", "\u2192": "arrowright", "\u00b7": "periodcentered", "\u2022": "bullet", "\u00a7": "section",
         "\u00b0": "degree", "\u00e1": "aacute", "\u00e0": "agrave", "\u00f3": "oacute", "\u00ed": "iacute",
-        "\u00fa": "uacute", "\u00f1": "ntilde", "\u00e7": "ccedilla"}
+        "\u00fa": "uacute", "\u00f1": "ntilde", "\u00e7": "ccedilla",
+        "\u2122": "trademark", "\u00a9": "copyright", "\u00ae": "registered", "\u2026": "ellipsis", "\u20ac": "Euro"}
 _MAP = None
 #: the TeX-tree fonts pdflatex's family mapping uses for a page font with no copy of its own (judge.FAMILIES). Used
 #: only for characters the page's subset lacks: such a character never pairs with the same character in the same
@@ -54,6 +67,12 @@ def glyph_name(c: str) -> str | None:
     if c.isascii() and c.isalpha():
         return c
     return NAME.get(c)
+
+
+#: the substitute for a character the page's program lacks in a face SUBSTITUTE does not name. Like every substitute
+#: it only meets pairs that differ anyway; without it one such character (MathPix's straight ' and its (TM) on a
+#: CircularStd page) kept every reading of the page from being set, and the page from being judged at all.
+LAST_RESORT = "NimbusSanL-Regu"
 
 
 def tex_type1(font: str) -> str | None:
@@ -75,6 +94,7 @@ def tex_type1(font: str) -> str | None:
     for pat, sub in SUBSTITUTE:                     # no TeX-tree copy (a commercial font): what pdflatex sets instead
         if re.search(pat, base):
             names.append(sub)
+    names.append(LAST_RESORT)                       # a face no entry names (CircularStd: board lib:69bc5c71b881 p16)
     for name in names:
         if name in _MAP:
             path = subprocess.run(["kpsewhich", _MAP[name]], capture_output=True, text=True).stdout.strip()
@@ -96,7 +116,21 @@ def advances(trace_text: str) -> dict:
 
 #: the text-face commands a reading writes (pdfdrill 35340ad3 writes \\textbf{..} and kin into lines.json text): the
 #: setter sets the group in the page's font of that face, as pdflatex does
-FACES = {"textbf": "b", "textit": "i", "texttt": "m", "textsc": "c"}
+FACES = {"textbf": "b", "textit": "i", "texttt": "m", "textsc": "c", "textsuperscript": "s"}
+#: a text superscript as readings write it: maths holding only a superscript of plain characters (a footnote marker
+#: ${}^{30}$, \\({ }^{30}\\), $^{30}$; board lib:69bc5c71b881 p16, CircularStd: both columns write them so), set as
+#: \\textsuperscript, which `faced` reads as the face "s"
+SUP = re.compile(r"(?:\$|\\\()\s*(?:\{\s*\})?\s*\^\s*\{([^{}$\\]*)\}\s*(?:\$|\\\))")
+
+
+def supered(t: str) -> str:
+    """a line's text superscripts as \\textsuperscript{...}"""
+    return SUP.sub(lambda m: "\\textsuperscript{%s}" % m[1].strip(), t)
+
+
+def text_line(t: str) -> bool:
+    """a line with no maths left once its text superscripts are read as text: the setter can set it"""
+    return not re.search(r"\$|\\\(|\\\[", supered(t))
 
 
 def faced(t: str) -> list:
@@ -105,14 +139,14 @@ def faced(t: str) -> list:
     out, stack, buf, i = [], [], [], 0
 
     def face():
-        return "".join(c for c in "mbic" if any(c in f for f in stack if f))
+        return "".join(c for c in "mbics" if any(c in f for f in stack if f))
 
     def flush():
         if buf:
             out.append((face(), "".join(buf)))
             buf.clear()
     while i < len(t):
-        m = re.match(r"\\(textbf|textit|texttt|textsc)\s*\{", t[i:])
+        m = re.match(r"\\(textbf|textit|texttt|textsc|textsuperscript)\s*\{", t[i:])
         if m:
             flush()
             stack.append(FACES[m[1]])
@@ -146,6 +180,33 @@ def _pdf_string(codes) -> str:
     return "(" + "".join("\\%03o" % c for c in codes) + ")"
 
 
+def sup_metrics(traced: list) -> tuple:
+    """the page's text superscripts: (scale, rise in em of the body size), the medians over its glyphs at 0.45-0.85
+    of the body size whose baseline is above that of the body-size glyphs beside them; (0.7, 0.35) on a page with
+    none, where a reading's superscript has nothing to pair with anyway"""
+    size = lambda g: abs(g[5][3]) or abs(g[5][0])
+    sizes = collections.Counter(round(size(g), 2) for g in traced if g[0].strip())
+    if not sizes:
+        return 0.7, 0.35
+    body = sizes.most_common(1)[0][0]
+    big = [g for g in traced if abs(size(g) - body) <= 0.02 * body]
+    scales, rises = [], []
+    for g in traced:
+        z = size(g)
+        if not (0.45 * body <= z <= 0.85 * body) or not g[0].strip():
+            continue
+        near = sorted(b[3] for b in big if abs(b[2] - g[2]) < 3 * body and abs(b[3] - g[3]) < body)
+        if not near:
+            continue
+        up = (g[3] - near[len(near) // 2]) * (1 if g[5][3] > 0 else -1)   # trace's y may run down: d's sign says
+        if up > 0.1 * body:
+            scales.append(z / body)
+            rises.append(up / body)
+    if not scales:
+        return 0.7, 0.35
+    return sorted(scales)[len(scales) // 2], sorted(rises)[len(rises) // 2]
+
+
 def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: str, style, mathfont: str,
           stats: collections.Counter, line_ligs: list | None = None, line_gaps: list | None = None,
           line_tcs: list | None = None) -> str | None:
@@ -174,11 +235,12 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
             progs[F] = None
             return None
         path = fonts.ids()[ids[0]]
-        uni, lig_names = {}, set()
+        uni, lig_names, lig_glyph = {}, set(), {}
         for g in traced:
             if g[4] == F:
-                if g[1] in LIGS:                     # traced under its first letter: kept apart, never for that letter
-                    lig_names.add(g[1])
+                if lig_of(g[1]):                     # traced under its first letter: kept apart, never for that letter
+                    lig_names.add(lig_of(g[1]))
+                    lig_glyph[lig_of(g[1])] = g[1]   # its own name in this program (fi or f_i)
                 else:
                     uni.setdefault(html.unescape(g[0]), g[1])
         adv, kern_obs, prev, cur, em = {}, collections.defaultdict(collections.Counter), None, None, 1.0
@@ -207,7 +269,7 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         for yb, pq, k in kern_raw:
             kern_obs[pq][round(k - base_tc[yb], 3)] += 1
         kern = {pq: c.most_common(1)[0][0] for pq, c in kern_obs.items() if abs(c.most_common(1)[0][0]) >= 0.005}
-        progs[F] = {"path": path, "uni": uni, "ligs": lig_names, "adv": adv, "kern": kern,
+        progs[F] = {"path": path, "uni": uni, "ligs": lig_names, "lig_glyph": lig_glyph, "adv": adv, "kern": kern,
                     "fb": {"path": None, "font": None, "adv": {}}}
         return progs[F]
     if program(R) is None:
@@ -252,10 +314,12 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
             glyphs[f].append(g)
         return codes[f][g]
     pages = []
+    sc, rise = sup_metrics(traced)
     for li, (text, size) in enumerate(zip(texts, sizes)):
         items = []                                   # (slot, code, advance em, text) or (None, None, 0.25, " ")
-        for face, part in faced(text):
-            F = font_of(face)
+        for face, part in faced(supered(text)):
+            sup = "s" in face
+            F = font_of(face.replace("s", ""))
             pr = progs[F]
             here = pr["ligs"] if line_ligs is None else pr["ligs"] & line_ligs[li]
             s, i = plain(part), 0
@@ -263,18 +327,19 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                 lig = next((l for l in LIGS if s.startswith(l, i) and l in here), None)
                 if lig:
                     f = slot(F, False)
-                    items.append((f, code(f, lig), pr["adv"].get(lig, 0.5), lig))
+                    lg = pr["lig_glyph"].get(lig, lig)
+                    items.append((f, code(f, lg), pr["adv"].get(lg, 0.5), lig, sup))
                     i += len(lig)
                     continue
                 c = s[i]
                 i += 1
                 if c.isspace():
-                    items.append((None, None, line_gaps[li] if line_gaps else 0.25, " "))
+                    items.append((None, None, line_gaps[li] if line_gaps else 0.25, " ", sup))
                     continue
                 g = pr["uni"].get(c)
                 if g is not None:
                     f = slot(F, False)
-                    items.append((f, code(f, g), pr["adv"].get(g, 0.5), c))
+                    items.append((f, code(f, g), pr["adv"].get(g, 0.5), c, sup))
                     continue
                 name = glyph_name(c)
                 a = fallback(F, name) if name else None
@@ -283,7 +348,7 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                     return None
                 stats["setter_fallback"] += 1
                 f = slot(F, True)
-                items.append((f, code(f, name), a, c))
+                items.append((f, code(f, name), a, c, sup))
         pages.append((items, size))
     objs = []
 
@@ -308,6 +373,9 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         for k, g in enumerate(names):
             if g in LIGS:                           # no entry: mutool splits a ligature from its glyph name, as on the
                 continue                            # page (the first letter takes the width, the rest none)
+            if lig_of(g):                           # f_i: its letters, which mutool splits the same way
+                bf.append("<%02X> <%s>\n" % (k + 1, "".join("%04X" % ord(ch) for ch in lig_of(g))))
+                continue
             bf.append("<%02X> <%s>\n" % (k + 1, "".join("%04X" % ord(ch) for ch in rev.get(g, "?"))))
         cmap = cmap.replace("%d beginbfchar" % len(names), "%d beginbfchar" % len(bf)) + "".join(bf)
         cmap += "endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
@@ -329,7 +397,8 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
     kids = []
     pages_id = len(objs) + 2 * len(pages) + 1
     for li, (items, size) in enumerate(pages):
-        w = 8 + sum(a for _, _, a, _ in items) * size * 1.05 + len(items) * abs(line_tcs[li] if line_tcs else 0) * size
+        w = (8 + sum(a * (sc if up else 1) for _, _, a, _, up in items) * size * 1.05
+             + len(items) * abs(line_tcs[li] if line_tcs else 0) * size)
         h = size * 1.4 + 4
         parts, run, last, cur_f = [], [], None, 0
 
@@ -339,16 +408,18 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                 run.clear()
         tc = (line_tcs[li] if line_tcs else 0.0) * size
         ops = ["BT /F1 %.4f Tf %.4f Tc 2 %.4f Td" % (size, tc, 2 + size * 0.35)]
-        for f, c, a, _ in items:
+        cur_up = False
+        for f, c, a, _, up in items:
             if f is None:
                 flush()
                 parts.append("%d" % round(-a * 1000))
                 last = None
                 continue
-            if f != cur_f:
+            if f != cur_f or up != cur_up:              # a superscript: the page's scale and rise (sup_metrics)
                 flush()
-                ops.append("[%s] TJ /F%d %.4f Tf" % (" ".join(parts), f + 1, size))
-                parts, cur_f = [], f
+                ops.append("[%s] TJ /F%d %.4f Tf %.4f Ts" % (" ".join(parts), f + 1, size * (sc if up else 1),
+                                                             size * rise if up else 0))
+                parts, cur_f, cur_up, last = [], f, up, None
             g = glyphs[f][c - 1]
             F, tex = slots[f]
             k = progs[F]["kern"].get((last[1], g)) if (last and last[0] == f) else None

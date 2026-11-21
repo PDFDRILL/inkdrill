@@ -837,6 +837,46 @@ class JudgeCommaUnderABaselineBox(unittest.TestCase):
                 self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0), (end, out.getvalue()[-600:]))
 
 
+class SetterSuperscriptsAndLigatureNames(unittest.TestCase):
+    """the setter reads a footnote marker written as maths as a text superscript, at the page's own scale and rise,
+    and a ligature named by its letters (f_i) as a ligature (board lib:69bc5c71b881 p16, CircularStd)"""
+
+    def test_units(self):
+        from inkdrill import setter
+        self.assertEqual([setter.lig_of(n) for n in ("fi", "f_i", "f_f_i", "f_l", "f", "q.sc_u.sc", "a_b")],
+                         ["fi", "fi", "ffi", "fl", None, None, None])
+        self.assertEqual(setter.supered("systems. ${}^{30}  $ Next"), "systems. \\textsuperscript{30} Next")
+        self.assertEqual(setter.supered("risk. \\({ }^{31}\\) S"), "risk. \\textsuperscript{31} S")
+        self.assertTrue(setter.text_line("a ${}^{3}$ b") and not setter.text_line("a $x^{2}$ b"))
+        self.assertEqual(setter.faced(setter.supered("x ${}^{3}$")), [("", "x "), ("s", "3")])
+        body = [("x", "x", 10.0 * n, 700.0, "F", (10.0, 0, 0, 10.0)) for n in range(10)]
+        sup = [("3", "three", 101.0, 703.5, "F", (7.0, 0, 0, 7.0))]
+        self.assertEqual(setter.sup_metrics(body + sup), (0.7, 0.35))
+        sc, rise = setter.sup_metrics(body + [("3", "three", 101.0, 704.0, "F", (6.0, 0, 0, 6.0))])
+        self.assertAlmostEqual(sc, 0.6) and self.assertAlmostEqual(rise, 0.4)
+        self.assertEqual(setter.sup_metrics(body), (0.7, 0.35))                     # none on the page
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeUnmappedFamilySetter(unittest.TestCase):
+    """a page in a family FAMILIES has no entry for is set by the setter from its own program, its footnote marker
+    included, instead of being left unjudged (board lib:69bc5c71b881 p16: STATUS FONT_UNMAPPED in both columns)"""
+
+    def test_charter_page_is_judged(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-unmapped-") as d:
+            _accent_case(d, "u", "Fine fluffy waffles\\textsuperscript{3} are offered here.",
+                         "Fine fluffy waffles${}^{3}$ are offered here.", "\\usepackage{charter}\n")
+            pdf = os.path.join(d, "u", "page.pdf")
+            self.assertEqual(judge.font_preamble(pdf, 1)[0], "unmapped")
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, os.path.join(d, "u", "r.lines.json"), os.path.join(d, "u", "g"), out=out,
+                              route="glyph")
+            text = out.getvalue()
+            self.assertIn("set by setter", text)
+            self.assertIn("STATUS OK", text)
+            self.assertEqual((res["unpaired_A"], res["unpaired_B"], res["glyph"]), (0, 0, 0), text[-900:])
+
+
 class CodeLineUnit(unittest.TestCase):
     """a code line is the characters it is (board RE4B-DE p559)"""
 

@@ -1430,12 +1430,6 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
         sizes.append(vote_size(cs, is_formula(ln)))
         lfams.append([ac[ci][7] for ci in near if inside(ac[ci], b)])
-    if fam == "unmapped":
-        print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
-        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
-              f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unmeasurable 0 unpaired_A 0 unpaired_B 0", file=out)
-        print("STATUS FONT_UNMAPPED", file=out)
-        return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     set_by = "pdflatex"
     texts = []
     for ln, fs in zip(lv, lfams):
@@ -1474,7 +1468,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         for b in b2:
             inl = sorted((g for g in traced_spec if b[0] <= g[2] * S < b[2] and b[1] - 8 <= g[3] * S < b[3] + 8
                           and g[0].strip()), key=lambda g: g[2])     # a drawn space glyph is part of the gap
-            line_ligs.append({g[1] for g in inl if g[1] in setter_mod.LIGS})
+            line_ligs.append({setter_mod.lig_of(g[1]) for g in inl if setter_mod.lig_of(g[1])})
             gaps, small = [], []
             for p, q in zip(inl, inl[1:]):
                 em = abs(p[5][0]) or abs(p[5][1]) or 1.0
@@ -1499,11 +1493,20 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     if setter and lv and not second:
         mine = (lv, [box(ln) for ln in lv], sizes)
         others = [r for r in (reading_of(pth) for pth in (peers or [])) if r is not None]
-        if not any(is_formula(x) for r in [mine] + others for x in r[0]):
+        if not any(is_formula(x) and not (x.get("type") not in ("math", "equation") and setter_mod.text_line(x["text"]))
+                   for r in [mine] + others for x in r[0]):    # a footnote marker's maths is text to the setter
             ok = all(try_set(*r, os.path.join(wd, "peer-%d" % n)) is not None for n, r in enumerate(others))
             sp = try_set(*mine, wd) if ok else None
             if sp is not None:
                 comp, set_by = (lambda texts, sz, pre, w: (sp, {}, set(), 0)), "setter"
+    # a family TeX cannot set: only the setter, from the page's own font programs, can (board lib:69bc5c71b881 p16,
+    # CircularStd); where it cannot either, the page is not judged
+    if fam == "unmapped" and set_by != "setter":
+        print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
+        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
+              f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unmeasurable 0 unpaired_A 0 unpaired_B 0", file=out)
+        print("STATUS FONT_UNMAPPED", file=out)
+        return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
     side_a = None
     if route == "glyph":                            # the original's side runs while pdflatex sets the reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
