@@ -739,6 +739,20 @@ class JudgeStyleNames(unittest.TestCase):
         self.assertEqual(judge.style("CMCSC10"), "c")
         self.assertEqual(judge.style("Times-Roman"), "")
 
+    def test_mathtime_names(self):
+        """MathTime subsets (board18 lib:c57ac038ae5f p293) are maths fonts: MTMI math italic, MTMIB bold math
+        italic, MTSYN symbols, MTEX the extension font. They read "" until 2026-11-21, so 285 of the page's paired
+        glyphs compared a plain A face against an italic or maths B face."""
+        self.assertEqual(judge.style("QtxpctLqshvdMTMI"), "xi")
+        self.assertEqual(judge.style("HcxldrTdxpbjMTMIB"), "xbi")
+        self.assertEqual(judge.style("JnskryTvgfgxMTSYN"), "x")
+        self.assertEqual(judge.style("YtllkcRjyfrxMTEX"), "x")
+        self.assertEqual(judge.style("ABCDEF+MT2MIT"), "xi")
+        self.assertEqual(judge.style("MT2SYT"), "x")
+        self.assertEqual(judge.style("MTSYB"), "xb")
+        for name in ("Mtpro", "MTimes-Roman", "Smtmi", "HffcmrYvygwvTimes-Roman"):   # not MathTime
+            self.assertNotIn("x", judge.style(name), name)
+
 
 class JudgeDesignSize(unittest.TestCase):
     """The snippets are set with fix-cm: at a size that is not one of LaTeX's own (board lib:6d90e8d27b8b p174: body

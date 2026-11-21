@@ -114,6 +114,9 @@ def style(font: str) -> str:
     if lib:
         suf = lib.group(1)
         return ("b" if "b" in suf else "") + ("i" if "i" in suf else "")
+    mt = re.match(r"r?mt2?(mi|sy|ex|ms)([a-z0-9]{0,3})$", f)         # MathTime: MTMI, MTMIB, MTSYN, MTEX, MT2MIT
+    if mt:
+        return "x" + ("b" if re.match(r"[bh]", mt.group(2)) else "") + ("i" if mt.group(1) == "mi" else "")
     return (("x" if re.search(r"eurm|eusm|eufm|euex|cmmi|cmsy|cmex|msbm|msam", f) else "")
             + ("m" if re.search(r"mono|monl|courier|cmtt|inconsolata|typewriter|tt\d", f) else "")
             + ("b" if re.search(r"bold|medi|bx|black|semibold|demi", f) else "")
