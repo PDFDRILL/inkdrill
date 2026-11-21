@@ -1000,6 +1000,27 @@ class JudgeMsbmHbar(unittest.TestCase):
                     self.assertEqual(judge.MSBM_HBAR in fh.read(), want, name)
 
 
+class RepairByPosition(unittest.TestCase):
+    """the sequence pairing's leftovers matched again by character and place along the line (board
+    lib:3fe71b4ef018 p328 L1: a fraction's numerator and denominator interleave differently on the two sides)"""
+
+    def c(self, ch, x):
+        return (ch, x, 0.0, x, 0.0, x + 1, 1.0, "F", 10.0)
+
+    def test_repair(self):
+        a = [self.c("M", 0), self.c("*", 10), self.c("2", 11), self.c("c", 20)]
+        b = [self.c("M", 0), self.c("2", 10.7), self.c("*", 10.2), self.c("c", 20)]   # read in another x order
+        pairs = [(a[0], b[0]), (a[1], b[1]), (a[3], b[3])]                   # * paired with 2, as difflib left it
+        got, ua, ub = judge.repair(pairs, [a[2]], [b[2]], a, b)
+        self.assertEqual(sorted((p[0][0], p[1][0]) for p in got), [("*", "*"), ("2", "2"), ("M", "M"), ("c", "c")])
+        self.assertEqual((ua, ub), ([], []))
+        far = [self.c("M", 0), self.c("*", 10), self.c("c", 20)]           # an equal character too far away stays
+        got, ua, ub = judge.repair([(a[0], b[0])], [a[1]], [self.c("*", 19)], a, b + [self.c("*", 19)])
+        self.assertEqual((len(got), len(ua), len(ub)), (1, 1, 1))
+        same = [(a[0], b[0]), (a[3], b[3])]                                  # pairs of equal characters untouched
+        self.assertEqual(judge.repair(same, [], [], a, b)[0], same)
+
+
 class CodeLineUnit(unittest.TestCase):
     """a code line is the characters it is (board RE4B-DE p559)"""
 

@@ -242,6 +242,48 @@ def maths_digit(t: str, tb: str, fa: str, fb: str, fam: str) -> bool:
             and bool(re.match(CM_DIGITS, na)) and not re.match(CM_DIGITS, nb))
 
 
+def repair(pairs: list, ua: list, ub: list, ca: list, cb: list, near: float = 0.03) -> tuple:
+    """the sequence pairing's leftovers matched again by position: an unpaired page glyph, or one paired with another
+    character, takes an unpaired (or wrongly paired) rendered glyph of its own character at the same place along the
+    line (its x as a share of the line's extent, within `near`). In two-dimensional maths the x order is not the
+    reading order: a fraction's numerator and denominator interleave, and the substitute's widths reorder them (board
+    lib:3fe71b4ef018 p328 L1, M^{*2} under alpha_e: the page's * paired with a rendered 2, the rendered * and the
+    page's 2 left unpaired). Pairs of equal characters are never touched."""
+    wrong = [(pa, pb) for pa, pb in pairs if pa[0] != pb[0]]
+    pa_pool = ua + [pa for pa, _ in wrong]
+    pb_pool = ub + [pb for _, pb in wrong]
+    if not pa_pool or not pb_pool:
+        return pairs, ua, ub
+    xa0, xa1 = min(c[1] for c in ca), max(c[1] for c in ca)
+    xb0, xb1 = min(c[1] for c in cb), max(c[1] for c in cb)
+    nx_a = lambda c: (c[1] - xa0) / ((xa1 - xa0) or 1)
+    nx_b = lambda c: (c[1] - xb0) / ((xb1 - xb0) or 1)
+    cand = sorted((abs(nx_a(a) - nx_b(b)), ia, ib) for ia, a in enumerate(pa_pool) for ib, b in enumerate(pb_pool)
+                  if a[0] == b[0] and abs(nx_a(a) - nx_b(b)) <= near)
+    got_a, got_b, new = set(), set(), []
+    for _, ia, ib in cand:
+        if ia not in got_a and ib not in got_b:
+            got_a.add(ia)
+            got_b.add(ib)
+            new.append((pa_pool[ia], pb_pool[ib]))
+    if not new:
+        return pairs, ua, ub
+    used_a = {id(pa_pool[k]) for k in got_a}
+    used_b = {id(pb_pool[k]) for k in got_b}
+    kept = []
+    for pa, pb in pairs:
+        if pa[0] == pb[0] or (id(pa) not in used_a and id(pb) not in used_b):
+            kept.append((pa, pb))
+        else:                                        # a wrong pair broken up: its other member is left over
+            if id(pa) not in used_a:
+                ua = ua + [pa]
+            if id(pb) not in used_b:
+                ub = ub + [pb]
+    ua = [c for c in ua if id(c) not in used_a]
+    ub = [c for c in ub if id(c) not in used_b]
+    return kept + new, ua, ub
+
+
 def face(font: str, glyph: str = "") -> str:
     """a paired glyph's face for the style count: its font's (style) and its glyph name's (glyph_face)"""
     f, g = style(font), glyph_face(glyph)
@@ -1664,14 +1706,18 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             continue
         pairs, ulines = [], []
         sm = difflib.SequenceMatcher(a=[c[0] for c in ca], b=[c[0] for c in cb], autojunk=False)
+        ua, ub = [], []
         for op, a0, a1, b0, b1 in sm.get_opcodes():
             if op == "equal" or (op == "replace" and a1 - a0 == b1 - b0):
                 pairs += list(zip(ca[a0:a1], cb[b0:b1]))
             else:
-                res["unpaired_A"] += a1 - a0
-                res["unpaired_B"] += b1 - b0
-                ulines += [f"U L{i} A {c[0]}" for c in ca[a0:a1]]
-                ulines += [f"U L{i} B {c[0]}" for c in cb[b0:b1]]
+                ua += ca[a0:a1]
+                ub += cb[b0:b1]
+        pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
+        res["unpaired_A"] += len(ua)
+        res["unpaired_B"] += len(ub)
+        ulines += [f"U L{i} A {c[0]}" for c in ua]
+        ulines += [f"U L{i} B {c[0]}" for c in ub]
         # a rendered accent the page has as ink but not as a glyph (\overline drawn as a rule where the reading
         # wrote \bar, board 2103.01507 p118): placed relative to its base's partner and XORed against the page's
         # ink there, like any glyph. A reading that drops the accent still leaves the page's ink unpaired.
