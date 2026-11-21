@@ -974,6 +974,32 @@ class JudgeMathsDigitsReadAsText(unittest.TestCase):
             self.assertEqual(res["glyph"], 0, [g for g in digits if g[8] == "1"])
 
 
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeMsbmHbar(unittest.TestCase):
+    """a page whose \\hbar is MSBM's planckover2pi (amsfonts) is judged with that \\hbar, whatever package defines its
+    own: mathptmx's is a macron over h (board lib:3fe71b4ef018 p328: 6 page glyphs and 6 macrons unpaired)"""
+
+    def names(self, d, pre):
+        _, got = judge.compile_group([(["$x\\hbar y$"], [10.0])], pre, d)
+        return re.findall(r'glyph="([^"]*)"', judge.trace_text(os.path.join(d, "lines.pdf"), got[0][2] + 1, got[0][2] + 1))
+
+    def test_hbar(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-hbar-") as d:
+            os.makedirs(os.path.join(d, "a"))
+            os.makedirs(os.path.join(d, "b"))
+            self.assertIn("macron", self.names(os.path.join(d, "a"), "\\usepackage{mathptmx}"))     # the defect
+            got = self.names(os.path.join(d, "b"), "\\usepackage{mathptmx}\n" + judge.MSBM_HBAR)
+            self.assertIn("planckover2pi1", got)
+            self.assertNotIn("macron", got)
+            for name, page, want in (("m", "Planck: $E = \\hbar\\omega$ here.", True),
+                                     ("n", "Planck: $E = h\\omega$ here.", False)):
+                _accent_case(d, name, page, "Planck: \\(E = \\hbar\\omega\\) here.", "\\usepackage{amsfonts}\n")
+                judge.judge(os.path.join(d, name, "page.pdf"), 1, os.path.join(d, name, "r.lines.json"),
+                            os.path.join(d, name, "g"), out=io.StringIO(), route="glyph", setter=False)
+                with open(os.path.join(d, name, "g", "lines.tex")) as fh:
+                    self.assertEqual(judge.MSBM_HBAR in fh.read(), want, name)
+
+
 class CodeLineUnit(unittest.TestCase):
     """a code line is the characters it is (board RE4B-DE p559)"""
 

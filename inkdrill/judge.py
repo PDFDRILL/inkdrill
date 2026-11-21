@@ -102,6 +102,11 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
 #: its libertine option. Plain newtxmath sets them in Times-like NewTXMI (board 1805.01788 p3: 20 maths italics
 #: flagged with equal styles)
 NEWTX_LIBERTINE = r"\usepackage[libertine]{newtxmath}"
+#: \hbar as amsfonts sets it, MSBM's planckover2pi ("7E), on a page that prints that glyph: mathptmx (and others)
+#: define their own, a macron over h, two glyphs against the page's one (board lib:3fe71b4ef018 p328: 6 page ℏ and 6
+#: rendered macrons unpaired in both columns, whose readings wrote \hbar)
+MSBM_HBAR = r'\AtBeginDocument{\let\hbar\relax\DeclareMathSymbol{\hbar}{\mathord}{AMSb}{"7E}}'
+
 
 
 #: a line set in another family than its page's (a plot's labels, a running head): the NFSS family pdflatex sets it
@@ -1435,6 +1440,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     ms = math_sizes(ac)                              # the page's maths sizes, after its packages' own
     if ms and fam != "unmapped":
         pre = pre + "\n" + ms if pre else ms
+    if fam != "unmapped" and any(g[1] in ("planckover2pi", "planckover2pi1") and "MSBM" in g[4] for g in
+                                 trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, [])):
+        pre = pre + "\n" + MSBM_HBAR if pre else MSBM_HBAR
     def own(texts, sizes, pre, wd):                 # one page alone: a group of one, the fonts' page included
         pdf, got = compile_group([(texts, sizes)], pre, wd)
         return pdf, got[0][0], got[0][1], got[0][2]
