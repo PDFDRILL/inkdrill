@@ -93,6 +93,10 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
            (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}"),
            (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}"),   # mathabx: its own designs of \in, \geq, ...
            (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}")]   # MathTime: no free version; mathptmx is its Times relative
+#: maths letters in Libertine (LinLibertineI 5 7 from an older newtx, LibertineMathMI from today's): newtxmath with
+#: its libertine option. Plain newtxmath sets them in Times-like NewTXMI (board 1805.01788 p3: 20 maths italics
+#: flagged with equal styles)
+NEWTX_LIBERTINE = r"\usepackage[libertine]{newtxmath}"
 
 
 #: a line set in another family than its page's (a plot's labels, a running head): the NFSS family pdflatex sets it
@@ -100,7 +104,8 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
 #: page; 0864 p4: a Utopia running head). FAMILIES' families by their NFSS names.
 LINE_FAMILIES = [(r"DejaVuSerifCondensed", "DejaVuSerifCondensed-TLF"), (r"DejaVuSerif", "DejaVuSerif-TLF"),
                  (r"DejaVuSansCondensed", "DejaVuSansCondensed-TLF"), (r"DejaVuSans(?!Mono)", "DejaVuSans-TLF"),
-                 (r"Utopia", "put")]
+                 (r"Utopia", "put"),
+                 (r"LinBiolinum", "LinuxBiolinumT-TLF")]   # libertine's sans: board 1805.01788 p3, an acmart title
 NFSS = {"times": "ptm", "helvetica": "phv", "palatino": "ppl", "cm": "cmr", "libertine": "LinuxLibertineT-TLF"}
 #: \texttt on a page whose typewriter is CMTT: OT1 sets cmtt itself (CMTT8 at 7 pt on the page -> cmtt8), where the
 #: judge's T1 sets cm-super's sftt, an outline of the same design whose m and - flag against CMTT
@@ -217,6 +222,8 @@ def font_preamble(pdf: str, page: int) -> tuple[str, str]:
     fam = fams.most_common(1)[0][0] if fams else "cm"
     pre = [next(p for _, p, f in FAMILIES if f == fam)]
     pre += [p for r, p in MATHFAM if any(re.search(r, n) for n in glyphs)]
+    if any(re.match(r"(?:LinLibertineI|LibertineMathMI)\d*$", n) for n in glyphs):
+        pre = [x for x in pre if x != r"\usepackage{newtxmath}"] + [NEWTX_LIBERTINE]
     if any(re.match(r"CMTT\d", n) for n in glyphs):   # the page's typewriter is OT1 Computer Modern: T1's is cm-super,
         pre.append(OT1_TT)                            # whose m and - differ (board lib:d68e0271bd4d p334, 10 glyphs)
     return fam, "\n".join(x for x in pre if x)

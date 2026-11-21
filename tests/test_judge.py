@@ -781,6 +781,56 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
             self.assertEqual((res["glyph"], res["style"]), (0, 0), out[-800:])
 
 
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeBiolinumLine(unittest.TestCase):
+    """a Biolinum line on a Libertine page (acmart's title, board 1805.01788 p3) is set in Biolinum, not in the
+    page's Libertine serif"""
+
+    def test_biolinum_line_is_set_in_biolinum(self):
+        self.assertEqual(judge.line_family(["ABCDEF+LinBiolinumT"] * 3, "libertine"), "LinuxBiolinumT-TLF")
+        self.assertIsNone(judge.line_family(["ABCDEF+LinLibertineT"], "libertine"))
+        with tempfile.TemporaryDirectory(prefix="test-judge-bio-") as d:
+            line = "{\\biolinum Equity of Attention: Amortizing Fairness} $x$"
+            _accent_case(d, "bio", line, "Equity of Attention: Amortizing Fairness \\(x\\)", "\\usepackage{libertine}\n")
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, "bio", "page.pdf"), 1, os.path.join(d, "bio", "r.lines.json"),
+                              os.path.join(d, "bio", "g"), out=out, route="glyph", setter=False)
+            fonts = subprocess.run(["pdffonts", os.path.join(d, "bio", "g", "lines.pdf")], capture_output=True,
+                                   text=True).stdout
+            self.assertIn("LinBiolinumT", fonts)
+            self.assertEqual((res["glyph"], res["style"]), (0, 0), [ln for ln in out.getvalue().splitlines()
+                                                                    if ln.startswith("G ") and ln.split()[8] == "1"])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeNewtxLibertine(unittest.TestCase):
+    """a page set with newtxmath[libertine] (maths letters in LinLibertineI, board 1805.01788 p3) is judged with that
+    option: plain newtxmath sets the letters in NewTXMI and flags them"""
+
+    def test_libertine_maths_letters(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-ntxl-") as d:
+            line = "Let $x_i + y \\leq a b$ hold for every $n$ here."
+            _accent_case(d, "m", line, "Let \\(x_i + y \\leq a b\\) hold for every \\(n\\) here.",
+                         "\\usepackage{libertine}\\usepackage[libertine]{newtxmath}\n")
+            pdf = os.path.join(d, "m", "page.pdf")
+            fam, pre = judge.font_preamble(pdf, 1)
+            self.assertEqual((fam, pre.count("newtxmath")), ("libertine", 1), pre)
+            self.assertIn(judge.NEWTX_LIBERTINE, pre)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, os.path.join(d, "m", "r.lines.json"), os.path.join(d, "m", "g"), out=out,
+                              route="glyph", setter=False)
+            self.assertEqual((res["glyph"], res["style"]), (0, 0), [ln for ln in out.getvalue().splitlines()
+                                                                    if ln.startswith("G ") and ln.split()[8] == "1"])
+
+    def test_plain_newtx_page_keeps_plain_newtxmath(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-ntx-") as d:
+            _accent_case(d, "t", "Let $x_i + y$ hold.", "Let \\(x_i + y\\) hold.",
+                         "\\usepackage{newtxtext}\\usepackage{newtxmath}\n")
+            pre = judge.font_preamble(os.path.join(d, "t", "page.pdf"), 1)[1]
+            self.assertIn("\\usepackage{newtxmath}", pre)
+            self.assertNotIn(judge.NEWTX_LIBERTINE, pre)
+
+
 class JudgeMathFamilies(unittest.TestCase):
     """A page set with mathabx (fonts TeX-matha/TeX-mathb, or matha/mathb) is judged with mathabx loaded: its \\in
     and \\geq are its own designs, and set from Computer Modern they differ in shape -- board lib:c9daf79960c3 p68
