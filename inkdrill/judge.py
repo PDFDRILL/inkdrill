@@ -20,8 +20,10 @@ Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per
    before the fresh-page test).
 
 Output, one line per paired glyph:
-    G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font>
-Then `U L<i> A|B <char>` for unpaired glyphs, `N L<i> NOT_COMPILED <LaTeX error>` for a line pdflatex could not set
+    G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font> <x0 y0 x1 y1>
+Then `U L<i> A|B <char> <x0 y0 x1 y1>` for unpaired glyphs. The box is the glyph's quad box in the R lines' frame (the
+page at 400 dpi, px): the page glyph's on G and side-A U lines, the rendered glyph's carried into the page by its line's
+median pair offset on side-B U lines (fields appended 2026-11-21, so a parser by index from the front still reads), `N L<i> NOT_COMPILED <LaTeX error>` for a line pdflatex could not set
 (the other lines still set and pair), a summary line `JUDGE1 lines .. glyphs .. flagged .. not_compiled ..
 a_glyphs .. a_unpaired .. b_unpaired ..` (a_glyphs: all glyphs of the original page; a_unpaired: those that paired
 with nothing; b_unpaired: rendered glyphs with no partner; the board's ink residual is
@@ -1482,6 +1484,19 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
             xs, ys = [p[0] for p in comp], [p[1] for p in comp]
             print(f"R L{i} invented {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
 
+def pbox(c, dx: float = 0.0, dy: float = 0.0) -> str:
+    """a glyph's quad box (pt, shifted by dx dy) as "x0 y0 x1 y1" in the R lines' frame: the page at 400 dpi, whole
+    pixels, outward"""
+    return (f"{math.floor((c[3] + dx) * S)} {math.floor((c[4] + dy) * S)} "
+            f"{math.ceil((c[5] + dx) * S)} {math.ceil((c[6] + dy) * S)}")
+
+def b_to_a(pairs, ca, cb) -> tuple:
+    """the reading's frame -> the page's (pt) for one line: the median origin offset of its pairs; with no pair, the
+    offset that lays the rendered glyphs' extent's top left on the page glyphs'"""
+    if pairs:
+        return (statistics.median(a[1] - b[1] for a, b in pairs), statistics.median(a[2] - b[2] for a, b in pairs))
+    return (min(c[3] for c in ca) - min(c[3] for c in cb), min(c[4] for c in ca) - min(c[4] for c in cb))
+
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render",
           compiler=None, setter: bool = True, peers: list | None = None) -> collections.Counter:
     """one page. compiler(texts, sizes, preamble, wd) -> (snippet pdf, failed, dropped, first page) sets the
@@ -1741,8 +1756,11 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
         res["unpaired_A"] += len(ua)
         res["unpaired_B"] += len(ub)
-        ulines += [f"U L{i} A {c[0]}" for c in ua]
-        ulines += [f"U L{i} B {c[0]}" for c in ub]
+        # positions in the R lines' frame (the page at 400 dpi, px): the page glyph's quad box; a rendered glyph's
+        # quad box carried into the page by the line's median pair offset (by its glyphs' extents when none paired)
+        dx, dy = b_to_a(pairs, ca, cb)
+        ulines += [f"U L{i} A {c[0]} {pbox(c)}" for c in ua]
+        ulines += [f"U L{i} B {c[0]} {pbox(c, dx, dy)}" for c in ub]
         # a rendered accent the page has as ink but not as a glyph (\overline drawn as a rule where the reading
         # wrote \bar, board 2103.01507 p118): placed relative to its base's partner and XORed against the page's
         # ink there, like any glyph. A reading that drops the accent still leaves the page's ink unpaired.
@@ -1811,7 +1829,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 sa, sb = face(fa, ga), face(fb, gb)
                 if maths_digit(t, tb, fa, fb, fam) and "x" not in sa:
                     sa = "x" if sa == "-" else sa + "x"  # a digit the page set as maths, the reading as text
-                print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
+                print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa} "
+                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))}", file=out)
                 res["glyphs"] += 1
                 um = unsettable(fa)
                 res["unmeasurable"] += um
@@ -1845,7 +1864,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             xo, so, pc = score(diff)
             flag = so >= THRESHOLD
             sa, sb = style(fa) or "-", style(fb) or "-"
-            print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa}", file=out)
+            print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa} "
+                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))}", file=out)
             res["glyphs"] += 1
             um = unsettable(fa)
             res["unmeasurable"] += um

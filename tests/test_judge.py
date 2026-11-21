@@ -129,6 +129,39 @@ class JudgeBornDigital(unittest.TestCase):
         _, _, rows = self.planted_run()
         self.assertEqual([(r[2], r[3], r[6]) for r in rows if r[4] == "0" and r[8] != "1"], [])
 
+    def test_findings_carry_their_place_on_the_page(self):
+        """G and U lines end in a glyph's quad box in the R lines' frame (the page at 400 dpi): the page glyph's for G
+        and side-A U lines, the rendered glyph's carried into the page for side-B U lines. Every box lies inside its
+        line's region (board_run attributes a finding to a MathPix region by this place, not by its line)."""
+        doc = copy.deepcopy(self.doc)
+        lines = doc["pages"][0]["lines"]
+        lines[0]["text"] = lines[0]["text"].replace(" ", " a ", 1)         # an invented word: side-B U lines
+        lines[2]["text"] = lines[2]["text"].rsplit(" ", 1)[0]               # a dropped word: side-A U lines
+        lj = os.path.join(self.tmp.name, "placed.lines.json")
+        with open(lj, "w") as fh:
+            json.dump(doc, fh)
+        wd = os.path.join(self.tmp.name, "placed")
+        os.makedirs(wd)
+        out = io.StringIO()
+        judge.judge(self.pdf, 1, lj, wd, out=out, route=self.ROUTE)
+        rows = [ln.split() for ln in out.getvalue().splitlines() if ln[:2] in ("G ", "U ")]
+        k, tol = 400 / 200, 8                     # region px (200 dpi) -> 400 dpi; 2 pt of slack for quad boxes
+        seen = collections.Counter()
+        for r in rows:
+            want = 16 if r[0] == "G" else 8
+            self.assertEqual(len(r), want, r)
+            x0, y0, x1, y1 = map(int, r[-4:])
+            g = lines[int(r[1][1:])]["region"]
+            rx0, ry0 = g["top_left_x"] * k, g["top_left_y"] * k
+            rx1, ry1 = rx0 + g["width"] * k, ry0 + g["height"] * k
+            self.assertTrue(x0 < x1 and y0 < y1, r)
+            self.assertTrue(rx0 - tol <= x0 and x1 <= rx1 + tol and ry0 - tol <= y0 and y1 <= ry1 + tol,
+                            (r, (rx0, ry0, rx1, ry1)))
+            seen[r[0] if r[0] == "G" else r[0] + r[2]] += 1
+        self.assertGreater(seen["G"], 300)
+        self.assertGreaterEqual(seen["UA"], 3, "the dropped word")
+        self.assertGreaterEqual(seen["UB"], 1, "the invented word")
+
     def test_overlapping_boxes_pair_each_glyph_once(self):
         """a reading with a line boxed twice (overlapping regions) must not pair the page's glyphs twice"""
         clean, _ = self.run_judge(self.doc, "clean2")
@@ -378,7 +411,7 @@ class JudgeAccents(unittest.TestCase):
     def test_dropped_bar_leaves_the_page_macron_unpaired(self):
         res, out = _accent_case(self.tmp.name, "nobar" + self.ROUTE, "The mean value $\\bar{M}$ of the sample in question.",
                                 "The mean value \\(M\\) of the sample in question.", route=self.ROUTE)
-        self.assertIn("U L0 A &#xaf;", out)
+        self.assertIn("U L0 A &#xaf;", [" ".join(ln.split()[:4]) for ln in out])
         self.assertGreaterEqual(res["a_unpaired"], 1)
 
     def test_bar_over_a_drawn_overline_is_measured_on_ink(self):
@@ -406,7 +439,7 @@ class JudgeUnmappable(unittest.TestCase):
                                 "The total of the sample is 4� units in all.")
         self.assertEqual(res["not_compiled"], 0)
         self.assertEqual(res["unmappable"], 1)
-        self.assertIn("U L0 A 2", out)                      # the page's glyph, unpaired, once
+        self.assertIn("U L0 A 2", [" ".join(ln.split()[:4]) for ln in out])                      # the page's glyph, unpaired, once
         self.assertEqual(res["flagged"], 0)
         self.assertGreaterEqual(res["glyphs"], 30)
 
@@ -1373,7 +1406,7 @@ class JudgeMagnifiedPage(unittest.TestCase):
         res, out = _accent_case(self.tmp.name, "mag", "\\fontsize{9.63}{11.5}\\selectfont " + text, text,
                                 preamble="\\usepackage{fix-cm}\\usepackage[T1]{fontenc}\n")
         self.assertGreater(res["glyphs"], 50)
-        fonts = {ln.split()[-1].split("+")[-1] for ln in out if ln.startswith("G ")}
+        fonts = {ln.split()[11].split("+")[-1] for ln in out if ln.startswith("G ")}
         self.assertTrue({"SFRM0900", "CMR6"} <= fonts, fonts)            # the fixture is the case it claims
         self.assertEqual(res["glyph"], 0, [ln for ln in out if ln.startswith("G ") and ln.split()[8] == "1"])
 
