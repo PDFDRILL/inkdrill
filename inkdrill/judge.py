@@ -89,6 +89,9 @@ FAMILIES = [  # (regex on the PDF font name, preamble, family)
     (r"Palatino|Palladio|TeXGyrePagella|pplr|uplr", r"\renewcommand{\rmdefault}{ppl}", "palatino"),
     (r"^CM|^LM|SFRM|LMRoman", "", "cm"),
     (r"LinLibertine|LinBiolinum|Libertine", r"\usepackage{libertine}", "libertine"),
+    # a page wholly in DejaVu Sans, its code in DejaVu Sans Mono (board RE4B-DE p559: FONT_UNMAPPED before)
+    (r"DejaVuSans(?!Mono|Condensed)", r"\usepackage{DejaVuSans}\usepackage{DejaVuSansMono}"
+     r"\renewcommand{\familydefault}{\sfdefault}", "dejavusans"),
 ]
 MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|txmi|TXMI", r"\usepackage{newtxmath}"),
            (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}"),
@@ -108,7 +111,8 @@ LINE_FAMILIES = [(r"DejaVuSerifCondensed", "DejaVuSerifCondensed-TLF"), (r"DejaV
                  (r"DejaVuSansCondensed", "DejaVuSansCondensed-TLF"), (r"DejaVuSans(?!Mono)", "DejaVuSans-TLF"),
                  (r"Utopia", "put"),
                  (r"LinBiolinum", "LinuxBiolinumT-TLF")]   # libertine's sans: board 1805.01788 p3, an acmart title
-NFSS = {"times": "ptm", "helvetica": "phv", "palatino": "ppl", "cm": "cmr", "libertine": "LinuxLibertineT-TLF"}
+NFSS = {"times": "ptm", "helvetica": "phv", "palatino": "ppl", "cm": "cmr", "libertine": "LinuxLibertineT-TLF",
+        "dejavusans": "DejaVuSans-TLF"}
 #: \texttt on a page whose typewriter is CMTT: OT1 sets cmtt itself (CMTT8 at 7 pt on the page -> cmtt8), where the
 #: judge's T1 sets cm-super's sftt, an outline of the same design whose m and - flag against CMTT
 OT1_TT = r"\DeclareTextFontCommand{\texttt}{\fontencoding{OT1}\ttfamily}"
@@ -818,10 +822,31 @@ def display_style(s: str) -> str:
     return "".join(out)
 
 
+CODE_SPECIAL = set("\\{}$&#^_%~")
+
+
+def code_tex(t: str) -> str:
+    """a code line's characters as pdflatex input (board RE4B-DE p559: C++ names, @TModule@ValidWindow$qp14..., did
+    not compile at their $ in either column). A line typed code says nothing sure about its face or its markup:
+    pdfdrill types table rows code and writes LaTeX in them (\\texttt{idt} 130 RT, $\\langle$: board
+    lib:d68e0271bd4d p334, some of them roman on the page). So only a line WITHOUT a LaTeX command is taken as its
+    characters, TeX's specials by \\char, in the line's own face; a line that is one \\texttt{...} with no command
+    inside is that, inside its own \\texttt (OT1_TT applies); any other line is LaTeX, unchanged."""
+    esc = lambda x: "".join("\\char%d{}" % ord(c) if c in CODE_SPECIAL else c for c in x)
+    m = re.fullmatch(r"\\texttt\{([^{}]*)\}", t.strip(), re.S)
+    if m and not re.search(r"\\[A-Za-z]", m[1]):
+        return "\\texttt{" + esc(re.sub(r"\\([\\{}$&#^_%~])", r"\1", m[1])) + "}"
+    if re.search(r"\\[A-Za-z]", t):
+        return t
+    return esc(t)
+
+
 def line_tex(ln: dict) -> str:
     """a reading's line as the judge sets it. A line typed math or equation is a DISPLAY (the lines.json schema)
     and is set in display style whatever its delimiters, for every column alike: ours writes displays as $...$, and
     in text style every \\frac came out at script size (board lib:3fe71b4ef018 p328). A text line is unchanged."""
+    if ln.get("type") == "code":
+        return code_tex(ln["text"])
     return display_style(ln["text"]) if ln.get("type") in ("math", "equation") else ln["text"]
 
 
@@ -1540,6 +1565,22 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         for li in grid.get((int((c[3] + c[5]) / 2 * S // cell), int((c[4] + c[6]) / 2 * S // cell)), ()):
             b = boxes[li]
             if inside(c, b):
+                a = (b[2] - b[0]) * (b[3] - b[1])
+                if best is None or a < best[0]:
+                    best = (a, li)
+        if best is not None:
+            owner[ci] = best[1]
+    # a box that ends at the baseline leaves out what hangs below it: a comma's centre lies under the box its origin
+    # is in (board37 1805.01788 p3 L54: ours' box to y 520, the commas' centres at 521; 38 commas unpaired in ours
+    # where MathPix's deeper boxes paired them). Such a glyph belongs to the smallest box holding its origin.
+    for ci, c in enumerate(ac):
+        if ci in owner:
+            continue
+        cx, oy = (c[3] + c[5]) / 2 * S, c[2] * S
+        best = None
+        for li in grid.get((int(cx // cell), int(oy // cell)), ()):
+            b = boxes[li]
+            if b[0] <= cx < b[2] and b[1] <= oy < b[3]:
                 a = (b[2] - b[0]) * (b[3] - b[1])
                 if best is None or a < best[0]:
                     best = (a, li)

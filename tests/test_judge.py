@@ -808,6 +808,66 @@ class JudgeSmallCapsByGlyphName(unittest.TestCase):
             self.assertEqual([(g[2], g[9]) for g in qu], [("q", "c"), ("u", "c")], qu)
 
 
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeCommaUnderABaselineBox(unittest.TestCase):
+    """a reading's box that ends at the baseline (board37 1805.01788 p3 L54, ours): the commas' centres lie below
+    it, their origins inside; they belong to the line and pair"""
+
+    def test_commas_pair(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-comma-") as d:
+            line = "for one-time rankings, and, as any static model, will steadily accumulate"
+            _accent_case(d, "c", line, line)
+            pdf, lj = os.path.join(d, "c", "page.pdf"), os.path.join(d, "c", "r.lines.json")
+            with open(lj) as fh:
+                doc = json.load(fh)
+            pg = doc["pages"][0]
+            k = pg["page_width"] / judge.page_size(pdf, 1)[0]                  # pt -> lines.json px
+            base = max(c[2] for c in judge.chars(pdf, 1, 1)[0])               # the baseline, pt
+            r = pg["lines"][0]["region"]
+            r["height"] = int(base * k) + 1 - r["top_left_y"]                 # the box ends there, as ours' did
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            commas = [c for c in judge.chars(pdf, 1, 1)[0] if c[0] == ","]
+            self.assertEqual(len(commas), 3)
+            self.assertTrue(all((c[4] + c[6]) / 2 * k > r["top_left_y"] + r["height"] for c in commas))   # centres below
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "c", "g"), out=out, route="glyph", setter=False)
+            self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0), out.getvalue()[-600:])
+
+
+class CodeLineUnit(unittest.TestCase):
+    """a code line is the characters it is (board RE4B-DE p559)"""
+
+    def test_code_tex(self):
+        self.assertEqual(judge.code_tex("@V$qp14 a_b"), "@V\\char36{}qp14 a\\char95{}b")
+        self.assertEqual(judge.code_tex("\\texttt{x\\_y$z}"), "\\texttt{x\\char95{}y\\char36{}z}")
+        self.assertEqual(judge.line_tex({"type": "code", "text": "a%b"}), "a\\char37{}b")
+        # LaTeX in a code-typed line stays LaTeX (board lib:d68e0271bd4d p334's table rows)
+        for t in ("\\texttt{idt} 130 RT \\texttt{style,}", "m:math 114 – $\\langle$CMel$\\rangle$+"):
+            self.assertEqual(judge.code_tex(t), t)
+        self.assertEqual(judge.code_tex("hint 209 QUIZ xml:id, style, + CMP*"), "hint 209 QUIZ xml:id, style, + CMP*")
+        self.assertEqual(judge.line_tex({"type": "text", "text": "a $x$ b"}), "a $x$ b")     # text lines unchanged
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgeDejaVuCodePage(unittest.TestCase):
+    """a page wholly in DejaVu Sans, with a code line in DejaVu Sans Mono holding a $ (board RE4B-DE p559: STATUS
+    FONT_UNMAPPED in both columns; then six code lines did not compile)"""
+
+    def test_dejavu_page_code_line(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-dejavu-") as d:
+            pre = "\\usepackage{DejaVuSans}\\usepackage{DejaVuSansMono}\\renewcommand{\\familydefault}{\\sfdefault}\n"
+            _accent_case(d, "c", "Symbole: \\texttt{@TModule@ValidWindow\\$qp14TWindowsObject}",    # sans words vote
+                         "Symbole: @TModule@ValidWindow$qp14TWindowsObject", pre, typ="code")    # the family
+            pdf = os.path.join(d, "c", "page.pdf")
+            self.assertEqual(judge.font_preamble(pdf, 1)[0], "dejavusans")
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, os.path.join(d, "c", "r.lines.json"), os.path.join(d, "c", "g"), out=out,
+                              route="glyph", setter=False)
+            self.assertEqual((res["not_compiled"], res["unpaired_A"], res["unpaired_B"], res["glyph"]), (0, 0, 0, 0),
+                             out.getvalue()[-1200:])
+
+
 class LigatureLetterOrder(unittest.TestCase):
     """mutool's later letter of a ligature is a zero-width character at the glyph's right edge, which can lie past
     the next letter's origin (board35 lib:c57ac038ae5f p293: "find", the fi's i at 186.12459, the n at 186.10567):
