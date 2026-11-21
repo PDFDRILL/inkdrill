@@ -858,6 +858,9 @@ def latex_text(s: str, drop: frozenset = frozenset()) -> str:
                 if ord(ch) > 126 and unicodedata.decomposition(ch).startswith(("<compat>", "<wide>", "<narrow>"))
                 else ch for ch in s)                           # is escaped like any %
     s = "".join(ch for ch in s if ch not in UNMAPPABLE and ch not in drop)
+    # a line's own \\begin{document} or \\end{document} would end the snippet's document inside its pline: pdflatex
+    # then spun at full CPU and never returned (found 2026-11-21 testing the scan route with "...}\\end{document}")
+    s = re.sub(r"\\(?:begin|end)\s*\{document\}", "", s)
     out, math, i = [], False, 0
     while i < len(s):
         ch = s[i]
@@ -988,6 +991,10 @@ def compile_lines(texts: list, sizes: list, pre: str, wd: str, passes: int = 12)
     return pdf, got[0][0], got[0][1]
 
 
+#: seconds one pdflatex run of a group may take: a batch group of fifty pages takes well under a minute
+PDFLATEX_TIMEOUT = 600
+
+
 def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str, list]:
     """Several pages' lines, all set in one preamble, in one pdflatex run per pass (`inkcmp-judge --batch`: pdflatex's
     start-up is most of its time). Each job keeps its own rules: its own dropped characters (a character is dropped
@@ -1021,8 +1028,15 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
                      "\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
                      "\\usepackage[loading]{tracefnt}\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}" + FIRSTCHAR + "\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
                      + "\n\\end{document}\n")
-        subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
-                       capture_output=True)
+        try:
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
+                           capture_output=True, timeout=PDFLATEX_TIMEOUT)
+        except subprocess.TimeoutExpired:           # whatever made it loop: no line of the group is trusted
+            for j, (texts, _) in enumerate(jobs):
+                failed[j] = {i: "pdflatex timed out" for i in range(len(texts))}
+            if os.path.exists(os.path.join(wd, "lines.pdf")):
+                os.remove(os.path.join(wd, "lines.pdf"))
+            break
         with open(os.path.join(wd, "lines.log"), encoding="utf-8", errors="replace") as fh:
             log = fh.read().splitlines()
         new = [dict() for _ in jobs]

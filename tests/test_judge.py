@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import time
 import shutil
 import subprocess
 import tempfile
@@ -922,6 +923,32 @@ class JudgeScanRoute(unittest.TestCase):
             self.assertIn("N L0 NOT_SET", out.getvalue())
             summary = re.search(r"^SCAN1 .*$", broken, re.M)[0]
             self.assertEqual(int(re.search(r" missing (\d+)", summary)[1]), int(re.search(r" comps (\d+)", summary)[1]))
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class JudgePdflatexNeverHangs(unittest.TestCase):
+    """a line holding \\end{document} made pdflatex spin without end (found testing the scan route, 2026-11-21): it is
+    stripped; and whatever else makes a run loop, the run times out and no line of the group is trusted"""
+
+    def test_end_document_in_a_line(self):
+        self.assertNotIn("document", judge.latex_text("Wenn also }\\end{document} x \\begin {document}"))
+        with tempfile.TemporaryDirectory(prefix="test-judge-hang-") as d:
+            t0 = time.monotonic()
+            pdf, got = judge.compile_group([(["Wenn also }\\end{document}", "und so weiter"], [10.0, 10.0])], "", d)
+            self.assertLess(time.monotonic() - t0, 60)
+            self.assertTrue(os.path.exists(pdf))
+            self.assertNotIn(1, got[0][0])                                  # the plain line is set
+
+    def test_timeout_fails_every_line(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-timeout-") as d:
+            keep = judge.PDFLATEX_TIMEOUT
+            judge.PDFLATEX_TIMEOUT = 0.01
+            try:
+                pdf, got = judge.compile_group([(["one", "two"], [10.0, 10.0])], "", d)
+            finally:
+                judge.PDFLATEX_TIMEOUT = keep
+            self.assertEqual(got[0][0], {0: "pdflatex timed out", 1: "pdflatex timed out"})
+            self.assertFalse(os.path.exists(pdf))
 
 
 class CodeLineUnit(unittest.TestCase):
