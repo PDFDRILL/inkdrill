@@ -3,6 +3,7 @@
     inkcmp-judge <original.pdf> <page> <lines.json> [--work DIR] [--route glyph|render|scan] [--no-setter]
                  [--peers other.lines.json,...]   (the page's other judged readings: one route for all of them)
     inkcmp-judge --batch <jobs.tsv> [--work DIR] [--route glyph|render|scan]   (one pdflatex per preamble; judge_batch)
+    inkcmp-judge --rects <rects.tsv> --work DIR   (one residual per rectangle, glyph route; inkdrill/rects.py)
 
 Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per glyph). Steps:
 
@@ -73,7 +74,11 @@ MATHFONT = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]|MTMI|MTSY|MTEX|MT2(?:MI|SY|EX)"  
 #: the maths faces left out of a line's size vote: MATHFONT without MathTime. Leaving MathTime out too put display lines
 #: on their script size (board18 lib:3fe71b4ef018 p328 L20: 32 glyphs at 9.963 pt, 22 at 6.974; without MathTime 19
 #: and 20), so the line was set at 7 pt: MathPix glyph findings 33 -> 66 there.
-SIZEVOTE_SKIP = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]"
+#: CMMI and CMSY vote since T-0158 (2026-11-22): their glyphs report the size they are set at, and without them a display
+#: of maths letters votes by its few text glyphs, mostly script digits (a fixture's \frac{a_{i1}}{r_{i1}} = \sum_{j=1}^n
+#: x_j: 4 of its 5 CMR glyphs at 7 pt, so the line was set at 7 pt and all 14 pairs flagged). CMEX keeps its design
+#: size at every text size, MSBM/MSAM and Euler are left out as before.
+SIZEVOTE_SKIP = r"CMEX|MSBM|MSAM|EU[RFSE]"
 #: faces TeX cannot set: no font program in the TeX tree (kpsewhich, 2026-11-21), so a glyph in one is unmeasurable --
 #: its shape against the stand-in face measures the judge, not the reading (coordinator, 2026-11-21: the per-glyph
 #: form of FONT_UNMAPPED). A list, not "what FAMILIES does not map": on the board18 pages that complement also held
@@ -100,7 +105,8 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
            (r"zplm|NewPXMI|pxmi", r"\usepackage{newpxmath}"),
            (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}"),   # mathabx: its own designs of \in, \geq, ...
            (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}"),  # MathTime: no free version; mathptmx is its Times relative
-           (r"esint\d*$", r"\usepackage{esint}")]          # its integrals (board lib:6d90e8d27b8b p174), not CMEX's
+           (r"esint\d*$", r"\usepackage{esint}"),          # its integrals (board lib:6d90e8d27b8b p174), not CMEX's
+           (r"BBOLD\d*$", r"\usepackage{bbold}")]          # \mathbb from bbold, lowercase included (2103.01507 p118's k)
 #: maths letters in Libertine (LinLibertineI 5 7 from an older newtx, LibertineMathMI from today's): newtxmath with
 #: its libertine option. Plain newtxmath sets them in Times-like NewTXMI (board 1805.01788 p3: 20 maths italics
 #: flagged with equal styles)
@@ -1032,15 +1038,19 @@ def math_sizes(ac: list) -> str:
 
 
 def vote_size(cs: list, formula: bool) -> float:
-    """a line's size from its glyphs' (bp): the commonest; on a formula line the largest that holds a quarter of
-    them, since its scripts can outnumber its base (board 1805.01788 p3 L4, a_{i1}/r_{i1}: 12 glyphs at the
-    script size, 11 at the text size; set at the script size, its letters and scripts were all too small)"""
+    """a line's size from its glyphs' (bp): the commonest; on a formula line its TEXT size, since its scripts can
+    outnumber its base (board 1805.01788 p3 L4, a_{i1}/r_{i1}: 12 glyphs at the script size, 11 at the text size; set
+    at the script size, its letters and scripts were all too small). The text size is the largest size two glyphs
+    hold whose scripts are there: glyphs at 0.35 to 0.95 of it, the range math_sizes reads a page's script sizes in
+    (LaTeX's 10/7/5, newtxmath-Libertine's 8.966/7.273 = 0.81). A quarter of the glyphs was the rule until CMMI and CMSY
+    voted (T-0158): a \\tfrac numerator of 23 script letters then outvoted the base's 5."""
     if not cs:
         return 10.0
     c = collections.Counter(round(x, 4) for x in cs)
     mode = c.most_common(1)[0][0]
     if formula:                 # a base above its scripts; never a second family at the same size (board35 0864 p4
-        big = max(z for z, n in c.items() if n >= 0.25 * len(cs))     # L41: Nimbus 8.903 and CMR9 8.966)
+        held = [z for z, n in c.items() if n >= 2 and any(0.35 * z <= y < 0.95 * z for y in c)]  # L41: Nimbus 8.903
+        big = max(held) if held else mode                                                       # and CMR9 8.966)
         return big if big >= 1.15 * mode else mode
     return mode
 
@@ -1358,7 +1368,7 @@ def rules_job(requests: list, wd: str) -> list:
 
 
 def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False,
-             up=UP, stage=None):
+             up=UP, stage=None, inside_only=False):
     """Non-glyph ink of a formula line (rules, fraction bars, radical vincula), page against rendering.
     - page rules: the page's ink in the line box (+4 px) that none of the page's own glyph quads covers;
     - rendered rules: the snippet page's ink that no glyph covers, where a paired glyph's cover is its PARTNER's page
@@ -1472,7 +1482,9 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
                   if q[0] <= cx <= q[2] and q[1] <= cy <= q[3]]
         if inside:
             return min(inside)[1]
-        below = []                                         # an overline/vinculum: the line of the glyph under it
+        if inside_only:             # one rectangle judged alone (rects.py): a rule outside it is no line's, neither the
+            return None             # nearest line's nor that of a glyph below it (2103.01507 p118: a rule of the text
+        below = []                  # line above, 58 px over the rectangle, went to its "(")                                         # an overline/vinculum: the line of the glyph under it
         for (c, li) in glyphs or []:
             gx0, gy0, gx1, gy1 = c[3] * S, c[4] * S, c[5] * S, c[6] * S
             if gx1 <= mnx or gx0 >= mxx + 1:
@@ -1507,6 +1519,27 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
             xs, ys = [p[0] for p in comp], [p[1] for p in comp]
             print(f"R L{i} invented {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}", file=out)
 
+def same_letter(t: str, tb: str, sa: str, sb: str) -> bool:
+    """two characters the faces can tell apart only by style: one unknown (U+FFFD, a glyph without a character map: the
+    faces decide, as before), or one letter in two cases where a side is small caps (the page's small capital t and a
+    reading's T: small caps lost, board 1805.01788 p3, Gemma4, 11 such t)"""
+    if "&#xfffd;" in (t, tb):
+        return True
+    return "c" in sa + sb and len(t) == len(tb) == 1 and t.lower() == tb.lower()
+
+
+def finding(t: str, tb: str, sa: str, sb: str, um: int) -> str:
+    """what a flagged pair counts as: "glyph", "style" or nothing. Another character is a glyph finding whatever the two
+    faces (T-0158 gate: a reading's b for the page's a, the page in LinLibertineI and the snippet in LibertineMathMI,
+    read as style and left the residual 0); the same character in another face is style (bold or italic lost); the
+    same character in the same face is a glyph finding unless the face cannot be set (unmeasurable)."""
+    if t != tb and not same_letter(t, tb, sa, sb):
+        return "" if um else "glyph"
+    if sa != sb:
+        return "style"
+    return "" if um else "glyph"
+
+
 def pbox(c, dx: float = 0.0, dy: float = 0.0) -> str:
     """a glyph's quad box (pt, shifted by dx dy) as "x0 y0 x1 y1" in the R lines' frame: the page at 400 dpi, whole
     pixels, outward"""
@@ -1521,7 +1554,8 @@ def b_to_a(pairs, ca, cb) -> tuple:
     return (min(c[3] for c in ca) - min(c[3] for c in cb), min(c[4] for c in ca) - min(c[4] for c in cb))
 
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render",
-          compiler=None, setter: bool = True, peers: list | None = None) -> collections.Counter:
+          compiler=None, setter: bool = True, peers: list | None = None,
+          rules_inside: bool = False) -> collections.Counter:
     """one page. compiler(texts, sizes, preamble, wd) -> (snippet pdf, failed, dropped, first page) sets the
     reading's lines; by default one pdflatex run of this page's lines alone (`judge_batch` sets many pages' lines
     in one run and hands each page its part)"""
@@ -1831,7 +1865,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             if is_formula(ln) and pairs:
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], collections.Counter(), io.StringIO(),
                          boxes=boxes, glyphs=[], display=ln.get("type") in ("math", "equation"), up=1,
-                         stage=collect(i))
+                         stage=collect(i), inside_only=rules_inside)
         got = rules_job(reqs, wd) if reqs else []
         for i, *_ in work:
             stages[i] = (lambda i: lambda side, quads, reg: got[where[(i, side)]])(i)
@@ -1861,12 +1895,14 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 res["unmeasurable"] += um
                 if flag:
                     res["flagged"] += 1
-                    if sa != sb or not um:
-                        res["style" if sa != sb else "glyph"] += 1
+                    kind = finding(t, tb, sa, sb, um)
+                    if kind:
+                        res[kind] += 1
             if is_formula(ln) and pairs:
                 aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
-                         glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i])
+                         glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i],
+                         inside_only=rules_inside)
             continue
         pw, ph, pb = pgm(bpdf, bo + i + 1, DPI * UP)
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
@@ -1896,12 +1932,13 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             res["unmeasurable"] += um
             if flag:
                 res["flagged"] += 1
-                if sa != sb or not um:
-                    res["style" if sa != sb else "glyph"] += 1
+                kind = finding(t, tb, sa, sb, um)
+                if kind:
+                    res[kind] += 1
         if is_formula(ln) and pairs:
             rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
                      glyphs=glyph_owners,
-                     display=ln.get("type") in ("math", "equation"))
+                     display=ln.get("type") in ("math", "equation"), inside_only=rules_inside)
     # page-wide counts for the board's ink residual (coordinator, 2026-11-17): every original glyph that paired
     # with nothing (outside any line, in an empty or uncompiled line, or skipped by the alignment) and every
     # rendered glyph with no partner
@@ -1922,7 +1959,8 @@ class _Need(Exception):
     """judge_batch's first pass: the page's lines are known, stop before setting them"""
 
 
-def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, setter: bool = True) -> dict:
+def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, setter: bool = True,
+                rules_inside: bool = False) -> dict:
     """Many pages in one process (`inkcmp-judge --batch`): the reading's lines of all pages that share a preamble are
     set in ONE pdflatex run (compile_group); its start-up was most of the 0.40 s it cost per page. jobs:
     [(original pdf, page, lines.json, work dir)]; each job's judge output goes to <work dir>/judge.out, as one
@@ -1940,7 +1978,8 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
         buf = io.StringIO()
         err = ""
         try:
-            judge(a, p, lj, wd, out=buf, route=route, compiler=compiler, setter=setter, peers=pe)
+            judge(a, p, lj, wd, out=buf, route=route, compiler=compiler, setter=setter, peers=pe,
+                  rules_inside=rules_inside)
         except _Need:
             raise
         except Exception:
@@ -1994,31 +2033,39 @@ def judge_batch(jobs: list, route: str = "render", bwd: str | None = None, sette
     return stats
 
 
+#: the CLI's options that take a value, and their defaults
+OPTIONS = {"--peers": "", "--rects": None, "--batch": None, "--work": None, "--route": "render"}
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    wd, route, batch, use_setter, peers = None, "render", None, True, []
-    if "--peers" in argv:
-        j = argv.index("--peers")
-        peers = [x for x in argv[j + 1].split(",") if x]
-        del argv[j:j + 2]
-    if "--no-setter" in argv:
-        argv.remove("--no-setter")
-        use_setter = False
-    if "--batch" in argv:
-        j = argv.index("--batch")
-        batch = argv[j + 1]
-        del argv[j:j + 2]
-    if "--work" in argv:
-        j = argv.index("--work")
-        wd = argv[j + 1]
-        del argv[j:j + 2]
-    if "--route" in argv:
-        j = argv.index("--route")
-        route = argv[j + 1]
-        del argv[j:j + 2]
-        if route not in ("glyph", "render", "scan"):
-            print("inkcmp-judge: --route glyph|render|scan", file=sys.stderr)
+    opt = dict(OPTIONS)
+    for name in OPTIONS:
+        if name in argv:
+            j = argv.index(name)
+            if j + 1 == len(argv):
+                print(f"inkcmp-judge: {name} needs a value", file=sys.stderr)
+                return 2
+            opt[name] = argv[j + 1]
+            del argv[j:j + 2]
+    use_setter = "--no-setter" not in argv
+    argv = [a for a in argv if a != "--no-setter"]
+    wd, route, batch = opt["--work"], opt["--route"], opt["--batch"]
+    peers = [x for x in opt["--peers"].split(",") if x]
+    if route not in ("glyph", "render", "scan"):
+        print("inkcmp-judge: --route glyph|render|scan", file=sys.stderr)
+        return 2
+    if opt["--rects"] is not None:              # one residual per rectangle (T-0158, inkdrill/rects.py)
+        if argv or not wd:
+            print("inkcmp-judge --rects RECTS.tsv --work DIR: one row per rectangle, source doc page obj_id x0 y0 x1 y1"
+                  " latex pdf (box in pt, CropBox frame, y down)", file=sys.stderr)
             return 2
+        from . import rects
+        out = rects.judge_rects(opt["--rects"], wd)
+        st = collections.Counter(o["status"] for o in out)
+        print("RECTS1 rows %d " % len(out) + " ".join(f"{k} {v}" for k, v in sorted(st.items()))
+              + " out " + os.path.join(wd, "rects.out.tsv"))
+        return 0
     if batch is not None:
         if argv:
             print("inkcmp-judge --batch JOBS.tsv [--route glyph|render] [--work DIR]: one job per line,"

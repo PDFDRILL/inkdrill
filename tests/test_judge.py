@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 import unittest
 
-from inkdrill import judge, scanjudge
+from inkdrill import judge, rects, scanjudge
 
 TOOLS = ("pdflatex", "mutool", "pdftoppm", "pdfinfo", "pdftotext")
 LINES = [
@@ -1171,7 +1171,10 @@ class MathSizesUnit(unittest.TestCase):
     def test_formula_line_takes_its_base_size(self):
         cs = [8.966] * 11 + [7.273] * 12
         self.assertEqual((judge.vote_size(cs, True), judge.vote_size(cs, False)), (8.966, 7.273))
-        self.assertEqual(judge.vote_size([9.963] * 30 + [11.955] * 2, True), 9.963)   # a quarter at least
+        self.assertEqual(judge.vote_size([9.963] * 30 + [4.981] * 2, True), 9.963)    # scripts at 0.5: the base
+        self.assertEqual(judge.vote_size([9.963] * 30, True), 9.963)                  # no scripts: the commonest
+        self.assertEqual(judge.vote_size([6.974] * 23 + [9.963] * 5, True), 9.963)     # a \tfrac numerator
+        self.assertEqual(judge.vote_size([6.974] * 23 + [9.963] * 1, True), 6.974)     # one glyph is no base
         self.assertEqual(judge.vote_size([], True), 10.0)
         self.assertEqual(judge.vote_size([8.903] * 26 + [8.966] * 11 + [5.978] * 2, True), 8.903)  # two families
 
@@ -1286,6 +1289,96 @@ class JudgeNewtxLibertine(unittest.TestCase):
             pre = judge.font_preamble(os.path.join(d, "t", "page.pdf"), 1)[1]
             self.assertIn("\\usepackage{newtxmath}", pre)
             self.assertNotIn(judge.NEWTX_LIBERTINE, pre)
+
+
+class FindingKind(unittest.TestCase):
+    """a flagged pair: another character is a glyph finding whatever the faces (T-0158 gate, 1805.01788 p3: a reading's
+    b for the page's a, LinLibertineI against LibertineMathMI, had read as style and left the residual 0)"""
+
+    def test_kinds(self):
+        self.assertEqual(judge.finding("a", "b", "i", "xi", 0), "glyph")
+        self.assertEqual(judge.finding("a", "b", "i", "i", 0), "glyph")
+        self.assertEqual(judge.finding("a", "b", "i", "xi", 1), "")         # a face TeX cannot set: unmeasurable
+        self.assertEqual(judge.finding("a", "a", "b", "-", 0), "style")     # bold lost
+        self.assertEqual(judge.finding("a", "a", "b", "-", 1), "style")
+        self.assertEqual(judge.finding("a", "a", "-", "-", 0), "glyph")
+        self.assertEqual(judge.finding("a", "a", "-", "-", 1), "")
+        self.assertEqual(judge.finding("t", "T", "c", "-", 0), "style")     # small caps lost
+        self.assertEqual(judge.finding("E", "e", "-", "c", 0), "style")
+        self.assertEqual(judge.finding("t", "T", "-", "-", 0), "glyph")     # a case error in one face
+        self.assertEqual(judge.finding("t", "T", "i", "-", 0), "glyph")     # no small caps: another letter
+        self.assertEqual(judge.finding("(", "&#xfffd;", "-", "x", 0), "style")   # unknown: the faces decide
+        self.assertEqual(judge.finding("(", "&#xfffd;", "-", "-", 0), "glyph")
+
+
+class RectsUnit(unittest.TestCase):
+    """inkcmp-judge --rects: the TSV, the reading it makes, and the residual's definition"""
+
+    def test_latex_column_is_not_unescaped(self):
+        with tempfile.TemporaryDirectory(prefix="test-rects-") as d:
+            p = os.path.join(d, "r.tsv")
+            with open(p, "w") as fh:
+                fh.write("source\tdoc\tpage\tobj_id\tx0\ty0\tx1\ty1\tlatex\tpdf\n")
+                fh.write("s\td\t1\to1\t1\t2\t3\t4\tX \\to \\theta\tx.pdf\n")
+            rows = rects.read_rows(p)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["latex"], "X \\to \\theta")      # \to stays \to (it was a tab and "o")
+            with open(p, "a") as fh:
+                fh.write("s\td\t1\to1\t1\t2\t3\n")
+            with self.assertRaises(ValueError):
+                rects.read_rows(p)
+
+    def test_delimiters(self):
+        for t in ("$x$", "\\[x\\]", "\\(x\\)", "\\begin{equation}x\\end{equation}", "\\begin{align*}x\\end{align*}"):
+            self.assertTrue(rects.DELIMITED.match(t), t)
+        for t in ("x = 1", "\\frac{a}{b}", "\\begin{aligned}x\\end{aligned}"):
+            self.assertFalse(rects.DELIMITED.match(t), t)
+
+    def test_residual(self):
+        c = dict(glyphs=20, no_outline=1, unpaired_A=2, glyph=3, unpaired_B=4, rules_a=2, rules_missing=1,
+                 rules_invented=1, unmeasurable=0, a_glyphs=5000)           # a_glyphs is the whole page's: unused
+        self.assertEqual(rects.rect_glyphs(c), 23)
+        self.assertEqual(rects.residual(c, "OK"), ("OK", "%.4f" % ((3 + 3 + 4 + 1 + 1) / 25)))
+        self.assertEqual(rects.residual(dict(c, not_compiled=1), "OK"), ("NOT_COMPILED", ""))
+        self.assertEqual(rects.residual(dict(glyphs=0, rules_a=0), "NO_TEXT"), ("NO_TEXT", ""))
+        self.assertEqual(rects.residual({}, ""), ("ERROR", ""))
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS + ("pdftoppm",)), "needs " + ", ".join(TOOLS))
+class JudgeRects(unittest.TestCase):
+    """one rectangle judged alone: its own LaTeX reads 0, one symbol changed reads more, and a rule outside the
+    rectangle (a centred inline fraction's bar above it) is no finding of it"""
+
+    def test_own_latex_and_one_symbol(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-rects-") as d:
+            eq = "\\frac{a_{i1}}{r_{i1}} = \\sum_{j=1}^{n} x_j"
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[10pt]{article}\n\\usepackage{amsmath}\\pagestyle{empty}\n\\begin{document}\n"
+                         "Text above.\n\n\\centerline{$\\frac{1}{2}$}\n\\[" + eq + "\\]\nMore text.\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True,
+                               check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            # pdftotext's lines: "Text above.", the fraction's 1 and 2, the display in 7 pieces, "More text."
+            self.assertEqual(len(bs), 11, bs)
+            mid = bs[3:-1]
+            self.assertGreater(min(v[1] for v in mid), bs[2][3], "the fraction lies above the display")
+            b = (min(v[0] for v in mid) - 2, min(v[1] for v in mid) - 2, max(v[2] for v in mid) + 2,
+                 max(v[3] for v in mid) + 2)
+            tsv = os.path.join(d, "r.tsv")
+            with open(tsv, "w") as fh:
+                for src, t in (("own", eq), ("one", eq.replace("a_{i1}", "b_{i1}"))):
+                    fh.write("\t".join([src, "fx", "1", src] + ["%.2f" % v for v in b] + [t, pdf]) + "\n")
+            out = rects.judge_rects(tsv, os.path.join(d, "w"))
+            own, one = out
+            self.assertEqual((own["status"], own["residual"]), ("OK", "0.0000"), own)
+            self.assertEqual(own["rules_missing"], 0, "the fraction bar above is not the rectangle's")
+            self.assertGreaterEqual(own["rules_a"], 1, "the fraction bar is")
+            self.assertGreater(float(one["residual"]), 0.02, one)            # b for a: a finding, paired or not
+            self.assertGreater(one["glyph"] + one["unpaired_A"] + one["unpaired_B"], 0, one)
+            self.assertTrue(os.path.getsize(own["crop"]) > 0)
 
 
 class JudgeMathAlphanumerics(unittest.TestCase):
@@ -1413,7 +1506,9 @@ class JudgeStyleNames(unittest.TestCase):
         self.assertFalse(re.search(judge.MATHFONT, "HffcmrYvygwvTimes-Roman"))
         # MathTime stays in a line's size vote: without it a display line votes for its script size (p328 L20)
         self.assertFalse(re.search(judge.SIZEVOTE_SKIP, "QtxpctLqshvdMTMI"))
-        self.assertTrue(re.search(judge.SIZEVOTE_SKIP, "JSLHNA+XtrrcfCMMI6"))
+        # CMMI and CMSY vote since T-0158 (their glyphs report the size they are set at); CMEX does not
+        self.assertFalse(re.search(judge.SIZEVOTE_SKIP, "JSLHNA+XtrrcfCMMI6"))
+        self.assertTrue(re.search(judge.SIZEVOTE_SKIP, "JSLHNA+XtrrcfCMEX10"))
 
 
 class JudgeDesignSize(unittest.TestCase):

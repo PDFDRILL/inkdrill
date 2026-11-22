@@ -212,6 +212,10 @@ Fresh plants (seed 11, 12 per page) on pages not used to find the threshold. Sam
 - link annotations hidden;
 - a glyph whose original font class differs from the reading's counts as a style finding: bold, italic, mono, or
   maths against text;
+  - **changed 2026-11-22 (T-0158):** a flagged pair whose two characters differ is a glyph finding whatever the
+    faces. It stays a style finding only when one side is U+FFFD (unknown character), or the two are one letter in
+    two cases with small caps on one side (small caps lost). Before, a reading's b for the page's a read as style
+    when the faces differed, and the residual missed it;
 - Euler maths mapped to eulervm.
 
 | page | equal-text glyphs | style findings | other flags | plants flagged |
