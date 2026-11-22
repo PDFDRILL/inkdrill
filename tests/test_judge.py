@@ -1328,6 +1328,16 @@ class RectsUnit(unittest.TestCase):
             with self.assertRaises(ValueError):
                 rects.read_rows(p)
 
+    def test_unreadable_page_is_an_error_row(self):
+        """a row whose page cannot be read is status ERROR; it does not stop the batch"""
+        with tempfile.TemporaryDirectory(prefix="test-rects-bad-") as d:
+            p = os.path.join(d, "r.tsv")
+            with open(p, "w") as fh:
+                fh.write("s\td\t1\to1\t1\t2\t3\t4\tx\t" + os.path.join(d, "missing.pdf") + "\n")
+            out = rects.judge_rects(p, os.path.join(d, "w"))
+            self.assertEqual([(o["status"], o["residual"], o["crop"]) for o in out], [("ERROR", "", "")])
+            self.assertTrue(open(out[0]["judge_out"]).read().startswith("ERROR "))
+
     def test_delimiters(self):
         for t in ("$x$", "\\[x\\]", "\\(x\\)", "\\begin{equation}x\\end{equation}", "\\begin{align*}x\\end{align*}"):
             self.assertTrue(rects.DELIMITED.match(t), t)

@@ -120,22 +120,34 @@ def crop(r: dict, path: str) -> None:
 def judge_rects(rects: str, wd: str) -> list[dict]:
     rows = read_rows(rects)
     os.makedirs(os.path.join(wd, "crops"), exist_ok=True)
-    jobs = []
+    jobs, bad = [], {}
     for n, r in enumerate(rows):
         rw = os.path.join(wd, "r%d" % n)
         os.makedirs(rw, exist_ok=True)
         lj = os.path.join(rw, "reading.lines.json")
+        try:
+            doc = reading(r)
+        except (OSError, ValueError, subprocess.CalledProcessError, TypeError) as e:   # its page cannot be read: this
+            bad[n] = "%s: %s" % (type(e).__name__, e)                                   # row fails, the others run
+            continue
         with open(lj, "w", encoding="utf-8") as fh:
-            json.dump(reading(r), fh, ensure_ascii=False)
+            json.dump(doc, fh, ensure_ascii=False)
         jobs.append((r["pdf"], int(r["page"]), lj, rw))
-    judge.judge_batch(jobs, route="glyph", bwd=os.path.join(wd, "batch"), rules_inside=True)
+    if jobs:
+        judge.judge_batch(jobs, route="glyph", bwd=os.path.join(wd, "batch"), rules_inside=True)
     out = []
     for n, r in enumerate(rows):
         jo = os.path.join(wd, "r%d" % n, "judge.out")
+        if n in bad:
+            with open(jo, "w", encoding="utf-8") as fh:
+                fh.write("ERROR " + bad[n] + "\n")
         c, status = counts(open(jo, encoding="utf-8", errors="replace").read() if os.path.exists(jo) else "")
         st, res = residual(c, status)
         cp = os.path.join(wd, "crops", "%d.png" % n)
-        crop(r, cp)
+        try:
+            crop(r, cp)
+        except (OSError, subprocess.CalledProcessError):
+            cp = ""
         out.append(dict({k: r[k] for k in COLS[:8]}, status=st, residual=res, glyph=c.get("glyph", ""),
                         unpaired_A=c.get("unpaired_A", ""), unpaired_B=c.get("unpaired_B", ""),
                         rules_missing=c.get("rules_missing", ""), rules_invented=c.get("rules_invented", ""),
