@@ -1311,6 +1311,28 @@ class FindingKind(unittest.TestCase):
         self.assertEqual(judge.finding("(", "&#xfffd;", "-", "-", 0), "glyph")
 
 
+class GlyphNamed(unittest.TestCase):
+    """a U+FFFD character read from its glyph's name (T-0158): the base of a TeX extension font's name after its size
+    suffix; pieces and unknown names stay U+FFFD"""
+
+    def test_names(self):
+        self.assertEqual([judge.glyph_named(n) for n in ("parenleftbig", "parenrightBigg", "summationdisplay.1",
+                                                          "summationtext", "radicalBig", "bracketleftbigg", "slashbig",
+                                                          "intersectiontext", "hatwide", "tildewider")],
+                         ["(", ")", "&#x2211;", "&#x2211;", "&#x221a;", "[", "/", "&#x22c2;", "&#x2c6;", "&#x2dc;"])
+        for n in ("barex", "parenlefttp", "bracketleftbt", "SI", "", None, "a"):
+            self.assertEqual(judge.glyph_named(n), "", n)
+
+    def test_identified(self):
+        cs = [("&#xfffd;", 10.0, 20.0, 9, 10, 12, 22, "CMEX10", 10.0), ("x", 15.0, 20.0, 14, 15, 17, 21, "CMMI10", 10.0),
+              ("&#xfffd;", 30.0, 20.0, 29, 10, 32, 22, "CMEX10", 10.0)]
+        traced = [("&#xfffd;", "parenleftbig", 10.0, 20.0, 0, 0), ("x", "x", 15.0, 20.0, 0, 0),    # (char, glyph name,
+                  ("&#xfffd;", "barex", 30.0, 20.0, 0, 0)]                                          # origin, ...)
+        got = judge.identified(cs, traced)
+        self.assertEqual([c[0] for c in got], ["(", "x", "&#xfffd;"])
+        self.assertEqual(got[0][1:], cs[0][1:])
+
+
 class RectsUnit(unittest.TestCase):
     """inkcmp-judge --rects: the TSV, the reading it makes, and the residual's definition"""
 
@@ -1349,6 +1371,9 @@ class RectsUnit(unittest.TestCase):
                  rules_invented=1, unmeasurable=0, a_glyphs=5000)           # a_glyphs is the whole page's: unused
         self.assertEqual(rects.rect_glyphs(c), 23)
         self.assertEqual(rects.residual(c, "OK"), ("OK", "%.4f" % ((3 + 3 + 4 + 1 + 1) / 25)))
+        # unmeasurable glyphs stay in the denominator (CONTRACT, 2026-11-22): 22 unpaired over 58, not over 58 - 45
+        mt = dict(glyphs=36, no_outline=0, unpaired_A=22, glyph=0, unpaired_B=22, rules_a=0, unmeasurable=45)
+        self.assertEqual(rects.residual(mt, "OK"), ("OK", "%.4f" % (44 / 58)))
         self.assertEqual(rects.residual(dict(c, not_compiled=1), "OK"), ("NOT_COMPILED", ""))
         self.assertEqual(rects.residual(dict(glyphs=0, rules_a=0), "NO_TEXT"), ("NO_TEXT", ""))
         self.assertEqual(rects.residual({}, ""), ("ERROR", ""))

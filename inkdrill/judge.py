@@ -183,6 +183,41 @@ def name_letters(glyph: str) -> str:
     return "".join(parts) if len(parts) > 1 and all(len(p) == 1 for p in parts) else ""
 
 
+#: what a glyph named so draws, for a character the PDF has no map for (U+FFFD): the base of a TeX extension font's
+#: name, after its size suffix (CMEX, txexs, MTEX, BLEX: parenleftbig, summationdisplay.1, radicalBig, hatwide).
+#: Pieces of an extensible delimiter (barex, parenlefttp, bracketleftbt, ...) draw no one character and stay U+FFFD.
+GLYPH_NAMED = {
+    "parenleft": "(", "parenright": ")", "bracketleft": "[", "bracketright": "]", "braceleft": "{",
+    "braceright": "}", "slash": "/", "backslash": "\\", "angbracketleft": "&#x27e8;", "angbracketright": "&#x27e9;",
+    "floorleft": "&#x230a;", "floorright": "&#x230b;", "ceilingleft": "&#x2308;", "ceilingright": "&#x2309;",
+    "radical": "&#x221a;", "summation": "&#x2211;", "product": "&#x220f;", "coproduct": "&#x2210;",
+    "integral": "&#x222b;", "contintegral": "&#x222e;", "union": "&#x22c3;", "intersection": "&#x22c2;",
+    "unionmulti": "&#x2a04;", "logicaland": "&#x22c0;", "logicalor": "&#x22c1;", "circleplus": "&#x2a01;",
+    "circlemultiply": "&#x2a02;", "circledot": "&#x2a00;", "hat": "&#x2c6;", "tilde": "&#x2dc;",
+}
+GLYPH_SIZE = re.compile(r"(?:big|Big|bigg|Bigg|text|display|wide|wider|widest)?(?:\.\d+)?$")
+
+
+def glyph_named(name: str) -> str:
+    """the character a TeX extension glyph's name draws, or "" (parenleftBig -> "(", summationdisplay.1 -> U+2211)"""
+    return GLYPH_NAMED.get(GLYPH_SIZE.sub("", name or "", count=1), "")
+
+
+def identified(cs: list, traced: list) -> list:
+    """the characters with each U+FFFD read from its glyph's name where the name says what it draws: a page's "("
+    and a rendered \\left( that the PDF gives no map for were two characters to the pairing (T-0158, lib:c57ac038ae5f
+    p2: 6 of MathPix's 22 unpaired). Both sides go through it, so a pair is judged by its ink as any other."""
+    if not any(c[0] == "&#xfffd;" for c in cs):
+        return cs
+    TA = Origins(traced)
+    out = []
+    for c in cs:
+        g = TA.get(c[1], c[2], c[0]) if c[0] == "&#xfffd;" else None
+        ch = glyph_named(g[1]) if g is not None else ""
+        out.append((ch,) + tuple(c[1:]) if ch else c)
+    return out
+
+
 def spelled(cs: list, traced: list) -> list:
     """the page's characters with each composite glyph's letters, one character per part of its name. mutool gives
     a ligature's later letters from the ToUnicode map, as zero-width characters at the glyph's right edge (f_i: f,
@@ -1573,7 +1608,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     fam, pre = memo(("pre", a_pdf, pno), font_preamble, a_pdf, pno)
     spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"), os.path.join(wd, "fontsA"))
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
-    ac = spelled(ac, spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, [])))
+    tr_a = spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, []))
+    ac = spelled(identified(ac, tr_a), tr_a)
     ac = by_outline(ac)
     ms = math_sizes(ac)                              # the page's maths sizes, after its packages' own
     if ms and fam != "unmapped":
@@ -1708,8 +1744,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                   trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text))
     if spec_b:
         tr_b = side_b[1] if side_b else trace(bpdf, bo + 1, bo + len(lv), spec_b.trace_text)
-        bc = [by_outline(spelled(spec_b.chars(bo + n + 1, cs), spec_b.traced(bo + n + 1, tr_b.get(bo + n + 1, []))))
-              for n, cs in enumerate(bc)]
+        bc = [by_outline(spelled(identified(spec_b.chars(bo + n + 1, cs), t), t))
+              for n, cs in enumerate(bc) for t in (spec_b.traced(bo + n + 1, tr_b.get(bo + n + 1, [])),)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
                               unpaired_B=0, accents_on_ink=0, unmappable=0, unmeasurable=0, rules_a=0, rules_missing=0,
                               rules_invented=0)

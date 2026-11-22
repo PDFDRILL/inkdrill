@@ -273,6 +273,12 @@ thin-stroke miss, and an expected-failure test holds it open.
 the alignment) and `b_unpaired` (rendered glyphs with no partner).
 - The board's ink residual = (findings + a_unpaired + b_unpaired) / a_glyphs. flagged/paired stays beside it as
   "residual among paired".
+  - **as of 2026-11-22 (T-0158), one definition for the board (board_run.py) and for `inkcmp-judge --rects`:**
+    residual = (glyph findings + unpaired page glyphs + unpaired rendered glyphs + rules missing + rules invented)
+    / (page glyphs + page rules). For --rects, "page" is the page glyphs and rules whose centre lies in the rectangle.
+    A glyph in a face TeX cannot set (unmeasurable: MathTime, Optima, Myriad Pro) has no shape finding but STAYS in
+    the denominator: its presence is measured. Leaving it out (2026-11-21 to 2026-11-22) put a mostly-MathTime
+    rectangle at 22 / (58 - 45) = 1.69.
 - The reason: a reading that merges lines leaves glyphs unpaired, and flagged/paired did not see them (dev2 tables:
   ours 4732 unpaired original glyphs, ours+ink 661).
 - 040123 p2: G rows unchanged; a_glyphs 3133, a_unpaired 276, b_unpaired 0.

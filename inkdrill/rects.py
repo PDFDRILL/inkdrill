@@ -18,12 +18,13 @@ alone on its page, the line would otherwise take every rule nearest to it, and o
 The residual is the board's, over one rectangle:
 
     (glyph findings + unpaired page glyphs + unpaired rendered glyphs + rules missing + rules invented)
-      / (page glyphs in the rectangle + page rules in it - unmeasurable glyphs)
+      / (page glyphs in the rectangle + page rules in it)
 
 A page glyph is in the rectangle when its centre is (the judge's line ownership). A pair the judge could not score (no
 outline on the reading's side) counts as unpaired, as on the board.
 
-A style finding (bold or italic lost, sa != sb) is not in it, as on the board. A rectangle whose LaTeX does not compile
+A style finding (bold or italic lost, sa != sb) is not in it, as on the board. A glyph in a face TeX cannot set
+(unmeasurable) has no shape finding and stays in the denominator (the board's rule as of 2026-11-22, CONTRACT). A rectangle whose LaTeX does not compile
 is status NOT_COMPILED with no residual; a rectangle holding no page glyph is NO_TEXT.
 
 Output: <DIR>/rects.out.tsv, the input's first nine columns with the box, then status, residual, the counts, the crop
@@ -100,7 +101,7 @@ def residual(c: dict, status: str) -> tuple[str, str]:
     if c.get("not_compiled"):
         return "NOT_COMPILED", ""
     page = rect_glyphs(c)
-    den = page + c.get("rules_a", 0) - c.get("unmeasurable", 0)
+    den = page + c.get("rules_a", 0)               # unmeasurable glyphs stay: their presence is measured
     if not page or den <= 0:
         return "NO_TEXT", ""
     num = (c.get("glyph", 0) + page - c.get("glyphs", 0) + c.get("unpaired_B", 0)
