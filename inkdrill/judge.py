@@ -313,6 +313,10 @@ def stext(pdf: str, pages: str) -> str:
     return _STEXT[key]
 
 
+#: a variation selector (U+FE00-FE0F, U+E0100-E01EF) draws no ink: it is not a glyph. txexs's ToUnicode writes the
+#: display sum as U+2211 U+FE01, and mutool gives the selector as a zero-width character; it stayed unpaired on the
+#: reading's side (board 1805.01788 p3: 10 side-B U lines, MathPix and Gemma4)
+VARIATION = re.compile(r"&#x(?:fe0[0-9a-f]|e01[0-9a-e][0-9a-f]);", re.I)
 MATH_ALPHA = re.compile(r"&#x(1d[4-7][0-9a-f]{2});", re.I)
 
 
@@ -332,7 +336,7 @@ def math_alpha(c: str) -> str:
 
 def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
     """per page: (char, origin x, origin y, quad x0, y0, x1, y1, font, size bp); a maths alphanumeric is read as its
-    letter (math_alpha)"""
+    letter (math_alpha), a variation selector is left out (VARIATION)"""
     out = []
     for body in PGS.findall(stext(pdf, f"{first}-{last}")):
         cs, font, size = [], "", 0.0
@@ -340,7 +344,7 @@ def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
             if fn:
                 font, size = fn, float(fs or 0)
                 continue
-            if c.strip() == "":
+            if c.strip() == "" or VARIATION.fullmatch(c):
                 continue
             qv = [float(v) for v in q.split()]
             cs.append((math_alpha(c), float(ox), float(oy), min(qv[0::2]), min(qv[1::2]), max(qv[0::2]), max(qv[1::2]), font, size))

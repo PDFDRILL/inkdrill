@@ -1298,6 +1298,26 @@ class JudgeMathAlphanumerics(unittest.TestCase):
                                                          "&#x2212;", "i")],
                          ["i", "j", "&#x3b1;", "1", "&#x1d455;", "&#x2212;", "i"])
 
+    def test_variation_selectors_are_not_glyphs(self):
+        for c in ("&#xfe01;", "&#xFE0F;", "&#xe0100;", "&#xe01ef;"):
+            self.assertTrue(judge.VARIATION.fullmatch(c), c)
+        for c in ("&#x2211;", "&#xfe10;", "&#xe01f0;", "i"):
+            self.assertFalse(judge.VARIATION.fullmatch(c), c)
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_display_sum_pairs_alone(self):
+        """the reading's display sum set from txexs reads U+2211 U+FE01: the selector is no unpaired glyph"""
+        with tempfile.TemporaryDirectory(prefix="test-judge-vs-") as d:
+            pre = "\\usepackage{libertine}\\usepackage[libertine]{newtxmath}\n"
+            _accent_case(d, "s", "Let $x = \\displaystyle\\sum_i y_i$ here.",
+                         "Let \\(x = \\displaystyle\\sum_i y_i\\) here.", pre)
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, "s", "page.pdf"), 1, os.path.join(d, "s", "r.lines.json"),
+                              os.path.join(d, "s", "g"), out=out, route="glyph", setter=False)
+            lines = out.getvalue().splitlines()
+            self.assertEqual([ln for ln in lines if "fe0" in ln.lower()], [])
+            self.assertTrue([ln for ln in lines if ln.startswith("G L0 &#x2211; &#x2211; 1 ")], lines)
+
     @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
     def test_libertine_maths_letters_pair_with_ascii(self):
         with tempfile.TemporaryDirectory(prefix="test-judge-malpha-") as d:
