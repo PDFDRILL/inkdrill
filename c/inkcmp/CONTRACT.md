@@ -216,6 +216,19 @@ Fresh plants (seed 11, 12 per page) on pages not used to find the threshold. Sam
     faces. It stays a style finding only when one side is U+FFFD (unknown character), or the two are one letter in
     two cases with small caps on one side (small caps lost). Before, a reading's b for the page's a read as style
     when the faces differed, and the residual missed it;
+  - **changed 2026-11-24 (T-0158 J1): a pair in the wrong place is a glyph finding, however equal its ink.** Each
+    pair is compared lying on its own origin, so a script on the wrong side of its base read as equal ink:
+    arxiv.1710.04811's `\bigr)_{2}` for the page's `\right)^2` scored residual 0. Now the pair's vertical origin
+    offset (page minus rendered) is set against the median offset of its 4 nearest page neighbours and against the
+    line's median. The smaller difference, as a share of the page glyph's size, is the G line's 17th field `place`.
+    Over PLACE = 0.5 the pair is flagged and a glyph finding, also counted as `misplaced` in JUDGE1. That holds in an
+    unmeasurable face too, because the place is read from the page's text, not from a font program. On a synthetic
+    CM page the J1 reading reads -1.47 and `\sin_2` for `\sin^2` reads -0.84. On the 49 board jobs, no pair that was
+    not already a finding reads between 0.40 and 0.5;
+  - before the place is read, same-character twins in formula lines are re-paired by position (`twins`). The x sort
+    pairs a numerator and denominator glyph at one x crosswise, and a page glyph of the row above (inside the region)
+    can take a rendered glyph whose own partner it leaves unpaired. A twin trades partners only within its partner's
+    column (half its size in x), and a character keeps as many pairs as it had;
 - Euler maths mapped to eulervm.
 
 | page | equal-text glyphs | style findings | other flags | plants flagged |

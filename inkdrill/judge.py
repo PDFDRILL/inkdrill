@@ -21,7 +21,10 @@ Contract: c/inkcmp/CONTRACT.md units 4-5 (in-place registration, phase-exact per
    before the fresh-page test).
 
 Output, one line per paired glyph:
-    G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font> <x0 y0 x1 y1>
+    G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font> <x0 y0 x1 y1> <place>
+(place, appended 2026-11-24: how far the reading set the pair above (+) or below (-) where its page neighbours and its
+line say it belongs, as a share of the page glyph's size, `placed`; over PLACE the pair is flagged and a glyph finding,
+counted also as `misplaced` in JUDGE1)
 Then `U L<i> A|B <char> <x0 y0 x1 y1>` for unpaired glyphs. The box is the glyph's quad box in the R lines' frame (the
 page at 400 dpi, px): the page glyph's on G and side-A U lines, the rendered glyph's carried into the page by its line's
 median pair offset on side-B U lines (fields appended 2026-11-21, so a parser by index from the front still reads), `N L<i> NOT_COMPILED <LaTeX error> <x0 y0 x1 y1>` (the line's region box, same frame: read it as the last four
@@ -68,6 +71,11 @@ S = DPI / 72
 OX = OY = -0.0625
 INK = 154
 THRESHOLD = 7
+#: a pair set this share of its page glyph's size above or below where its page neighbours and its line say it
+#: belongs is a glyph finding, however equal its ink (`placed`). The J1 cases read 0.84 (\\sin_2 for \\sin^2) and
+#: 1.47 (\\bigr)_{2} for \\right)^2); on the 49 board jobs every pair not already a finding read 0.40 or less, where
+#: the page's and TeX's metrics differ (a display sum's limits, 1805.01788 p3 L81, whose sum is itself a finding)
+PLACE = 0.5
 CH = re.compile(r'<font name="([^"]*)"(?: size="([\d.]+)")?|<char c="(.*?)" quad="([^"]+)" x="([\d.\-]+)" y="([\d.\-]+)"')
 PGS = re.compile(r"<page [^>]*>(.*?)</page>", re.S)
 MATHFONT = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]|MTMI|MTSY|MTEX|MT2(?:MI|SY|EX)"   # MathTime since 2026-11-21
@@ -1575,6 +1583,109 @@ def finding(t: str, tb: str, sa: str, sb: str, um: int) -> str:
     return "" if um else "glyph"
 
 
+def twins(pairs: list, ua: list, ub: list) -> tuple:
+    """pairs of one character re-paired by place. The sequence pairing reads a line in x order, so the same character
+    in two rows at one x (a fraction's numerator and denominator, a sum's upper and lower limit, a matrix's rows)
+    pairs in whichever order the x sort left it, and each takes the other's partner (board 1805.01788 p3 L19: the l of
+    both limits; lib:4859edad9294 p1287 L19: the commas of three rows); and a page glyph of the row above, inside the
+    region, can take a rendered glyph whose own page partner is left unpaired (p1287 L25: u, b, r of "number" 14.4 pt
+    above it). Per character, over its paired and unpaired glyphs, the nearest page and rendered glyphs pair first,
+    the rendered ones carried into the page by the line's median offset, as many pairs as the character had, each
+    rendered glyph only with a page glyph in its partner's column (half the glyph's size in x); kept only where that
+    shortens the character's total distance. Glyphs it leaves out are unpaired."""
+    if not pairs:
+        return pairs, ua, ub
+    dx, dy = (statistics.median(a[1] - b[1] for a, b in pairs), statistics.median(a[2] - b[2] for a, b in pairs))
+    dist = lambda a, b: math.hypot(a[1] - b[1] - dx, a[2] - b[2] - dy)
+    by = collections.defaultdict(list)
+    for k, (a, b) in enumerate(pairs):
+        if a[0] == b[0]:
+            by[a[0]].append(k)
+    spare_a, spare_b = collections.defaultdict(list), collections.defaultdict(list)
+    for c in ua:
+        spare_a[c[0]].append(c)
+    for c in ub:
+        spare_b[c[0]].append(c)
+    out, ua, ub = list(pairs), list(ua), list(ub)
+    for t, ks in by.items():
+        if len(ks) + len(spare_a[t]) + len(spare_b[t]) < 2:      # one pair and no spare: nothing to choose
+            continue
+        A = [pairs[k][0] for k in ks] + spare_a[t]
+        B = [pairs[k][1] for k in ks] + spare_b[t]
+        # only page glyphs stacked at one x trade partners: a rendered glyph keeps to the column of its partner (a
+        # spare one, of where the offset carries it); along a line the x order is right, and the offset drifts
+        # where the reading's words differ (board 0864 p4 Gemma4 L45: v, a, e taken from their own words)
+        col = [pairs[k][0][1] for k in ks] + [b[1] + dx for b in spare_b[t]]
+        cand = sorted((dist(a, b), i, j) for i, a in enumerate(A) for j, b in enumerate(B)
+                      if abs(a[1] - col[j]) <= 0.5 * max(a[8], 1.0))
+        got_a, got_b, to = set(), set(), []
+        for d, i, j in cand:
+            if len(to) == len(ks):
+                break
+            if i not in got_a and j not in got_b:
+                got_a.add(i)
+                got_b.add(j)
+                to.append((i, j))
+        if len(to) < len(ks) or sum(dist(A[i], B[j]) for i, j in to) >= sum(dist(pairs[k][0], pairs[k][1]) for k in ks) - 1e-6:
+            continue
+        for k, (i, j) in zip(ks, to):
+            out[k] = (A[i], B[j])
+        ids_a = {id(A[i]) for i, _ in to}
+        ids_b = {id(B[j]) for _, j in to}
+        ua = [c for c in ua if id(c) not in ids_a] + [c for c in A if id(c) not in ids_a and c[0] == t and
+                                                      not any(c is s for s in spare_a[t])]
+        ub = [c for c in ub if id(c) not in ids_b] + [c for c in B if id(c) not in ids_b and c[0] == t and
+                                                      not any(c is s for s in spare_b[t])]
+    return out, ua, ub
+
+
+def placed(pairs: list, near: int = 4, window: int = 24) -> list:
+    """per pair, how far the reading set it above or below where the page says it belongs, as a share of the page
+    glyph's size. A pair's vertical origin offset (page minus rendered, pt) is compared with two references: the
+    median offset of its `near` nearest pairs on the page (centre distance, among the `window` pairs either side in
+    page x order), and the median offset of the whole line; the share is the smaller of the two differences, signed.
+    Each pair is compared lying on its own origin, so without this a script on the wrong side of its base reads as
+    equal ink (T-0158 J1, arxiv.1710.04811: \\bigr)_{2} for the page's \\right)^2 scored 0). Both references,
+    because either alone blames the wrong glyph: a sum whose limits moved is off from its neighbours (the limits) but
+    not from the line (board 1805.01788 p3 L18); a region's second row set at another leading is off from the line
+    but not from its neighbours. A line of fewer than 3 pairs has no neighbours to say so: all 0."""
+    if len(pairs) < 3:
+        return [0.0] * len(pairs)
+    cen = lambda c: ((c[3] + c[5]) / 2, (c[4] + c[6]) / 2)
+    order = sorted(range(len(pairs)), key=lambda k: cen(pairs[k][0])[0])
+    rank = {k: r for r, k in enumerate(order)}
+    off = [a[2] - b[2] for a, b in pairs]
+    whole = statistics.median(off)
+    out = []
+    for k, (a, _) in enumerate(pairs):
+        x, y = cen(a)
+        r = rank[k]
+        cand = [j for j in order[max(0, r - window):r + window + 1] if j != k]
+        cand.sort(key=lambda j: (cen(pairs[j][0])[0] - x) ** 2 + (cen(pairs[j][0])[1] - y) ** 2)
+        local = statistics.median(off[j] for j in cand[:near])
+        d = min(off[k] - local, off[k] - whole, key=abs)
+        out.append(d / max(a[8], 1.0))
+    return out
+
+
+def count(res, t: str, tb: str, sa: str, sb: str, fa: str, flag: bool, pl: float) -> None:
+    """one judged pair into the page's counts: flagged by its ink, a glyph or style finding by `finding`; a pair
+    whose ink agrees but which sits more than PLACE of its size off its place (`placed`) is a glyph finding and
+    `misplaced`, in an unmeasurable face too: its place is read from the page's text, not from a font program"""
+    res["glyphs"] += 1
+    um = unsettable(fa)
+    res["unmeasurable"] += um
+    if flag:
+        res["flagged"] += 1
+        kind = finding(t, tb, sa, sb, um)
+        if kind:
+            res[kind] += 1
+    elif abs(pl) > PLACE:
+        res["flagged"] += 1
+        res["misplaced"] += 1
+        res["glyph"] += 1
+
+
 def pbox(c, dx: float = 0.0, dy: float = 0.0) -> str:
     """a glyph's quad box (pt, shifted by dx dy) as "x0 y0 x1 y1" in the R lines' frame: the page at 400 dpi, whole
     pixels, outward"""
@@ -1715,7 +1826,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     # CircularStd); where it cannot either, the page is not judged
     if fam == "unmapped" and set_by != "setter":
         print(f"# page {pno}: family unmapped, {len(lv)} lines, A chars {len(ac)}", file=out)
-        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
+        print(f"JUDGE1 a_glyphs {len(ac)} a_unpaired {len(ac)} accents_on_ink 0 b_unpaired 0 misplaced 0 flagged 0 glyph 0 rules_a 0 rules_invented 0 rules_missing 0 "
               f"glyphs 0 lines 0 not_compiled 0 style 0 unmappable 0 unmeasurable 0 unpaired_A 0 unpaired_B 0", file=out)
         print("STATUS FONT_UNMAPPED", file=out)
         return collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0)
@@ -1747,8 +1858,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         bc = [by_outline(spelled(identified(spec_b.chars(bo + n + 1, cs), t), t))
               for n, cs in enumerate(bc) for t in (spec_b.traced(bo + n + 1, tr_b.get(bo + n + 1, [])),)]
     res = collections.Counter(lines=0, glyphs=0, flagged=0, style=0, glyph=0, not_compiled=0, unpaired_A=0,
-                              unpaired_B=0, accents_on_ink=0, unmappable=0, unmeasurable=0, rules_a=0, rules_missing=0,
-                              rules_invented=0)
+                              unpaired_B=0, accents_on_ink=0, misplaced=0, unmappable=0, unmeasurable=0, rules_a=0,
+                              rules_missing=0, rules_invented=0)
     b_total = 0                                     # rendered glyphs of the lines that typeset
     print(f"# page {pno}: family {fam}, {len(lv)} lines, A chars {len(ac)}, snippet pages {len(bc)}, set by {set_by}",
           file=out)
@@ -1824,7 +1935,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     for ci, c in enumerate(ac):
         if ci in owner:
             of_line[owner[ci]].append(c)
-    work = []                                       # per judged line: (i, ln, b, ca, cb, pairs, U lines)
+    work, places = [], {}                                      # per judged line: (i, ln, b, ca, cb, pairs, U lines)
     for i, ln in enumerate(lv[:len(bc)]):
         if i in failed:
             continue
@@ -1849,6 +1960,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 ub += cb[b0:b1]
         if is_formula(ln):                           # maths only: in prose the x order is the reading order
             pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
+            pairs, ua, ub = twins(pairs, ua, ub)
         res["unpaired_A"] += len(ua)
         res["unpaired_B"] += len(ub)
         # positions in the R lines' frame (the page at 400 dpi, px): the page glyph's quad box; a rendered glyph's
@@ -1879,6 +1991,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             res["unpaired_B"] -= 1
             res["accents_on_ink"] += 1
         res["lines"] += 1
+        places[i] = [0.0] * len(pairs) if u else placed(pairs)   # a rotated line: not measured
         work.append((i, ln, b, ca, cb, pairs, ulines))
     scores, page400, bpages = {}, None, {}
     glyph_owners = [(c, owner[ci]) for ci, c in enumerate(ac) if ci in owner]
@@ -1924,16 +2037,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 sa, sb = face(fa, ga), face(fb, gb)
                 if maths_digit(t, tb, fa, fb, fam) and "x" not in sa:
                     sa = "x" if sa == "-" else sa + "x"  # a digit the page set as maths, the reading as text
-                print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa} "
-                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))}", file=out)
-                res["glyphs"] += 1
-                um = unsettable(fa)
-                res["unmeasurable"] += um
-                if flag:
-                    res["flagged"] += 1
-                    kind = finding(t, tb, sa, sb, um)
-                    if kind:
-                        res[kind] += 1
+                pl = places[i][k]
+                print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag or abs(pl) > PLACE)} {sa} {sb} {fa} "
+                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f}", file=out)
+                count(res, t, tb, sa, sb, fa, flag, pl)
             if is_formula(ln) and pairs:
                 aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
@@ -1944,7 +2051,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
         cx0, cy0 = max(0, int(b[0]) * UP - mg), max(0, int(b[1]) * UP - mg)
         aw, ah, ab = pgm(a_pdf, pno, DPI * UP, (cx0, cy0, int(b[2] - b[0]) * UP + 2 * mg, int(b[3] - b[1]) * UP + 2 * mg))
-        for (t, ax, ay, qx0, qy0, qx1, qy1, fa, *_), (tb, bx, by, _, _, _, _, fb, *_) in pairs:
+        for k, ((t, ax, ay, qx0, qy0, qx1, qy1, fa, *_), (tb, bx, by, _, _, _, _, fb, *_)) in enumerate(pairs):
             X, Y = ax * S + OX, ay * S + OY             # A's origin on the 400 grid
             u, v = bx * S * UP, by * S * UP             # B's origin on the UP x 400 grid
             diff = set()
@@ -1961,16 +2068,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             xo, so, pc = score(diff)
             flag = so >= THRESHOLD
             sa, sb = style(fa) or "-", style(fb) or "-"
-            print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag)} {sa} {sb} {fa} "
-                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))}", file=out)
-            res["glyphs"] += 1
-            um = unsettable(fa)
-            res["unmeasurable"] += um
-            if flag:
-                res["flagged"] += 1
-                kind = finding(t, tb, sa, sb, um)
-                if kind:
-                    res[kind] += 1
+            pl = places[i][k]
+            print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag or abs(pl) > PLACE)} {sa} {sb} {fa} "
+                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f}", file=out)
+            count(res, t, tb, sa, sb, fa, flag, pl)
         if is_formula(ln) and pairs:
             rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
                      glyphs=glyph_owners,

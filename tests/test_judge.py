@@ -149,9 +149,11 @@ class JudgeBornDigital(unittest.TestCase):
         k, tol = 400 / 200, 8                     # region px (200 dpi) -> 400 dpi; 2 pt of slack for quad boxes
         seen = collections.Counter()
         for r in rows:
-            want = 16 if r[0] == "G" else 8
+            want = 17 if r[0] == "G" else 8               # G: the box, then the place (2026-11-24)
             self.assertEqual(len(r), want, r)
-            x0, y0, x1, y1 = map(int, r[-4:])
+            x0, y0, x1, y1 = map(int, r[12:16] if r[0] == "G" else r[-4:])
+            if r[0] == "G":
+                self.assertLessEqual(abs(float(r[16])), judge.PLACE, r)
             g = lines[int(r[1][1:])]["region"]
             rx0, ry0 = g["top_left_x"] * k, g["top_left_y"] * k
             rx1, ry1 = rx0 + g["width"] * k, ry0 + g["height"] * k
@@ -1414,6 +1416,121 @@ class JudgeRects(unittest.TestCase):
             self.assertGreater(float(one["residual"]), 0.02, one)            # b for a: a finding, paired or not
             self.assertGreater(one["glyph"] + one["unpaired_A"] + one["unpaired_B"], 0, one)
             self.assertTrue(os.path.getsize(own["crop"]) > 0)
+
+
+class JudgeScriptPlace(unittest.TestCase):
+    """T-0158 J1 (arxiv.1710.04811): a script set on the wrong side of its base is a finding, though its ink is the
+    page's. Each pair is compared lying on its own origin, so before `placed` the reading's \\bigr)_{2} for the page's
+    \\right)^2 scored residual 0, and \\sin_2 for \\sin^2 too."""
+
+    g = staticmethod(lambda c, x, y, size=10.0: (c, x, y, x, y - 5, x + 4, y, "F", size))
+
+    def test_placed_blames_the_moved_glyph_only(self):
+        g = self.g
+        a = [g("x", 0, 10), g("2", 5, 6, 7.0), g("+", 10, 10), g("y", 15, 10)]
+        b = [g("x", 0, 20), g("2", 5, 22, 7.0), g("+", 10, 20), g("y", 15, 20)]      # the 2 set 6 pt too low
+        pl = judge.placed(list(zip(a, b)))
+        self.assertGreater(abs(pl[1]), judge.PLACE)
+        self.assertEqual([round(v, 6) for v in (pl[0], pl[2], pl[3])], [0, 0, 0])
+        # a sum whose limits moved is not itself misplaced: the line says where it belongs
+        a = [g("a", 0, 10), g("=", 5, 10), g("S", 10, 10), g("m", 10, 4, 7.0), g("i", 11, 15, 7.0), g("b", 20, 10)]
+        b = [g("a", 0, 10), g("=", 5, 10), g("S", 10, 10), g("m", 13, 8, 7.0), g("i", 13, 11, 7.0), g("b", 20, 10)]
+        pl = judge.placed(list(zip(a, b)))
+        self.assertLess(abs(pl[2]), judge.PLACE, pl)
+        self.assertGreater(min(abs(pl[3]), abs(pl[4])), judge.PLACE, pl)
+        self.assertEqual(judge.placed(list(zip(a[:2], b[:2]))), [0.0, 0.0])
+
+    def test_twins_take_their_own_partners(self):
+        g = self.g
+        # a fraction's numerator and denominator l at one x, paired crosswise by the x sort (1805.01788 p3 L19)
+        a = [g("a", 0, 10), g("l", 5, 4), g("l", 5, 16), g("b", 10, 10)]
+        b = [g("a", 0, 30), g("l", 5, 36), g("l", 5, 24), g("b", 10, 30)]
+        pairs, ua, ub = judge.twins(list(zip(a, b)), [], [])
+        self.assertEqual([(p[0][2], p[1][2]) for p in pairs], [(10, 30), (4, 24), (16, 36), (10, 30)])
+        self.assertEqual((ua, ub), ([], []))
+        # a page glyph of the row above took the rendered u; its own page u was left unpaired (lib:4859edad9294
+        # p1287 L25, "number")
+        a = [g("n", 72, 687.4), g("u", 78.2, 673.0), g("m", 84.7, 687.4)]
+        b = [g("n", 2, 12.8), g("u", 8.2, 12.8), g("m", 14.7, 12.8)]
+        pairs, ua, ub = judge.twins(list(zip(a, b)), [g("u", 78.2, 687.4)], [])
+        self.assertEqual([p[0][2] for p in pairs], [687.4, 687.4, 687.4])
+        self.assertEqual([c[2] for c in ua], [673.0])
+        self.assertEqual(judge.placed(pairs), [0.0, 0.0, 0.0])
+        # a character never loses a pair to the column rule: \\cdots 4.4 pt apart, whose offset differs from the
+        # line's by 4.3 pt, slid one dot along and left the last without a partner in its column (board
+        # lib:5a5c76391c9c p4 MathPix: unpaired 2 more on each side, glyphs counted twice)
+        a = [g(c, 300 + 20 * n, 519.26) for n, c in enumerate("rstuvwx")] + \
+            [g("&#xb7;", 452.47, 519.26), g("&#xb7;", 456.9, 519.26), g("&#xb7;", 461.33, 519.26)]
+        b = [g(c, 166.61 + 20 * n, 10.37) for n, c in enumerate("rstuvwx")] + \
+            [g("&#xb7;", 314.81, 10.37), g("&#xb7;", 319.24, 10.37), g("&#xb7;", 323.66, 10.37)]
+        pairs, ua, ub = judge.twins(list(zip(a, b)), [], [])
+        self.assertEqual(pairs, list(zip(a, b)))
+        self.assertEqual((ua, ub), ([], []))
+        # along a misread line the offset drifts: an unpaired page twin where the drift points is in another column,
+        # and does not take the rendered glyph (board 0864 p4 Gemma4 L45: v, a, e taken from their own words)
+        a = [g(c, 20 * n, 10) for n, c in enumerate("rstuw")] + [g("v", 100, 10)]
+        b = [g(c, 20 * n, 10) for n, c in enumerate("rstuw")] + [g("v", 125, 10)]
+        pairs, ua, ub = judge.twins(list(zip(a, b)), [g("v", 124, 10)], [])
+        self.assertEqual(pairs, list(zip(a, b)))
+        # pairs that are already right are left alone
+        a = [g("l", 5, 4), g("l", 5, 16), g("b", 10, 10)]
+        b = [g("l", 5, 4), g("l", 5, 16), g("b", 10, 10)]
+        self.assertEqual(judge.twins(list(zip(a, b)), [], [])[0], list(zip(a, b)))
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_script_on_the_wrong_side_is_a_finding(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-place-") as d:
+            eq = "\\left(S_R^2\\right)^2\\left(S_L^2 S_R^2+\\sin^2\\theta_H\\right)^2=0"
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\n\\usepackage{amsmath}\\pagestyle{empty}\n\\begin{document}\n"
+                         "Text.\n\\[" + eq + "\\]\nMore.\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True,
+                               check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            bs.sort(key=lambda v: v[1])                          # Text., the display in pieces, More.
+            mid = bs[1:-1]
+            self.assertEqual(len(mid), 5, bs)
+            b = (min(v[0] for v in mid) - 2, min(v[1] for v in mid) - 1, max(v[2] for v in mid) + 2,
+                 max(v[3] for v in mid) + 1)
+            readings = {"own": eq,
+                        "sub": "\\bigl(S_{R}^{2} \\bigr)_{2} \\bigl(S_{L}^{2} S_{R}^{2} + \\sin^{2} \\theta_{H} \\bigr)_{2} = 0",
+                        "sin": eq.replace("\\sin^2", "\\sin_2")}
+            tsv = os.path.join(d, "r.tsv")
+            with open(tsv, "w") as fh:
+                for k, t in readings.items():
+                    fh.write("\t".join([k, "fx", "1", k] + ["%.2f" % v for v in b] + [t, pdf]) + "\n")
+            own, sub, sin = rects.judge_rects(tsv, os.path.join(d, "w"))
+            for r in (own, sub, sin):
+                self.assertEqual(r["status"], "OK", r)
+            got = {}
+            for r in (own, sub, sin):
+                with open(r["judge_out"]) as fh:
+                    got[r["obj_id"]] = [ln.split() for ln in fh if ln.startswith("G ")]
+            moved = lambda k: [f[2] for f in got[k] if abs(float(f[16])) > judge.PLACE]
+            self.assertEqual(moved("own"), [])
+            self.assertEqual(moved("sub"), ["2", "2"])                  # the two outer exponents
+            self.assertEqual(moved("sin"), ["2"])
+            self.assertTrue(all(f[8] == "1" for k in ("sub", "sin") for f in got[k] if abs(float(f[16])) > judge.PLACE))
+            self.assertGreater(float(sub["residual"]), float(own["residual"]) + 0.05, (own, sub))
+            self.assertGreater(float(sin["residual"]), float(own["residual"]) + 0.02, (own, sin))
+
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_twins_on_a_page(self):
+        """the page's denominator l lies right of its numerator l, the reading's left of it: the x sort pairs them
+        crosswise, and only `twins` gives each its own partner (else both read misplaced)"""
+        with tempfile.TemporaryDirectory(prefix="test-judge-twins-") as d:
+            _accent_case(d, "t", "We have $a = \\frac{l}{\\,l} + b$ here.", "We have \\(a = \\frac{\\,l}{l} + b\\) here.")
+            out = io.StringIO()
+            res = judge.judge(os.path.join(d, "t", "page.pdf"), 1, os.path.join(d, "t", "r.lines.json"),
+                              os.path.join(d, "t", "g"), out=out, route="glyph", setter=False)
+            ls = [ln.split() for ln in out.getvalue().splitlines() if ln.startswith("G ") and ln.split()[2] == "l"]
+            self.assertEqual(len(ls), 2, out.getvalue())
+            self.assertEqual([f[16] for f in ls], ["0.000", "0.000"], ls)
+            self.assertEqual(res["misplaced"], 0)
 
 
 class JudgeMathAlphanumerics(unittest.TestCase):
