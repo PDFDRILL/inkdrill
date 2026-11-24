@@ -8,7 +8,7 @@
 # they are never copied into inkdrill and GLYPHDRILL3 is never written. gd3.pin holds the sha256 of every
 # GLYPHDRILL3 file the build reads, and every make checks it first and stops naming the files that differ.
 CC ?= cc
-CFLAGS ?= -O3 -std=c17 -Wall -Wextra -Wpedantic -Werror
+CFLAGS ?= -O3 -march=native -std=c17 -Wall -Wextra -Wpedantic -Werror
 B = build
 GD3 ?= ../GLYPHDRILL3
 # a missing checkout fails here, by name, rather than as "No rule to make target '../GLYPHDRILL3/inkcmp/page.c'"
