@@ -271,6 +271,16 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-24 (T-0158 J2):** a Type 3 font with no name (mutool: `Type3 (106 0 R)`, dvips's PK bitmaps
+    through Ghostscript) names no family, so it does not vote. The page's named fonts say the family, and a page with
+    none stays unmapped. Its glyphs are compared against the page's ink like any Type 3 glyph. Its size does not vote
+    on a line's size either: it is the Tf size times the FontMatrix, 0.12 for 10.95 pt CM, because the PDF defines no
+    em for a Type 3 font. A line with no voting glyph takes the page's commonest named size, where it used to take
+    10 pt. arxiv.0910.1368 p12 (pdfdrill's reading) was FONT_UNMAPPED, with its 6 T-0158 rectangles NO_TEXT, and is
+    now judged (see the J2 report for the counts).
+    Open: a PK bitmap (600 dpi, ljfour) is heavier than TeX's outline, so clean bitmap glyphs flag. That is 43 of 590
+    on p12 at 10.95 pt and 8 of 34 in the 12 pt fixture `tests/fixtures/type3-dvips-bitmap.pdf`. The fix at its level
+    is to set the reading in the same bitmaps.
   - On the board's two-column pages that both readings had failed alike: lib:69bc5c71b881 p16 (CircularStd) is now
     FONT_UNMAPPED, where it had been 0.97 for both readings.
   - 1805.01788 p3 (Libertine): MathPix 0.569 -> 0.145 and ours 0.578 -> 0.188, now mostly style findings (lost

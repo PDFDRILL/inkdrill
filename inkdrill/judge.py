@@ -401,6 +401,13 @@ def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
     return out
 
 
+#: mutool's name for a Type 3 font with no BaseFont: dvips's bitmap fonts (PK glyphs as images). It names no family,
+#: so it does not vote in `font_preamble`; its glyphs are compared against the page's ink like any Type 3 glyph.
+#: Counted as an unmapped family it made arxiv.0910.1368 p12 FONT_UNMAPPED (870 body-text glyphs in "Type3 (106 0
+#: R)" against CMR10's 124): T-0158 J2, its 6 rectangles NO_TEXT
+TYPE3_NAMELESS = re.compile(r"Type3 \(\d+ \d+ R\)")
+
+
 def font_preamble(pdf: str, page: int) -> tuple[str, str]:
     """the page's text family, chosen by glyph count, plus any maths family it uses; "unmapped" when most text
     glyphs are in fonts no FAMILIES entry sets (the judge then reports STATUS FONT_UNMAPPED, no residual)"""
@@ -410,17 +417,20 @@ def font_preamble(pdf: str, page: int) -> tuple[str, str]:
             font = fn.split("+")[-1]
         elif c.strip():
             glyphs[font] += 1
-    fams, unmapped = collections.Counter(), 0
+    fams, unmapped, nameless = collections.Counter(), 0, 0
     for n, cnt in glyphs.items():
         if re.search(MATHFONT + r"|Inconsolata|Courier|CMTT|Mono|Symbol|Dingbat", n):
+            continue
+        if TYPE3_NAMELESS.fullmatch(n):              # no name to map: the page's named fonts say the family
+            nameless += cnt
             continue
         hit = next((f for r, _, f in FAMILIES if re.search(r, n)), None)
         if hit:
             fams[hit] += cnt
         else:
             unmapped += cnt
-    if unmapped > sum(fams.values()):     # most text glyphs are in a family TeX cannot set: no same-font XOR
-        return "unmapped", ""
+    if unmapped > sum(fams.values()) or (nameless and not fams):   # most text glyphs are in a family TeX cannot
+        return "unmapped", ""                                           # set, or in fonts with no name: no XOR
     fam = fams.most_common(1)[0][0] if fams else "cm"
     pre = [next(p for _, p, f in FAMILIES if f == fam)]
     pre += [p for r, p in MATHFAM if any(re.search(r, n) for n in glyphs)]
@@ -1080,15 +1090,26 @@ def math_sizes(ac: list) -> str:
     return "\\DeclareMathSizes{%g}{%g}{%g}{%g}" % (round(t, 2), round(t, 2), pt(s1), pt(s2))
 
 
-def vote_size(cs: list, formula: bool) -> float:
+def size_voters(ac: list) -> tuple:
+    """which page glyphs vote on their line's size (`vote_size`), and the page's size for a line none of whose glyphs
+    votes: its commonest size among named fonts (10.0 with none). A nameless Type 3 font's size is the Tf size times
+    its FontMatrix (dvips's bitmaps through Ghostscript 9.22: 0.12 for 10.95 pt CM, the glyph procedures 100 units to
+    the em); the PDF defines no em for it, so it does not vote (T-0158 J2, arxiv.0910.1368 p12: its lines were set
+    at 0.12 pt, and 545 of 590 bitmap glyphs flagged)"""
+    voters = [not re.search(SIZEVOTE_SKIP, c[7]) and not TYPE3_NAMELESS.fullmatch(c[7]) for c in ac]
+    named = collections.Counter(round(c[8], 4) for c in ac if c[8] > 0 and not TYPE3_NAMELESS.fullmatch(c[7]))
+    return voters, (named.most_common(1)[0][0] if named else 10.0)
+
+
+def vote_size(cs: list, formula: bool, default: float = 10.0) -> float:
     """a line's size from its glyphs' (bp): the commonest; on a formula line its TEXT size, since its scripts can
     outnumber its base (board 1805.01788 p3 L4, a_{i1}/r_{i1}: 12 glyphs at the script size, 11 at the text size; set
     at the script size, its letters and scripts were all too small). The text size is the largest size two glyphs
     hold whose scripts are there: glyphs at 0.35 to 0.95 of it, the range math_sizes reads a page's script sizes in
     (LaTeX's 10/7/5, newtxmath-Libertine's 8.966/7.273 = 0.81). A quarter of the glyphs was the rule until CMMI and CMSY
     voted (T-0158): a \\tfrac numerator of 23 script letters then outvoted the base's 5."""
-    if not cs:
-        return 10.0
+    if not cs:                  # no glyph votes (a line wholly in nameless Type 3): the page's size, `default`
+        return default
     c = collections.Counter(round(x, 4) for x in cs)
     mode = c.most_common(1)[0][0]
     if formula:                 # a base above its scripts; never a second family at the same size (board35 0864 p4
@@ -1745,13 +1766,13 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     cgrid = collections.defaultdict(list)          # glyphs by the cell of their centre, in page order
     for ci, c in enumerate(ac):
         cgrid[(int((c[3] + c[5]) / 2 * S // 256), int((c[4] + c[6]) / 2 * S // 256))].append(ci)
-    nomath = [not re.search(SIZEVOTE_SKIP, c[7]) for c in ac]
+    nomath, page_size_pt = size_voters(ac)
     for ln in lv:
         b = box(ln)
         near = sorted(ci for gx in range(int(b[0] // 256), int(b[2] // 256) + 1)
                       for gy in range(int(b[1] // 256), int(b[3] // 256) + 1) for ci in cgrid.get((gx, gy), ()))
         cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
-        sizes.append(vote_size(cs, is_formula(ln)))
+        sizes.append(vote_size(cs, is_formula(ln), page_size_pt))
         lfams.append([ac[ci][7] for ci in near if inside(ac[ci], b)])
     set_by = "pdflatex"
     texts = []
@@ -1777,8 +1798,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                (x["region"]["top_left_y"] + x["region"]["height"]) * k2) for x in l2]
         s2 = []
         for x, b in zip(l2, b2):
-            cs = [c[8] for c in ac if inside(c, b) and not re.search(SIZEVOTE_SKIP, c[7])]
-            s2.append(vote_size(cs, is_formula(x)))
+            cs = [c[8] for c, v in zip(ac, nomath) if v and inside(c, b)]
+            s2.append(vote_size(cs, is_formula(x), page_size_pt))
         return l2, b2, s2
 
     def try_set(l2, b2, s2, d2):

@@ -1533,6 +1533,84 @@ class JudgeScriptPlace(unittest.TestCase):
             self.assertEqual(res["misplaced"], 0)
 
 
+FIXTURE_T3_DVIPS = os.path.join(os.path.dirname(__file__), "fixtures", "type3-dvips-bitmap.pdf")
+
+
+class JudgeNamelessType3(unittest.TestCase):
+    """T-0158 J2: dvips + Ghostscript bitmap fonts are Type 3 with no name (mutool: "Type3 (21 0 R)"). Counted as an
+    unmapped family they made a CM page FONT_UNMAPPED: arxiv.0910.1368 p12, 870 body-text glyphs in "Type3 (106 0 R)",
+    its 6 T-0158 rectangles NO_TEXT. The fixture is that case made small: `latex` (12pt article) of two lines, "Some
+    text set from bitmaps, \\textbf{bold words}, and $x+y$ in maths." and "A second line all in the bitmap text
+    font.", `dvips -Ppk -u nocmr12.map` (pdftex.map without its cmr12 line, so cmr12 comes as a PK bitmap), `ps2pdf`:
+    the text in a nameless Type 3, the bold and the maths named Type 1."""
+
+    def test_names(self):
+        self.assertTrue(judge.TYPE3_NAMELESS.fullmatch("Type3 (106 0 R)"))
+        for n in ("F32", "DejaVuSerif", "Type3", "CMR10"):
+            self.assertFalse(judge.TYPE3_NAMELESS.fullmatch(n), n)
+
+    def test_nameless_type3_sizes_do_not_vote(self):
+        g = lambda f, z: ("a", 0, 0, 0, 0, 1, 1, f, z)
+        # arxiv.0910.1368 p12's sizes: body text in "Type3 (106 0 R)" at 0.12, digits in CMR10 and maths at 10.9091
+        ac = [g("Type3 (106 0 R)", 0.12)] * 5 + [g("CMR10", 10.9091)] * 2 + [g("CMMI10", 10.9091), g("CMEX10", 10.9091)]
+        voters, page = judge.size_voters(ac)
+        self.assertEqual(voters, [False] * 5 + [True, True, True, False])
+        self.assertEqual(page, 10.9091)
+        self.assertEqual(judge.size_voters([g("Type3 (1 0 R)", 0.12)]), ([False], 10.0))
+
+    def test_a_line_with_no_size_takes_the_page_size(self):
+        self.assertEqual(judge.vote_size([], False, 10.9091), 10.9091)
+        self.assertEqual(judge.vote_size([], True), 10.0)
+        self.assertEqual(judge.vote_size([9.0, 9.0], False, 10.9091), 9.0)
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_the_page_is_judged(self):
+        self.assertEqual(judge.font_preamble(FIXTURE_T3_DVIPS, 1), ("cm", ""))
+        # the line boxes from the glyphs' own quads, by baseline: pdftotext's lines are taller for Type 3 text (its
+        # FontBBox), and the second line's box reached over the first line's p
+        rows = collections.defaultdict(list)
+        for c in judge.chars(FIXTURE_T3_DVIPS, 1, 1)[0]:
+            rows[round(c[2])].append(c)
+        bs = [(min(c[3] for c in r), min(c[4] for c in r), max(c[5] for c in r), max(c[6] for c in r))
+              for _, r in sorted(rows.items())]
+        self.assertEqual(len(bs), 2, bs)
+        w, h = judge.page_size(FIXTURE_T3_DVIPS, 1)
+        k = 200 / 72
+        first = "Some text set from bitmaps, \\textbf{bold words}, and \\(x+y\\) in maths."
+        second = "A second line all in the bitmap text font."
+        got = {}
+        with tempfile.TemporaryDirectory(prefix="test-judge-t3d-") as d:
+            for name, texts in (("own", (first, second)), ("one", (first.replace("maths.", "mathe."), second))):
+                doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
+                    {"type": "text", "text": t, "region": {
+                        "top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                        "width": int((b[2] - b[0]) * k) + 4, "height": int((b[3] - b[1]) * k) + 4}}
+                    for t, b in zip(texts, bs)]}]}
+                lj = os.path.join(d, name + ".lines.json")
+                with open(lj, "w") as fh:
+                    json.dump(doc, fh)
+                out = io.StringIO()
+                res = judge.judge(FIXTURE_T3_DVIPS, 1, lj, os.path.join(d, name), out=out, route="glyph", setter=False)
+                got[name] = (res, out.getvalue().splitlines())
+        res, lines = got["own"]
+        self.assertEqual(lines[-1], "STATUS OK")
+        self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0))
+        g = [ln.split() for ln in lines if ln.startswith("G ")]
+        t3 = [f for f in g if "Type3" in " ".join(f)]
+        self.assertEqual(len(t3), sum(1 for f in g if f[1] == "L1") + 36, "the bitmap text of both lines is paired")
+        # the second line has no named glyph: it is set at the page's 11.955 pt, not at 10. Open: a PK bitmap (600
+        # dpi, ljfour) is heavier than TeX's outline, so clean glyphs flag (8 of 34 here, 2026-11-24)
+        l1 = [f for f in g if f[1] == "L1"]
+        self.assertEqual(len(l1), 34)
+        self.assertLessEqual(sum(f[8] == "1" for f in l1), 10, l1)
+        # the planted e for s is above every clean bitmap glyph
+        clean = max(int(f[6]) for f in t3)
+        res1, lines1 = got["one"]
+        (plant,) = [ln.split() for ln in lines1 if ln.startswith("G L0 s e ")]
+        self.assertGreater(int(plant[6]), 2 * clean, (plant, clean))
+        self.assertEqual(res1["glyph"], res["glyph"] + 1)
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of
