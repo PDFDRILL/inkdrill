@@ -8,7 +8,12 @@
 # they are never copied into inkdrill and GLYPHDRILL3 is never written. gd3.pin holds the sha256 of every
 # GLYPHDRILL3 file the build reads, and every make checks it first and stops naming the files that differ.
 CC ?= cc
-CFLAGS ?= -O3 -march=native -std=c17 -Wall -Wextra -Wpedantic -Werror
+# the minimum every C program here is compiled and linked with (owner, 2026-11-24, drillgroup PROTOCOL). It stands
+# after CFLAGS on every line, so a CFLAGS from the environment (-O2 -g, say) cannot lower it: the last -O wins.
+# Each program compiles and links in one cc call, so the linker gets it too. Only test-c-asan sets OPT empty, to
+# keep its own -O1 -g.
+OPT = -O3 -march=native
+CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Werror
 B = build
 GD3 ?= ../GLYPHDRILL3
 # a missing checkout fails here, by name, rather than as "No rule to make target '../GLYPHDRILL3/inkcmp/page.c'"
@@ -44,16 +49,16 @@ INKCMP = c/inkcmp/inkcmp.c $(GD3INK)/page.c $(GD3INK)/white.c $(GD3INK)/lines.c 
          c/inkcmp/rules.c $(GD3)/src/layout/blocks.c
 INKCMP_H = $(GD3INK)/page.h $(GD3INK)/white.h $(GD3INK)/lines.h c/inkcmp/glyphs.h c/inkcmp/glyphtab.h $(GD3)/src/layout/blocks.h
 $(B)/inkcmp: $(INKCMP) $(INKCMP_H)
-	$(CC) $(CFLAGS) -I$(GD3)/src -I$(GD3INK) -Ic/inkcmp -o $@ $(INKCMP) -lm
+	$(CC) $(CFLAGS) $(OPT) -I$(GD3)/src -I$(GD3INK) -Ic/inkcmp -o $@ $(INKCMP) $(LDFLAGS) -lm
 $(B)/inkcmp-selftest-two: c/inkcmp/selftest_two.c $(GD3INK)/page.c $(GD3INK)/page.h
-	$(CC) $(CFLAGS) -I$(GD3INK) -o $@ c/inkcmp/selftest_two.c $(GD3INK)/page.c
+	$(CC) $(CFLAGS) $(OPT) -I$(GD3INK) -o $@ c/inkcmp/selftest_two.c $(GD3INK)/page.c $(LDFLAGS)
 # the three GLYPHDRILL3 programs inkcmp's byte-identity tests compare with, built from the pinned sources
 $(B)/gd3-adapter: $(GD3)/src/gd3_adapter.c
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) $(OPT) -o $@ $< $(LDFLAGS)
 $(B)/gd3-white: $(GD3)/src/gd3_white.c $(GD3)/src/gd3_rle.h
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) $(OPT) -o $@ $< $(LDFLAGS)
 $(B)/gd3-blocks: $(GD3)/src/gd3_blocks.c $(GD3)/src/gd3_rle.h $(GD3)/src/layout/blocks.c $(GD3)/src/layout/blocks.h
-	$(CC) $(CFLAGS) -I$(GD3)/src -o $@ $(GD3)/src/gd3_blocks.c $(GD3)/src/layout/blocks.c
+	$(CC) $(CFLAGS) $(OPT) -I$(GD3)/src -o $@ $(GD3)/src/gd3_blocks.c $(GD3)/src/layout/blocks.c $(LDFLAGS)
 
 test: test-c test-py
 test-c: all
@@ -70,7 +75,7 @@ test-py:
 # the C tests with AddressSanitizer/UBSan builds, then a normal rebuild
 ASAN = -O1 -g -std=c17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
 test-c-asan:
-	$(MAKE) -B CFLAGS="$(ASAN)" all
+	$(MAKE) -B CFLAGS="$(ASAN)" OPT= all
 	$(MAKE) test-c; status=$$?; $(MAKE) -B all; exit $$status
 clean:
 	rm -rf $(B)
