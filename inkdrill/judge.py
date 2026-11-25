@@ -76,7 +76,8 @@ THRESHOLD = 7
 #: 1.47 (\\bigr)_{2} for \\right)^2); on the 49 board jobs every pair not already a finding read 0.40 or less, where
 #: the page's and TeX's metrics differ (a display sum's limits, 1805.01788 p3 L81, whose sum is itself a finding)
 PLACE = 0.5
-CH = re.compile(r'<font name="([^"]*)"(?: size="([\d.]+)")?|<char c="(.*?)" quad="([^"]+)" x="([\d.\-]+)" y="([\d.\-]+)"')
+CH = re.compile(r'<font name="([^"]*)"(?: size="([\d.]+)")?|<char c="(.*?)"(?: hexc="([0-9a-fA-F]+)")? quad="([^"]+)" '
+                r'x="([\d.\-]+)" y="([\d.\-]+)"')
 PGS = re.compile(r"<page [^>]*>(.*?)</page>", re.S)
 MATHFONT = r"CMSY|CMMI|CMEX|MSBM|MSAM|EU[RFSE]|MTMI|MTSY|MTEX|MT2(?:MI|SY|EX)"   # MathTime since 2026-11-21
 #: the maths faces left out of a line's size vote: MATHFONT without MathTime. Leaving MathTime out too put display lines
@@ -383,22 +384,92 @@ def math_alpha(c: str) -> str:
     return f if " " < f < "\x7f" else f"&#x{ord(f):x};"
 
 
-def chars(pdf: str, first: int, last: int) -> list[list[tuple]]:
+def t1_text() -> dict:
+    """T1 code -> its text in mutool's spelling (ASCII bare, else &#x..;), from the TeX tree's own tables:
+    cm-super-t1.enc (code -> glyph name) and glyphtounicode.tex (name -> Unicode; fi -> f i)"""
+    if not _T1:
+        enc = subprocess.run(["kpsewhich", "cm-super-t1.enc", "glyphtounicode.tex"], capture_output=True, text=True,
+                             check=True).stdout.split()
+        with open(enc[0], encoding="latin-1") as fh:
+            names = re.findall(r"^/([^\s\[]+)\s*$", re.sub(r"%.*", "", fh.read()), re.M)
+        with open(enc[1], encoding="latin-1") as fh:
+            uni = dict(re.findall(r"\\pdfglyphtounicode\{([^}]+)\}\{([0-9A-F ]+)\}", fh.read()))
+        spell = lambda u: html.escape(chr(u), quote=True) if 32 < u < 127 else "&#x%x;" % u
+        for code, n in enumerate(names[:256]):
+            if n in uni:
+                _T1[code] = [spell(int(h, 16)) for h in uni[n].split()]
+    return _T1
+
+
+_T1: dict = {}
+
+
+def chars(pdf: str, first: int, last: int, codes: dict | None = None) -> list[list[tuple]]:
     """per page: (char, origin x, origin y, quad x0, y0, x1, y1, font, size bp); a maths alphanumeric is read as its
-    letter (math_alpha), a variation selector is left out (VARIATION)"""
+    letter (math_alpha), a variation selector is left out (VARIATION). `codes`: the text of a character mutool could
+    only give as its code (`hexc`: a font with no ToUnicode, pdfTeX's PK bitmaps), several letters sharing its quad
+    in equal parts as mutool splits a mapped ligature"""
     out = []
     for body in PGS.findall(stext(pdf, f"{first}-{last}")):
         cs, font, size = [], "", 0.0
-        for fn, fs, c, q, ox, oy in CH.findall(body):
+        for fn, fs, c, hx, q, ox, oy in CH.findall(body):
             if fn:
                 font, size = fn, float(fs or 0)
                 continue
-            if c.strip() == "" or VARIATION.fullmatch(c):
-                continue
             qv = [float(v) for v in q.split()]
-            cs.append((math_alpha(c), float(ox), float(oy), min(qv[0::2]), min(qv[1::2]), max(qv[0::2]), max(qv[1::2]), font, size))
+            x0, y0, x1, y1 = min(qv[0::2]), min(qv[1::2]), max(qv[0::2]), max(qv[1::2])
+            ts = (codes.get(int(hx, 16)) if codes is not None and hx else None) or [c]
+            for k, t in enumerate(ts):
+                if t.strip() == "" or VARIATION.fullmatch(t):
+                    continue
+                w = (x1 - x0) / len(ts)
+                cs.append((math_alpha(t), float(ox) + k * w, float(oy), x0 + k * w, y0, x0 + (k + 1) * w, y1, font, size))
         out.append(cs)
     return out
+
+
+#: the reading's T1/TS1 text fonts set from METAFONT bitmaps, as dvips set a page whose nameless Type 3 fonts are
+#: those bitmaps (`font_preamble`): the map pdfTeX reads leaves them out, so it falls back to PK at dvips's own
+#: resolution and mode (config.ps: D 600, M ljfour). arxiv.0910.1368 p12's body text is ecrm1095 at 600 dpi: its V is
+#: ecrm1095.600pk's to the pixel (63 x 64, offsets -2 61, advance 68); its fi is T1's code 28
+PK_MAP = "judge-pk.map"
+PK_PRE = "\\pdfmapfile{%s}\\pdfpkresolution=600 \\pdfpkmode{ljfour}" % PK_MAP
+#: and in the page's own designs. A page whose bitmaps are T1 (EC: its ligatures at codes 27-31) has a design at each of
+#: LaTeX's sizes, t1cmr.fd's (ecrm1095 at 10.95 pt), where fix-cm scales ecrm1000 over 10-12 pt (p12's a: ecrm1095.600pk's
+#: 40 px at -4, ecrm1000.657pk's 41 at -3). An OT1 page's cmr10 at 10.95 is cmr10 scaled, as fix-cm's ecrm1000 is.
+PK_T1 = "\\makeatletter\\input{t1cmr.fd}\\makeatother"
+
+
+def t1_bitmaps(pdf: str, names) -> bool:
+    """whether a nameless Type 3 font of the page ("Type3 (106 0 R)": mutool names it by its object) is T1-encoded:
+    its encoding's Differences use T1's ligature codes 27-31 (ff fi fl ffi ffl) and none of OT1's 11-15"""
+    codes = set()
+    for n in names:
+        m = re.fullmatch(r"Type3 \((\d+) 0 R\)", n)
+        if not m:
+            continue
+        font = subprocess.run(["mutool", "show", pdf, m[1]], capture_output=True, text=True).stdout
+        e = re.search(r"/Encoding\s+(\d+)\s+0\s+R", font)
+        enc = subprocess.run(["mutool", "show", pdf, e[1]], capture_output=True, text=True).stdout if e else font
+        d = re.search(r"/Differences\s*\[(.*?)\]", enc, re.S)
+        if d:                                       # a code, then names that take it and the codes after it
+            k = None
+            for tok in re.findall(r"\d+|/[^\s/\[\]]+", d[1]):
+                if tok[0] == "/":
+                    if k is not None:
+                        codes.add(k)
+                        k += 1
+                else:
+                    k = int(tok)
+    return bool(codes & set(range(27, 32))) and not codes & set(range(11, 16))
+PK_FONTS = re.compile(r"(?:ec|tc)[a-z]+\d+$")
+
+
+def pk_map() -> str:
+    """pdftex.map without the lines of the fonts PK_FONTS names (they are then set from PK)"""
+    src = subprocess.run(["kpsewhich", "pdftex.map"], capture_output=True, text=True, check=True).stdout.strip()
+    with open(src, encoding="latin-1") as fh:
+        return "".join(ln for ln in fh if not PK_FONTS.match(ln.split(" ", 1)[0]))
 
 
 #: mutool's name for a Type 3 font with no BaseFont: dvips's bitmap fonts (PK glyphs as images). It names no family,
@@ -438,6 +509,12 @@ def font_preamble(pdf: str, page: int) -> tuple[str, str]:
         pre = [x for x in pre if x != r"\usepackage{newtxmath}"] + [NEWTX_LIBERTINE]
     if any(re.match(r"CMTT\d", n) for n in glyphs):   # the page's typewriter is OT1 Computer Modern: T1's is cm-super,
         pre.append(OT1_TT)                            # whose m and - differ (board lib:d68e0271bd4d p334, 10 glyphs)
+    # text in nameless Type 3 (dvips's PK bitmaps) and no cm-super outline on the page: the reading's T1 text is set
+    # from the same bitmaps, compared ink against ink (T-0158 J2; against cm-super's outlines 43 of p12's 590 flagged)
+    if nameless and fam == "cm" and not any(re.match(r"SF[A-Z]{2}\d{4}$", n) for n in glyphs):
+        pre.append(PK_PRE)
+        if t1_bitmaps(pdf, [n for n in glyphs if TYPE3_NAMELESS.fullmatch(n)]):
+            pre.append(PK_T1)
     return fam, "\n".join(x for x in pre if x)
 
 
@@ -627,10 +704,12 @@ def along(cs, TA) -> tuple | None:
     return us.most_common(1)[0][0] if us else None
 
 
-def type3_names(pdf: str, page: int) -> set:
+def type3_names(pdf: str, page: int | None) -> set:
     """the page's Type 3 fonts by name without the subset prefix (a name some other font of the page also carries
-    is left out): poppler draws their glyphs from its glyph cache at the floor of the device origin"""
-    out = subprocess.run(["pdffonts", "-f", str(page), "-l", str(page), pdf], capture_output=True, text=True).stdout
+    is left out): poppler draws their glyphs from its glyph cache at the floor of the device origin. page None: the
+    whole document's"""
+    rng = [] if page is None else ["-f", str(page), "-l", str(page)]
+    out = subprocess.run(["pdffonts"] + rng + [pdf], capture_output=True, text=True).stdout
     kinds = collections.defaultdict(set)
     for ln in out.splitlines()[2:]:
         m = re.match(r"(\S+)\s+(Type 3|Type 1C|Type 1|TrueType|CID \S+(?: \S+)?)\s", ln)
@@ -682,6 +761,10 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
         if not t3c:
             t3c.append(type3_names(ink.a_pdf, ink.pno))
         return t3c[0]
+    # the reading's own Type 3 fonts: the PK bitmaps it is set in on a bitmap page (PK_PRE); such a rendered glyph is
+    # its page's ink, drawn as poppler draws the page's: from its glyph cache at the floor of the device origin
+    t3b = type3_names(bpdf, None) if PK_MAP in os.listdir(os.path.dirname(bpdf) or ".") else set()
+    inkb = {}                                       # reading page -> its index in the C job's `pageb` lines
     for i, ln, b, ca, cb, pairs, _ in work:
         TB = Origins(spec_b.traced(bo + i + 1, tb.get(bo + i + 1, [])))
         bg = [(q, TB.get(q[1], q[2], html.unescape(q[0]))) for q in cb]
@@ -699,6 +782,11 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                 if u:
                     mb = turned(mb[:2], u) + turned(mb[2:], u)
             sb = (FB.find(gb[4]), gb[1], mb, X, Y) if gb else "none"
+            ink_b = fname(gb[4] if gb else pbb[7]) in t3b     # a ligature's second letter too: its ink is there
+            if ink_b:
+                k_b = inkb.setdefault(bo + i + 1, len(inkb))
+                sb = (f"={k_b}", "-", (0.0, 0.0, 0.0, 0.0), math.floor(pbb[1] * S) - math.floor(pa[1] * S),
+                      math.floor(pbb[2] * S) - math.floor(pa[2] * S))
             names[(i, k)] = (sa[1] if sa is not None else pa[9] if len(pa) > 9 else "",   # an added letter of a
                              gb[1] if gb else pbb[9] if len(pbb) > 9 else "")              # composite: its name
             if gb is None:
@@ -716,7 +804,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                                 adds.append(("A",) + aplace[id(c)])
             dx, dy = X - pbb[1] * S, Y - pbb[2] * S             # B's frame -> A's window, by this pair's origins
             for q, g in bg:
-                if q is pbb or g is None:
+                if q is pbb or g is None or ink_b:     # an ink side holds its neighbours already
                     continue
                 if u:                                    # its offset from the pair's origin, turned like the pair
                     cs = [turned(((x - pbb[1]) * S, (y - pbb[2]) * S), u) for x in (q[3], q[5]) for y in (q[4], q[6])]
@@ -728,22 +816,26 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                     continue
                 if hit((q[3] * S + dx - 4, q[4] * S + dy - 4, q[5] * S + dx + 4, q[6] * S + dy + 4), win):
                     adds.append(("B", FB.find(g[4]), g[1], tuple(v * S for v in g[5]), q[1] * S + dx, q[2] * S + dy))
-            if sa is None and fname(pa[7]) in t3():     # the page's ink from the start, drawn snapped
+            if sa is None and fname(pa[7]) in t3() and not ink_b:     # the page's ink from the start, drawn snapped
                 sb, adds = snap(sb, adds, X, Y)
             jobs.append((sa, sb, win, adds))
             origin.append((X, Y, fname(pa[7])))
             keys.append(((i, k), len(jobs) - 1))
     need = any(j[0] is None for j in jobs)        # an A side that is the page's ink from the start
-    r, _ = glyph_job([FA, FB], jobs, ink.get()[3] if need else None)
+    pagebs = []
+    if inkb:                                         # the reading's pages its ink sides read, at 400 dpi
+        got = pgms(bpdf, list(inkb), DPI, wd)
+        pagebs = [(k, got[p][3]) for p, k in inkb.items()]
+    r, _ = glyph_job([FA, FB], jobs, ink.get()[3] if need else None, pagebs)
     redo = [j for j, v in enumerate(r) if isinstance(v, str) and v.startswith("A")]
     if redo:                                         # the page's ink where A's own program has no outline
         again = []
         for j in redo:
             sb, adds = jobs[j][1], [a for a in jobs[j][3] if a[0] == "B"]
-            if origin[j][2] in t3():
+            if origin[j][2] in t3() and not (isinstance(sb, tuple) and isinstance(sb[0], str)):
                 sb, adds = snap(sb, adds, origin[j][0], origin[j][1])
             again.append((None, sb, jobs[j][2], adds))
-        r2, _ = glyph_job([FA, FB], again, ink.get()[3])
+        r2, _ = glyph_job([FA, FB], again, ink.get()[3], pagebs)
         for j, v in zip(redo, r2):
             r[j] = v
         res["a_page_ink"] += len(redo)
@@ -832,7 +924,7 @@ class Fonts:
         return out
 
 
-def glyph_job(fonts: list, pairs: list, page_pgm: str | None) -> tuple[list, dict]:
+def glyph_job(fonts: list, pairs: list, page_pgm: str | None, pagebs: list = ()) -> tuple[list, dict]:
     """one `inkcmp glyphs` run. pairs: (A side, B side, window[, adds]); a side is (font ids, glyph name, matrix, X, Y)
     or None (A: the page's ink); adds: ("A"|"B", font ids, glyph name, matrix, X, Y), neighbours' ink in the window. Font candidates are tried in order: the first whose program holds the glyph.
     Returns per pair (xor, solid, piece) or the reason there is no outline, and the fonts' names."""
@@ -841,13 +933,15 @@ def glyph_job(fonts: list, pairs: list, page_pgm: str | None) -> tuple[list, dic
         job += [f"font {i} {f}" for i, f in fs.ids().items()]
     if page_pgm:
         job.append(f"page {page_pgm} {INK}")
+    job += [f"pageb {k} {f} {INK}" for k, f in pagebs]   # the reading's pages, for B sides "=k"
     if HOLE_MIN != 1:                              # (the C default is 1)
         job.append(f"holes {HOLE_MIN}")
     def place(s):
         if s == "none":
             return "none - 0 0 0 0 0 0"
         ids, g, m, X, Y = s
-        return f"{','.join(map(str, ids)) if ids else -2} {g} {m[0]!r} {m[1]!r} {m[2]!r} {m[3]!r} {X!r} {Y!r}"
+        ids = ids if isinstance(ids, str) else ",".join(map(str, ids)) if ids else -2       # "=k": B's ink
+        return f"{ids} {g} {m[0]!r} {m[1]!r} {m[2]!r} {m[3]!r} {X!r} {Y!r}"
     for a, b, w, *more in pairs:
         sides = ["-1 - 0 0 0 0 0 0" if s is None else place(s) for s in (a, b)]
         job.append(f"pair {sides[0]} {sides[1]} {w[0]} {w[1]} {w[2]} {w[3]}")
@@ -1187,9 +1281,14 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
                      "\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
                      "\\usepackage[loading]{tracefnt}\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}" + FIRSTCHAR + "\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
                      + "\n\\end{document}\n")
+        env = None
+        if PK_PRE in pre_run:                        # its map beside lines.tex; METAFONT's bitmaps in the job's folder
+            with open(os.path.join(wd, PK_MAP), "w", encoding="latin-1") as fh:
+                fh.write(pk_map())
+            env = dict(os.environ, VARTEXFONTS=os.path.join(os.path.abspath(wd), "pk"))
         try:
             subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "lines.tex"], cwd=wd,
-                           capture_output=True, timeout=PDFLATEX_TIMEOUT)
+                           capture_output=True, timeout=PDFLATEX_TIMEOUT, env=env)
         except subprocess.TimeoutExpired:           # whatever made it loop: no line of the group is trusted
             for j, (texts, _) in enumerate(jobs):
                 failed[j] = {i: "pdflatex timed out" for i in range(len(texts))}
@@ -1867,7 +1966,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         fut_b = pool_b.submit(Spec, bpdf, bo + 1, bo + len(lv), os.path.join(wd, "specB"),
                               os.path.join(wd, "fontsB") if route == "glyph" else None)
         pool_b.shutdown(wait=False)
-    bc = chars(bpdf, bo + 1, bo + len(lv)) if os.path.exists(bpdf) else []
+    # the reading set in PK bitmaps (PK_PRE) has no ToUnicode: its T1 codes are read from the TeX tree's tables
+    pk = os.path.exists(os.path.join(os.path.dirname(bpdf) or ".", PK_MAP))
+    bc = chars(bpdf, bo + 1, bo + len(lv), t1_text() if pk else None) if os.path.exists(bpdf) else []
     spec_b = fut_b.result() if fut_b is not None else None
     if not bc:
         spec_b = None

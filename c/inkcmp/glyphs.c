@@ -1055,6 +1055,7 @@ void ig_score(const uint8_t *a, const uint8_t *b, int w, int h, long *xor_px, lo
      INKGLYPHS1
      font <id> <path>                      ids 0.., a Type 1 or CFF program
      page <path.pgm> <ink>                 optional: the original page at 400 dpi; ink = grey < <ink>
+     pageb <k> <path.pgm> <ink>            optional: rendered page k (0..) of the reading at 400 dpi, for B sides `=k`
      holes <min area>                      optional: a white region counts as a hole from this many pixels (default 1)
      pair <fa> <ga> <a b c d> <X> <Y> <fb> <gb> <a b c d> <X> <Y> <x0> <y0> <x1> <y1>
      (a font field may list candidate ids, comma-separated: the first whose program holds the glyph is used)
@@ -1062,7 +1063,10 @@ void ig_score(const uint8_t *a, const uint8_t *b, int w, int h, long *xor_px, lo
                                            window); a neighbour without an outline adds nothing
      end
    A side is a glyph (font id, glyph name, 2x2 matrix in device px per em, origin), or, with font id -1, the page's
-   ink, or, with font id `none`, no ink but what its `add` lines bring (name and matrix ignored for both). The window [x0, x1) x [y0, y1) is page px.
+   ink, or, with font id `none`, no ink but what its `add` lines bring (name and matrix ignored for both). A B side
+   with font id `=k` is the ink of reading page k (`pageb`), the window shifted by its X Y (integers: B page px minus
+   A page px), for a rendered glyph with no outline that the renderer draws as the page's does (a PK bitmap against a
+   PK bitmap, T-0158 J2); its neighbours are in that ink already. The window [x0, x1) x [y0, y1) is page px.
    stdout: `font <id> ok <name>` or `font <id> fail <reason>`, then per pair `P <xor> <solid> <piece> <holes A> <holes B>`
    (holes of the two sides' own ink before any `add`) or
    `O A|B <reason>` (no outline), then `end <pairs> <no outline>`. */
@@ -1149,6 +1153,7 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
   char line[4096];
   IgFont **F = NULL; size_t nf = 0;
   Pg page = {0, 0, NULL, 0};
+  Pg *pb = NULL; size_t npb = 0;                     /* `pageb`: the reading's rendered pages */
   uint8_t *ma = NULL, *mb = NULL, *mt = NULL; size_t mcap = 0;
   long pairs = 0, none = 0;
   int rc = 2;
@@ -1179,6 +1184,20 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
       char path[3000]; int ink;
       if (sscanf(line + 5, "%2999s %d", path, &ink) != 2 || !read_pgm(path, &page)) { fprintf(errf, "inkcmp glyphs: cannot read page\n"); goto done; }
       page.ink = ink;
+      continue;
+    }
+    if (!strncmp(line, "pageb ", 6)) {
+      char path[3000]; int ink; long k;
+      if (sscanf(line + 6, "%ld %2999s %d", &k, path, &ink) != 3 || k < 0 || k > 100000) { fprintf(errf, "inkcmp glyphs: bad pageb line\n"); goto done; }
+      if ((size_t)k >= npb) {
+        Pg *g = realloc(pb, (size_t)(k + 1) * sizeof *g);
+        if (!g) goto done;
+        for (size_t j = npb; j <= (size_t)k; j++) g[j] = (Pg){0, 0, NULL, 0};
+        pb = g; npb = (size_t)k + 1;
+      }
+      free(pb[k].g); pb[k].g = NULL;
+      if (!read_pgm(path, &pb[k])) { fprintf(errf, "inkcmp glyphs: cannot read pageb\n"); goto done; }
+      pb[k].ink = ink;
       continue;
     }
     if (!strncmp(line, "add ", 4)) {                 /* another glyph's ink on one side of the pair above */
@@ -1223,6 +1242,30 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
         continue;
       }
       if (!strcmp(ids[sd], "none")) { memset(mk[sd], 0, N); continue; }      /* no glyph of its own: adds only */
+      if (sd == 1 && ids[sd][0] == '=') {                                   /* the reading's rendered ink */
+        char *e; long k = strtol(ids[sd] + 1, &e, 10);
+        if (*e || k < 0 || (size_t)k >= npb || !pb[k].g) { q.bad = sd; snprintf(q.why, sizeof q.why, "no pageb"); break; }
+        /* registered: of the shifts within REG px of X Y, the one whose ink differs least from A's. Both sides
+           are drawn from a glyph cache at the floor of their device origin, and the origins known here are each a
+           fraction of a pixel from the one the renderer floored (0910.1368 p12: 17 of 80 pairs at the shift
+           given, all but 40 of 590 within 2 px); a wrong letter is still a wrong letter at any shift */
+        enum { REG = 2 };
+        long sx = lround(O[sd][0]), sy = lround(O[sd][1]), best = -1;
+        const Pg *g = &pb[k];
+        for (long oy = -REG; oy <= REG; oy++)
+          for (long ox = -REG; ox <= REG; ox++) {
+            long d = 0;
+            for (int j = 0; j < h; j++)
+              for (int i = 0; i < w; i++) {
+                long X = x0 + i + sx + ox, Y = y0 + j + sy + oy;
+                uint8_t v = X >= 0 && Y >= 0 && X < g->w && Y < g->h && g->g[(size_t)Y * g->w + X] < g->ink;
+                mt[(size_t)j * w + i] = v;
+                d += v != ma[(size_t)j * w + i];
+              }
+            if (best < 0 || d < best) { best = d; memcpy(mk[sd], mt, N); }
+          }
+        continue;
+      }
       if (place(F, nf, ids[sd], nm[sd], m[sd], O[sd][0], O[sd][1], x0, y0, w, h, mk[sd], q.why, sizeof q.why) < 0) q.bad = sd;
     }
     if (q.bad < 0) { q.ha = holes_of(ma, w, h); q.hb = holes_of(mb, w, h); }   /* the pair's own glyphs, no neighbours */
@@ -1231,6 +1274,7 @@ int ig_main(FILE *in, FILE *out, FILE *errf) {
   else fprintf(out, "end %ld %ld\n", pairs, none);
 done:
   for (size_t k = 0; k < nf; k++) ig_font_free(F[k]);
-  free(F); free(page.g); free(ma); free(mb); free(mt);
+  for (size_t k = 0; k < npb; k++) free(pb[k].g);
+  free(F); free(page.g); free(pb); free(ma); free(mb); free(mt);
   return rc;
 }

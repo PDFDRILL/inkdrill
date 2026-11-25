@@ -1537,12 +1537,35 @@ FIXTURE_T3_DVIPS = os.path.join(os.path.dirname(__file__), "fixtures", "type3-dv
 
 
 class JudgeNamelessType3(unittest.TestCase):
-    """T-0158 J2: dvips + Ghostscript bitmap fonts are Type 3 with no name (mutool: "Type3 (21 0 R)"). Counted as an
+    """T-0158 J2 and its remainder (2026-11-25): dvips + Ghostscript bitmap fonts are Type 3 with no name (mutool: "Type3 (21 0 R)"). Counted as an
     unmapped family they made a CM page FONT_UNMAPPED: arxiv.0910.1368 p12, 870 body-text glyphs in "Type3 (106 0 R)",
     its 6 T-0158 rectangles NO_TEXT. The fixture is that case made small: `latex` (12pt article) of two lines, "Some
     text set from bitmaps, \\textbf{bold words}, and $x+y$ in maths." and "A second line all in the bitmap text
     font.", `dvips -Ppk -u nocmr12.map` (pdftex.map without its cmr12 line, so cmr12 comes as a PK bitmap), `ps2pdf`:
     the text in a nameless Type 3, the bold and the maths named Type 1."""
+
+    @unittest.skipUnless(os.path.exists(judge.INKCMP), "needs build/inkcmp (make)")
+    def test_ink_side_is_registered(self):
+        """a B side "=k" is reading page k's ink, at the shift given and within 2 px of it: both renderers floor a
+        device origin known here only to a fraction of a pixel (0910.1368 p12: 17 of 80 pairs at the shift given)"""
+        def pgm(path, dots):
+            px = bytearray(b"\xff" * 40 * 40)
+            for x, y in dots:
+                px[y * 40 + x] = 0
+            with open(path, "wb") as fh:
+                fh.write(b"P5 40 40 255\n" + bytes(px))
+        blob = [(x, y) for x in range(10, 16) for y in range(10, 20) if not (12 <= x <= 13 and 12 <= y <= 16)]
+        with tempfile.TemporaryDirectory(prefix="test-judge-pageb-") as d:
+            a, b = os.path.join(d, "a.pgm"), os.path.join(d, "b.pgm")
+            pgm(a, blob)
+            pgm(b, [(x + 1, y + 5) for x, y in blob])               # one px right of the shift given (0, 5)
+            ink = lambda dx, dy: judge.glyph_job([], [(None, ("=0", "-", (0.0, 0.0, 0.0, 0.0), dx, dy),
+                                                       (5, 5, 25, 25), [])], a, [(0, b)])[0][0]
+            self.assertEqual(ink(0, 5)[:3], (0, 0, 0))
+            self.assertEqual(ink(1, 5)[:3], (0, 0, 0))
+            self.assertGreater(ink(4, 5)[0], 0, "3 px off: not registered")
+            pgm(b, [(x + 1, y + 5) for x, y in blob if x != 10])    # one column less: a difference at any shift
+            self.assertGreater(ink(0, 5)[0], 0)
 
     def test_names(self):
         self.assertTrue(judge.TYPE3_NAMELESS.fullmatch("Type3 (106 0 R)"))
@@ -1563,24 +1586,21 @@ class JudgeNamelessType3(unittest.TestCase):
         self.assertEqual(judge.vote_size([], True), 10.0)
         self.assertEqual(judge.vote_size([9.0, 9.0], False, 10.9091), 9.0)
 
-    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
-    def test_the_page_is_judged(self):
-        self.assertEqual(judge.font_preamble(FIXTURE_T3_DVIPS, 1), ("cm", ""))
-        # the line boxes from the glyphs' own quads, by baseline: pdftotext's lines are taller for Type 3 text (its
-        # FontBBox), and the second line's box reached over the first line's p
+    def judged(self, pdf: str, readings: dict) -> dict:
+        """each reading (two lines) judged against the page; the line boxes from the glyphs' own quads, by baseline:
+        pdftotext's lines are taller for Type 3 text (its FontBBox), and the second line's box reached over the first
+        line's p"""
         rows = collections.defaultdict(list)
-        for c in judge.chars(FIXTURE_T3_DVIPS, 1, 1)[0]:
+        for c in judge.chars(pdf, 1, 1)[0]:
             rows[round(c[2])].append(c)
         bs = [(min(c[3] for c in r), min(c[4] for c in r), max(c[5] for c in r), max(c[6] for c in r))
               for _, r in sorted(rows.items())]
         self.assertEqual(len(bs), 2, bs)
-        w, h = judge.page_size(FIXTURE_T3_DVIPS, 1)
+        w, h = judge.page_size(pdf, 1)
         k = 200 / 72
-        first = "Some text set from bitmaps, \\textbf{bold words}, and \\(x+y\\) in maths."
-        second = "A second line all in the bitmap text font."
         got = {}
         with tempfile.TemporaryDirectory(prefix="test-judge-t3d-") as d:
-            for name, texts in (("own", (first, second)), ("one", (first.replace("maths.", "mathe."), second))):
+            for name, texts in readings.items():
                 doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
                     {"type": "text", "text": t, "region": {
                         "top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
@@ -1590,25 +1610,53 @@ class JudgeNamelessType3(unittest.TestCase):
                 with open(lj, "w") as fh:
                     json.dump(doc, fh)
                 out = io.StringIO()
-                res = judge.judge(FIXTURE_T3_DVIPS, 1, lj, os.path.join(d, name), out=out, route="glyph", setter=False)
+                res = judge.judge(pdf, 1, lj, os.path.join(d, name), out=out, route="glyph", setter=False)
                 got[name] = (res, out.getvalue().splitlines())
+                # METAFONT's bitmaps go to the job's folder, never to the user's texmf-var (house rule: no file
+                # outside the project)
+                pks = [f for _, _, fs in os.walk(os.path.join(d, name, "pk")) for f in fs if f.endswith("pk")]
+                self.assertTrue(pks, "no PK bitmap in the job's folder")
+        return got
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_t1_bitmaps_are_set_in_their_own_designs(self):
+        """an 11pt T1 page (`latex`, `dvips -Ppk -u noec.map`: pdftex.map without its ec*/tc* lines, `ps2pdf`): its
+        body text is ecrm1095.600pk. fix-cm would set ecrm1000 scaled to 10.95 pt, whose bitmaps differ"""
+        pdf = os.path.join(os.path.dirname(__file__), "fixtures", "type3-dvips-ec.pdf")
+        self.assertEqual(judge.font_preamble(pdf, 1), ("cm", judge.PK_PRE + "\n" + judge.PK_T1))
+        self.assertFalse(judge.t1_bitmaps(FIXTURE_T3_DVIPS, ["Type3 (21 0 R)"]), "the OT1 fixture's cmr12")
+        first = "A first line of text, {\\fontencoding{OT1}\\selectfont 1234} and \\(x+y\\) in maths."
+        second = "The second line is all in the bitmap text font."
+        res, lines = self.judged(pdf, {"own": (first, second)})["own"]
+        self.assertEqual(lines[-1], "STATUS OK")
+        self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0))
+        t3 = [ln.split() for ln in lines if ln.startswith("G ") and "Type3" in ln]
+        self.assertGreater(len(t3), 60)
+        self.assertEqual([f for f in t3 if f[8] == "1"], [])
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_the_page_is_judged(self):
+        self.assertEqual(judge.font_preamble(FIXTURE_T3_DVIPS, 1), ("cm", judge.PK_PRE))   # set in the same bitmaps
+        first = "Some text set from bitmaps, \\textbf{bold words}, and \\(x+y\\) in maths."
+        second = "A second line all in the bitmap text font."
+        got = self.judged(FIXTURE_T3_DVIPS, {"own": (first, second), "one": (first.replace("maths.", "mathe."), second)})
         res, lines = got["own"]
         self.assertEqual(lines[-1], "STATUS OK")
         self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0))
         g = [ln.split() for ln in lines if ln.startswith("G ")]
         t3 = [f for f in g if "Type3" in " ".join(f)]
         self.assertEqual(len(t3), sum(1 for f in g if f[1] == "L1") + 36, "the bitmap text of both lines is paired")
-        # the second line has no named glyph: it is set at the page's 11.955 pt, not at 10. Open: a PK bitmap (600
-        # dpi, ljfour) is heavier than TeX's outline, so clean glyphs flag (8 of 34 here, 2026-11-24)
+        # the second line has no named glyph: it is set at the page's 11.955 pt, not at 10
         l1 = [f for f in g if f[1] == "L1"]
         self.assertEqual(len(l1), 34)
-        self.assertLessEqual(sum(f[8] == "1" for f in l1), 10, l1)
-        # the planted e for s is above every clean bitmap glyph
-        clean = max(int(f[6]) for f in t3)
+        # the reading's text is set in the page's own PK bitmaps (PK_PRE) and compared ink against ink: no clean
+        # bitmap glyph flags (against cm-super's outlines 14 of the 70 did, solid up to 41)
+        self.assertEqual([f for f in t3 if f[8] == "1"], [])
+        self.assertEqual(res["glyph"], 0)
         res1, lines1 = got["one"]
         (plant,) = [ln.split() for ln in lines1 if ln.startswith("G L0 s e ")]
-        self.assertGreater(int(plant[6]), 2 * clean, (plant, clean))
-        self.assertEqual(res1["glyph"], res["glyph"] + 1)
+        self.assertEqual(plant[8], "1", plant)
+        self.assertEqual(res1["glyph"], 1)
 
 
 class JudgeMathAlphanumerics(unittest.TestCase):
