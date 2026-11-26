@@ -1659,6 +1659,22 @@ class JudgeNamelessType3(unittest.TestCase):
         self.assertEqual(res1["glyph"], 1)
 
 
+class JudgeMathScript(unittest.TestCase):
+    """\\mathscr (mathrsfs) is in the judge's setup: a correct RSFS reading compiled to NOT_COMPILED ("Undefined
+    control sequence") before (glyphdrill3-e4, 2026-11-26); board lib:b21e554b9232's PDF sets rsfs10"""
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_mathscr_line_compiles_and_pairs(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-rsfs-") as d:
+            res, lines = _accent_case(d, "s", "The space $\\mathscr{L}(X)$ here.", "The space \\(\\mathscr{L}(X)\\) here.",
+                                      "\\usepackage{mathrsfs}\n", route="glyph")
+            self.assertEqual(res["not_compiled"], 0, lines)
+            self.assertEqual([ln for ln in lines if ln.startswith("N ")], [])
+            (g,) = [ln.split() for ln in lines if ln.startswith("G L0 L L ")]
+            self.assertEqual(g[8], "0", g)                     # RSFS L against RSFS L: equal ink
+            self.assertIn("RSFS", g[11].upper())
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

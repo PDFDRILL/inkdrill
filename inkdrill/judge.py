@@ -1279,7 +1279,10 @@ def compile_group(jobs: list, pre: str, wd: str, passes: int = 12) -> tuple[str,
         with open(os.path.join(wd, "lines.tex"), "w", encoding="utf-8") as fh:
             fh.write("\\RequirePackage{fix-cm}\n"     # designs by size range, as the page's own (p174)
                      "\\documentclass[multi=pline,border=2pt,varwidth=60cm]{standalone}\n"
-                     "\\usepackage[loading]{tracefnt}\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}" + FIRSTCHAR + "\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
+                     "\\usepackage[loading]{tracefnt}\\usepackage[T1]{fontenc}\\usepackage{amsmath,amssymb,amsfonts}"
+                     # \mathscr: RSFS, as a page that prints it sets it (board lib:b21e554b9232's rsfs10); it only
+                     # declares the alphabet, a line without it is set as before (glyphdrill3-e4, 2026-11-26)
+                     "\\usepackage{mathrsfs}" + FIRSTCHAR + "\n" + pre_run + "\n\\begin{document}\n" + "\n".join(body)
                      + "\n\\end{document}\n")
         env = None
         if PK_PRE in pre_run:                        # its map beside lines.tex; METAFONT's bitmaps in the job's folder

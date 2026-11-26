@@ -271,6 +271,9 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-26:** the setup loads mathrsfs, so `\mathscr` sets RSFS, as a page that prints it does (board
+    lib:b21e554b9232's PDF has rsfs10). Before, a correct RSFS reading was NOT_COMPILED ("Undefined control sequence").
+    The package only declares the alphabet: the 49 board jobs are unchanged, and no judged board line uses \mathscr.
   - **changed 2026-11-24 (T-0158 J2):** a Type 3 font with no name (mutool: `Type3 (106 0 R)`, dvips's PK bitmaps
     through Ghostscript) names no family, so it does not vote. The page's named fonts say the family, and a page with
     none stays unmapped. Its glyphs are compared against the page's ink like any Type 3 glyph. Its size does not vote
