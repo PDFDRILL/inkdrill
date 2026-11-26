@@ -24,7 +24,8 @@ Output, one line per paired glyph:
     G L<i> <A char> <B char> <equal> <xor> <solid> <largest piece> <flag> <A style> <B style> <A font> <x0 y0 x1 y1> <place>
 (place, appended 2026-11-24: how far the reading set the pair above (+) or below (-) where its page neighbours and its
 line say it belongs, as a share of the page glyph's size, `placed`; over PLACE the pair is flagged and a glyph finding,
-counted also as `misplaced` in JUDGE1)
+counted also as `misplaced` in JUDGE1) <kind> (appended 2026-11-27, J4: what JUDGE1 counted for the pair, g glyph
+finding, s style finding, - none; a flagged pair in a face TeX cannot set is -)
 Then `U L<i> A|B <char> <x0 y0 x1 y1>` for unpaired glyphs. The box is the glyph's quad box in the R lines' frame (the
 page at 400 dpi, px): the page glyph's on G and side-A U lines, the rendered glyph's carried into the page by its line's
 median pair offset on side-B U lines (fields appended 2026-11-21, so a parser by index from the front still reads), `N L<i> NOT_COMPILED <LaTeX error> <x0 y0 x1 y1>` (the line's region box, same frame: read it as the last four
@@ -1802,10 +1803,12 @@ def placed(pairs: list, near: int = 4, window: int = 24) -> list:
     return out
 
 
-def count(res, t: str, tb: str, sa: str, sb: str, fa: str, flag: bool, pl: float) -> None:
+def count(res, t: str, tb: str, sa: str, sb: str, fa: str, flag: bool, pl: float) -> str:
     """one judged pair into the page's counts: flagged by its ink, a glyph or style finding by `finding`; a pair
     whose ink agrees but which sits more than PLACE of its size off its place (`placed`) is a glyph finding and
-    `misplaced`, in an unmeasurable face too: its place is read from the page's text, not from a font program"""
+    `misplaced`, in an unmeasurable face too: its place is read from the page's text, not from a font program.
+    Returns what was counted for the pair, the G line's last field: g (glyph finding), s (style finding), - (none;
+    so a flagged pair in a face TeX cannot set, J4)"""
     res["glyphs"] += 1
     um = unsettable(fa)
     res["unmeasurable"] += um
@@ -1814,10 +1817,13 @@ def count(res, t: str, tb: str, sa: str, sb: str, fa: str, flag: bool, pl: float
         kind = finding(t, tb, sa, sb, um)
         if kind:
             res[kind] += 1
-    elif abs(pl) > PLACE:
+        return {"glyph": "g", "style": "s"}.get(kind, "-")
+    if abs(pl) > PLACE:
         res["flagged"] += 1
         res["misplaced"] += 1
         res["glyph"] += 1
+        return "g"
+    return "-"
 
 
 def pbox(c, dx: float = 0.0, dy: float = 0.0) -> str:
@@ -2224,9 +2230,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 if maths_digit(t, tb, fa, fb, fam) and "x" not in sa:
                     sa = "x" if sa == "-" else sa + "x"  # a digit the page set as maths, the reading as text
                 pl = places[i][k]
+                kind = count(res, t, tb, sa, sb, fa, flag, pl)
                 print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag or abs(pl) > PLACE)} {sa} {sb} {fa} "
-                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f}", file=out)
-                count(res, t, tb, sa, sb, fa, flag, pl)
+                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f} {kind}", file=out)
             if is_formula(ln) and pairs:
                 aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
@@ -2255,9 +2261,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             flag = so >= THRESHOLD
             sa, sb = style(fa) or "-", style(fb) or "-"
             pl = places[i][k]
+            kind = count(res, t, tb, sa, sb, fa, flag, pl)
             print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag or abs(pl) > PLACE)} {sa} {sb} {fa} "
-                      f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f}", file=out)
-            count(res, t, tb, sa, sb, fa, flag, pl)
+                  f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f} {kind}", file=out)
         if is_formula(ln) and pairs:
             rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
                      glyphs=glyph_owners,

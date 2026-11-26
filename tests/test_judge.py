@@ -149,11 +149,12 @@ class JudgeBornDigital(unittest.TestCase):
         k, tol = 400 / 200, 8                     # region px (200 dpi) -> 400 dpi; 2 pt of slack for quad boxes
         seen = collections.Counter()
         for r in rows:
-            want = 17 if r[0] == "G" else 8               # G: the box, then the place (2026-11-24)
+            want = 18 if r[0] == "G" else 8               # G: the box, the place (2026-11-24), the kind (J4)
             self.assertEqual(len(r), want, r)
             x0, y0, x1, y1 = map(int, r[12:16] if r[0] == "G" else r[-4:])
             if r[0] == "G":
                 self.assertLessEqual(abs(float(r[16])), judge.PLACE, r)
+                self.assertIn(r[17], ("g", "s", "-"), r)
             g = lines[int(r[1][1:])]["region"]
             rx0, ry0 = g["top_left_x"] * k, g["top_left_y"] * k
             rx1, ry1 = rx0 + g["width"] * k, ry0 + g["height"] * k
@@ -1747,6 +1748,32 @@ class JudgeOT1Quotes(unittest.TestCase):
                  ("&#x201c;", "&#x201d;", "&#x2018;", "&#x2019;")]
             self.assertEqual(len(q), 4, lines)
             self.assertEqual([f[8] for f in q], ["0"] * 4, q)
+
+
+class JudgeFindingKind(unittest.TestCase):
+    """J4: each G line's last field is what JUDGE1 counted for the pair, so a reader of the G lines (board_run's
+    finding_boxes) counts as the residual does: a flagged pair in a face TeX cannot set (MathTime) is no glyph finding,
+    a pair in the wrong place is one in any face"""
+
+    def test_count_returns_the_kind(self):
+        res = collections.Counter()
+        self.assertEqual(judge.count(res, "a", "b", "-", "-", "CMR10", True, 0.0), "g")
+        self.assertEqual(judge.count(res, "a", "a", "-", "b", "CMR10", True, 0.0), "s")
+        self.assertEqual(judge.count(res, "[", "[", "-", "-", "YtllkcRjyfrxMTEX", True, 0.0), "-")   # c57a p293
+        self.assertEqual(judge.count(res, "2", "2", "-", "-", "YtllkcRjyfrxMTEX", False, 1.4), "g")  # misplaced
+        self.assertEqual(judge.count(res, "a", "a", "-", "-", "CMR10", False, 0.0), "-")
+        self.assertEqual((res["glyph"], res["style"], res["unmeasurable"], res["glyphs"]), (2, 1, 2, 5))
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_kinds_add_up_to_judge1(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-kind-") as d:
+            res, lines = _accent_case(d, "k", "The value $x_2$ and some \\textit{italic} text.",
+                                      "The valve \\(x^2\\) and some italic text.", route="glyph")
+            g = [ln.split() for ln in lines if ln.startswith("G ")]
+            kinds = collections.Counter(f[17] for f in g)
+            self.assertEqual((kinds["g"], kinds["s"]), (res["glyph"], res["style"]), g)
+            self.assertGreater(kinds["g"], 0)
+            self.assertGreater(kinds["s"], 0)
 
 
 class JudgeMathAlphanumerics(unittest.TestCase):

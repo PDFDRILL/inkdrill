@@ -286,6 +286,10 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **added 2026-11-27 (J4):** each G line ends with what JUDGE1 counted for the pair: `g` glyph finding, `s` style
+    finding, `-` none. A flagged pair in a face TeX cannot set (MathTime, Optima, Myriad Pro) is `-`, and a pair in
+    the wrong place is `g` in any face. A reader of the G lines (board_run's finding_boxes) can then count as the
+    residual does. JUDGE1 is unchanged: byte-identical on the 49 board jobs, and the G lines differ only by this field.
   - **changed 2026-11-26:** on a page whose text is OT1 Computer Modern (CMR fonts, no cm-super, not T1 bitmaps),
     the reading's \textquotedblleft and \textquotedblright take cmr's own OT1 glyphs (92, 34), as the page's TeX set
     `` and ''. The judge's T1 set them from cm-super's SFRM, another design: cmr10 against sfrm1000 at 10 pt gives
