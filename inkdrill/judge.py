@@ -1835,13 +1835,41 @@ def bands(cs: list) -> list:
     return [sorted(b[2], key=lambda c: c[1]) for b in out]
 
 
+def sequence_pairs(ca: list, cb: list) -> tuple:
+    """the sequence pairing of two glyph orders: equal runs pair, and a replaced run of equal length pairs glyph for
+    glyph (a different character is a finding); the rest is unpaired. Returns (pairs, unpaired A, unpaired B)"""
+    pairs, ua, ub = [], [], []
+    sm = difflib.SequenceMatcher(a=[c[0] for c in ca], b=[c[0] for c in cb], autojunk=False)
+    for op, a0, a1, b0, b1 in sm.get_opcodes():
+        if op == "equal" or (op == "replace" and a1 - a0 == b1 - b0):
+            pairs += list(zip(ca[a0:a1], cb[b0:b1]))
+        else:
+            ua += ca[a0:a1]
+            ub += cb[b0:b1]
+    return pairs, ua, ub
+
+
+def choose_order(ca: list, cb: list, rows_allowed: bool = True) -> tuple:
+    """the x order's sequence pairing, or the printed rows' (`printed_rows`) where that pairs more glyphs; ties keep
+    the x order. Returns (ca, cb, pairs, unpaired A, unpaired B, by_row)"""
+    pairs, ua, ub = sequence_pairs(ca, cb)
+    rows = printed_rows(ca, cb) if rows_allowed else None
+    if rows:
+        p2, a2, b2 = sequence_pairs(*rows)
+        if len(p2) > len(pairs):
+            return rows[0], rows[1], p2, a2, b2, 1
+    return ca, cb, pairs, ua, ub, 0
+
+
 def printed_rows(ca: list, cb: list) -> tuple | None:
     """both sides in row order when the line is several printed rows: the same number of bands (>= 2) on both sides,
     band for band of similar size (glyph counts within 30 %, or 2). Sorted by x alone, rows interleave, and a print
     that packs one row tighter than another (or than the judge sets it) interleaves them otherwise than the rendered
     line, so the sequence pairing leaves glyphs of every row unpaired on both sides (1511.08771 p2709 Table 560, an
     aligned cell of 4 rows: 77 / 77 unpaired). Bands that differ between the sides (a script chaining on one side
-    only) keep the x order."""
+    only) keep the x order. The caller keeps the row order only where it pairs more glyphs than the x order (board
+    lib:1a36bfe66b9c p154 Gemma4 L3: a prime in the main band on the page and above it in the reading left the page's
+    phi and the reading's, equal ink, unpaired)."""
     ra, rb = bands(ca), bands(cb)
     if len(ra) < 2 or len(ra) != len(rb):
         return None
@@ -2099,22 +2127,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         if u:                                       # a rotated line: its glyphs in the order they are written
             ca = sorted(ca, key=lambda c: c[1] * u[0] + c[2] * u[1])
         cb = sorted(bc[i], key=lambda c: c[1])
-        rows = printed_rows(ca, cb) if not u else None
-        if rows:                                    # several printed rows on both sides: paired row by row
-            ca, cb = rows
-            res["lines_by_row"] += 1
         if not ca or not cb:
             res["lines_empty"] += 1
             continue
-        pairs, ulines = [], []
-        sm = difflib.SequenceMatcher(a=[c[0] for c in ca], b=[c[0] for c in cb], autojunk=False)
-        ua, ub = [], []
-        for op, a0, a1, b0, b1 in sm.get_opcodes():
-            if op == "equal" or (op == "replace" and a1 - a0 == b1 - b0):
-                pairs += list(zip(ca[a0:a1], cb[b0:b1]))
-            else:
-                ua += ca[a0:a1]
-                ub += cb[b0:b1]
+        ca, cb, pairs, ua, ub, by_row = choose_order(ca, cb, rows_allowed=not u)
+        res["lines_by_row"] += by_row
+        ulines = []
         if is_formula(ln):                           # maths only: in prose the x order is the reading order
             pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
             pairs, ua, ub = twins(pairs, ua, ub)

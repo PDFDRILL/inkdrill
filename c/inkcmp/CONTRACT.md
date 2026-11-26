@@ -232,6 +232,11 @@ Fresh plants (seed 11, 12 per page) on pages not used to find the threshold. Sam
     than the judge sets it interleaves them otherwise, so every row left glyphs unpaired on both sides. The judge does
     not fit a row's width to its box (B3: it never scaled lines). Order only changes which glyphs pair; each pair is
     still compared at its own origin, and a missing glyph stays unpaired.
+    - The row order is kept only where it pairs more glyphs than the x order; ties keep the x order (`choose_order`,
+      2026-11-26). Board state 83 found one row worse: lib:1a36bfe66b9c p154 Gemma4, 0.0031 → 0.0044. On its L3 a
+      prime touches the main band on the page but sits above it in the reading. In row order the page's ϕ (U+03D5)
+      and the reading's φ (U+03C6), equal ink, met a 2-against-1 replace and went unpaired. With the rule that row is
+      identical to the old judge again.
     - Measured: 1511.08771 p2709 Gemma4 (Table 560, an aligned cell of 4 rows): unpaired 714/714 → 1/1, residual
       0.6490 → 0.0043; its 205 glyph findings were cross-row pairs. On the 49 board jobs one row moves: lib:c57ac038ae5f
       p293 MathPix 0.0380 → 0.0169 (12/12 unpaired → 0 on L18 and L28, whose reading equals the print).

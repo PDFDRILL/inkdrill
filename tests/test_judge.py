@@ -1695,6 +1695,28 @@ class JudgePrintedRows(unittest.TestCase):
         big = [g("x", k, 0, 10) for k in range(10)] + [g("y", 0, 20, 30)]
         self.assertIsNone(judge.printed_rows(big, big[:3] + [g("y", 0, 20, 30)]), "10 against 3 glyphs: not the same row")
 
+    def test_row_order_only_where_it_pairs_more(self):
+        """board lib:1a36bfe66b9c p154 Gemma4 L3: the page's prime touches the main band, the reading's sits above
+        it; in row order the page's phi (U+03D5) and the reading's (U+03C6), equal ink, met a 2-against-1 replace and
+        went unpaired. The x order paired them, so it is kept"""
+        g = self.g
+        a = [g("v", 0, 0, 8), g("S", 0, 10, 30), g("'", 4, 9, 14), g("&#x3d5;", 8, 12, 30), g("b", 12, 12, 30),
+             g("d", 0, 32, 40)]
+        b = [g("v", 0, 0, 8), g("S", 0, 10, 30), g("'", 4, 2, 6), g("&#x3c6;", 8, 12, 30), g("b", 12, 12, 30),
+             g("d", 0, 32, 40)]
+        xa, xb = sorted(a, key=lambda c: c[1]), sorted(b, key=lambda c: c[1])
+        rows = judge.printed_rows(xa, xb)
+        self.assertIsNotNone(rows, "the bands match in number and size")
+        self.assertLess(len(judge.sequence_pairs(*rows)[0]), len(judge.sequence_pairs(xa, xb)[0]))
+        ca, cb, pairs, ua, ub, by_row = judge.choose_order(xa, xb)
+        self.assertEqual(by_row, 0)
+        self.assertIn(("&#x3d5;", "&#x3c6;"), [(p[0][0], p[1][0]) for p in pairs])
+        # where rows pair more, they are taken
+        ca, cb, pairs, ua, ub, by_row = judge.choose_order(*[sorted(v, key=lambda c: c[1]) for v in (
+            [g("a", 0, 0, 10), g("b", 6, 0, 10), g("c", 0, 20, 30), g("d", 9, 20, 30)],
+            [g("a", 0, 0, 10), g("b", 4, 0, 10), g("c", 0, 20, 30), g("d", 3, 20, 30)])])
+        self.assertEqual((by_row, len(pairs)), (1, 4))
+
     @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
     def test_tight_row_pairs(self):
         page = ("$\\begin{aligned} x &= a\\!+\\!b\\!+\\!c\\!+\\!d\\!+\\!e\\!+\\!f\\!+\\!g\\!+\\!h \\\\ "
