@@ -139,6 +139,12 @@ NFSS = {"times": "ptm", "helvetica": "phv", "palatino": "ppl", "cm": "cmr", "lib
 #: \texttt on a page whose typewriter is CMTT: OT1 sets cmtt itself (CMTT8 at 7 pt on the page -> cmtt8), where the
 #: judge's T1 sets cm-super's sftt, an outline of the same design whose m and - flag against CMTT
 OT1_TT = r"\DeclareTextFontCommand{\texttt}{\fontencoding{OT1}\ttfamily}"
+#: the double quotes on a page that prints OT1 Computer Modern (CMR, no cm-super): its TeX set `` and '' from cmr's
+#: own glyphs (OT1 92 and 34); the judge's T1 sets them from cm-super's SFRM, another design (cmr10 against sfrm1000:
+#: xor 88, solid 21 at 10 pt; board 2103.01507 p118: a reading's correct quotes flagged at solid 58 and 9). The single
+#: quotes are the same design in both
+OT1_QUOTES = (r"\AtBeginDocument{\renewcommand{\textquotedblleft}{{\fontencoding{OT1}\selectfont\char92}}"
+              r"\renewcommand{\textquotedblright}{{\fontencoding{OT1}\selectfont\char34}}}")
 NOTEXT = MATHFONT + r"|Inconsolata|Courier|CMTT|Mono|Symbol|Dingbat"
 
 
@@ -509,12 +515,17 @@ def font_preamble(pdf: str, page: int) -> tuple[str, str]:
         pre = [x for x in pre if x != r"\usepackage{newtxmath}"] + [NEWTX_LIBERTINE]
     if any(re.match(r"CMTT\d", n) for n in glyphs):   # the page's typewriter is OT1 Computer Modern: T1's is cm-super,
         pre.append(OT1_TT)                            # whose m and - differ (board lib:d68e0271bd4d p334, 10 glyphs)
+
     # text in nameless Type 3 (dvips's PK bitmaps) and no cm-super outline on the page: the reading's T1 text is set
     # from the same bitmaps, compared ink against ink (T-0158 J2; against cm-super's outlines 43 of p12's 590 flagged)
     if nameless and fam == "cm" and not any(re.match(r"SF[A-Z]{2}\d{4}$", n) for n in glyphs):
         pre.append(PK_PRE)
         if t1_bitmaps(pdf, [n for n in glyphs if TYPE3_NAMELESS.fullmatch(n)]):
             pre.append(PK_T1)
+    # cmr's own `` and '' (board 2103.01507 p118) on a page whose text is OT1 CM; not where it is T1 (EC bitmaps)
+    if (fam == "cm" and any(re.match(r"CMR\d", n) for n in glyphs) and PK_T1 not in pre
+            and not any(re.match(r"SF[A-Z]{2}\d{4}$", n) for n in glyphs)):
+        pre.append(OT1_QUOTES)
     return fam, "\n".join(x for x in pre if x)
 
 

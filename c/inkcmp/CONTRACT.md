@@ -286,6 +286,11 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-26:** on a page whose text is OT1 Computer Modern (CMR fonts, no cm-super, not T1 bitmaps),
+    the reading's \textquotedblleft and \textquotedblright take cmr's own OT1 glyphs (92, 34), as the page's TeX set
+    `` and ''. The judge's T1 set them from cm-super's SFRM, another design: cmr10 against sfrm1000 at 10 pt gives
+    xor 88, solid 21. On board 2103.01507 p118 a reading's correct quotes flagged at solid 58 and 9, and now pair
+    at 0 (ours 0.0013 → 0.0004, the one row of 49 that moves). The single quotes are the same design in both.
   - **changed 2026-11-26:** the setup loads mathrsfs, so `\mathscr` sets RSFS, as a page that prints it does (board
     lib:b21e554b9232's PDF has rsfs10). Before, a correct RSFS reading was NOT_COMPILED ("Undefined control sequence").
     The package only declares the alphabet: the 49 board jobs are unchanged, and no judged board line uses \mathscr.

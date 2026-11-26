@@ -1728,6 +1728,27 @@ class JudgePrintedRows(unittest.TestCase):
             self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0), [ln for ln in lines if ln.startswith("U ")])
 
 
+class JudgeOT1Quotes(unittest.TestCase):
+    """A CM page prints its quotes from OT1 cmr10 (quotedblleft 0.5 em wide); the judge's T1 set them from cm-super's
+    SFRM, another design 0.333 em wide, so a reading that wrote the right "\u201c" flagged (board 2103.01507 p118:
+    ours' \u201c and \u201d at solid 58 and 9, its last 2 glyph findings)"""
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_curly_quotes_pair_clean(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-quotes-") as d:
+            _accent_case(d, "q", "as the ``constant'' and `single' sections here.",
+                         "as the \u201cconstant\u201d and \u2018single\u2019 sections here.", route="glyph")
+            out = io.StringIO()                          # pdflatex's setting, as on the board page (not the setter)
+            res = judge.judge(os.path.join(d, "q", "page.pdf"), 1, os.path.join(d, "q", "r.lines.json"),
+                              os.path.join(d, "q", "p"), out=out, route="glyph", setter=False)
+            lines = out.getvalue().splitlines()
+            self.assertIn("set by pdflatex", lines[0])
+            q = [ln.split() for ln in lines if ln.startswith("G ") and ln.split()[2] in
+                 ("&#x201c;", "&#x201d;", "&#x2018;", "&#x2019;")]
+            self.assertEqual(len(q), 4, lines)
+            self.assertEqual([f[8] for f in q], ["0"] * 4, q)
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of
