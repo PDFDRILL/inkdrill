@@ -225,6 +225,16 @@ Fresh plants (seed 11, 12 per page) on pages not used to find the threshold. Sam
     unmeasurable face too, because the place is read from the page's text, not from a font program. On a synthetic
     CM page the J1 reading reads -1.47 and `\sin_2` for `\sin^2` reads -0.84. On the 49 board jobs, no pair that was
     not already a finding reads between 0.40 and 0.5;
+  - **changed 2026-11-26: a line of several printed rows pairs row by row** (`printed_rows`). Its glyphs are cut into
+    bands by vertical overlap, scripts chaining to their base. When both sides have the same number of bands (at
+    least 2), band for band of similar size (glyph counts within 30 %, or 2), both are ordered band by band, x
+    within a band. Before, both sides were sorted by x alone: rows interleave, and a print that packs one row tighter
+    than the judge sets it interleaves them otherwise, so every row left glyphs unpaired on both sides. The judge does
+    not fit a row's width to its box (B3: it never scaled lines). Order only changes which glyphs pair; each pair is
+    still compared at its own origin, and a missing glyph stays unpaired.
+    - Measured: 1511.08771 p2709 Gemma4 (Table 560, an aligned cell of 4 rows): unpaired 714/714 → 1/1, residual
+      0.6490 → 0.0043; its 205 glyph findings were cross-row pairs. On the 49 board jobs one row moves: lib:c57ac038ae5f
+      p293 MathPix 0.0380 → 0.0169 (12/12 unpaired → 0 on L18 and L28, whose reading equals the print).
   - before the place is read, same-character twins in formula lines are re-paired by position (`twins`). The x sort
     pairs a numerator and denominator glyph at one x crosswise, and a page glyph of the row above (inside the region)
     can take a rendered glyph whose own partner it leaves unpaired. A twin trades partners only within its partner's

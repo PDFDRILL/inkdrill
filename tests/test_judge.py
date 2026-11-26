@@ -1675,6 +1675,37 @@ class JudgeMathScript(unittest.TestCase):
             self.assertIn("RSFS", g[11].upper())
 
 
+class JudgePrintedRows(unittest.TestCase):
+    """A line of several printed rows pairs row by row (1511.08771 p2709 Table 560: an aligned cell of 4 rows, the
+    print's first row packed tight, our setting natural; sorted by x the rows interleaved otherwise on the two sides
+    and 77 / 77 glyphs went unpaired, the page's residual 0.6490)"""
+
+    g = staticmethod(lambda c, x, y0, y1: (c, x, y1, x, y0, x + 5, y1, "F", 10.0))
+
+    def test_bands_and_the_guard(self):
+        g = self.g
+        a = [g("a", 0, 0, 10), g("b", 6, 0, 10), g("c", 0, 20, 30), g("d", 9, 20, 30), g("2", 6, -3, 4)]
+        self.assertEqual([[c[0] for c in r] for r in judge.bands(a)], [["a", "2", "b"], ["c", "d"]])
+        b = [g("a", 0, 0, 10), g("b", 4, 0, 10), g("c", 0, 20, 30), g("d", 3, 20, 30), g("2", 4, -3, 4)]
+        ra, rb = judge.printed_rows(sorted(a, key=lambda c: c[1]), sorted(b, key=lambda c: c[1]))
+        self.assertEqual([c[0] for c in ra], ["a", "2", "b", "c", "d"])
+        self.assertEqual([c[0] for c in rb], ["a", "2", "b", "c", "d"])
+        self.assertIsNone(judge.printed_rows(a[:2], b[:2]), "one row: the x order")
+        self.assertIsNone(judge.printed_rows(a, b[:2] + [g("c", 0, 5, 30)]), "bands differ: the x order")
+        big = [g("x", k, 0, 10) for k in range(10)] + [g("y", 0, 20, 30)]
+        self.assertIsNone(judge.printed_rows(big, big[:3] + [g("y", 0, 20, 30)]), "10 against 3 glyphs: not the same row")
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_tight_row_pairs(self):
+        page = ("$\\begin{aligned} x &= a\\!+\\!b\\!+\\!c\\!+\\!d\\!+\\!e\\!+\\!f\\!+\\!g\\!+\\!h \\\\ "
+                "y &= p+q+r+s+t+u+v+w+z \\end{aligned}$")
+        read = ("\\(\\begin{aligned} x &= a+b+c+d+e+f+g+h \\\\ y &= p+q+r+s+t+u+v+w+z \\end{aligned}\\)")
+        with tempfile.TemporaryDirectory(prefix="test-judge-rows-") as d:
+            res, lines = _accent_case(d, "r", page, read, "\\usepackage{amsmath}\n", route="glyph", typ="math")
+            self.assertEqual(res["lines_by_row"], 1, lines)
+            self.assertEqual((res["unpaired_A"], res["unpaired_B"]), (0, 0), [ln for ln in lines if ln.startswith("U ")])
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

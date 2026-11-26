@@ -1822,6 +1822,34 @@ def b_to_a(pairs, ca, cb) -> tuple:
         return (statistics.median(a[1] - b[1] for a, b in pairs), statistics.median(a[2] - b[2] for a, b in pairs))
     return (min(c[3] for c in ca) - min(c[3] for c in cb), min(c[4] for c in ca) - min(c[4] for c in cb))
 
+def bands(cs: list) -> list:
+    """a line's glyphs cut into horizontal bands: glyphs whose quads overlap in y chain into one band (scripts join
+    their base); the bands top to bottom, each its glyphs in x order"""
+    out = []
+    for c in sorted(cs, key=lambda c: c[4]):
+        if out and c[4] < out[-1][1]:
+            out[-1][1] = max(out[-1][1], c[6])
+            out[-1][2].append(c)
+        else:
+            out.append([c[4], c[6], [c]])
+    return [sorted(b[2], key=lambda c: c[1]) for b in out]
+
+
+def printed_rows(ca: list, cb: list) -> tuple | None:
+    """both sides in row order when the line is several printed rows: the same number of bands (>= 2) on both sides,
+    band for band of similar size (glyph counts within 30 %, or 2). Sorted by x alone, rows interleave, and a print
+    that packs one row tighter than another (or than the judge sets it) interleaves them otherwise than the rendered
+    line, so the sequence pairing leaves glyphs of every row unpaired on both sides (1511.08771 p2709 Table 560, an
+    aligned cell of 4 rows: 77 / 77 unpaired). Bands that differ between the sides (a script chaining on one side
+    only) keep the x order."""
+    ra, rb = bands(ca), bands(cb)
+    if len(ra) < 2 or len(ra) != len(rb):
+        return None
+    if any(abs(len(x) - len(y)) > max(2, 0.3 * max(len(x), len(y))) for x, y in zip(ra, rb)):
+        return None
+    return [c for r in ra for c in r], [c for r in rb for c in r]
+
+
 def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route: str = "render",
           compiler=None, setter: bool = True, peers: list | None = None,
           rules_inside: bool = False) -> collections.Counter:
@@ -2071,6 +2099,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         if u:                                       # a rotated line: its glyphs in the order they are written
             ca = sorted(ca, key=lambda c: c[1] * u[0] + c[2] * u[1])
         cb = sorted(bc[i], key=lambda c: c[1])
+        rows = printed_rows(ca, cb) if not u else None
+        if rows:                                    # several printed rows on both sides: paired row by row
+            ca, cb = rows
+            res["lines_by_row"] += 1
         if not ca or not cb:
             res["lines_empty"] += 1
             continue
