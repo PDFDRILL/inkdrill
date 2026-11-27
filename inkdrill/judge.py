@@ -34,7 +34,7 @@ fields) for a line pdflatex could not set
 a_glyphs .. a_unpaired .. b_unpaired ..` (a_glyphs: all glyphs of the original page; a_unpaired: those that paired
 with nothing; b_unpaired: rendered glyphs with no partner; the board's ink residual is
 (findings + a_unpaired + b_unpaired) / a_glyphs; unmeasurable: paired glyphs whose original face TeX cannot
-set (UNSETTABLE: MathTime, Optima, Myriad Pro). They stay in glyphs but are never a glyph finding, and the board takes
+set (UNSETTABLE: MathTime, Optima, Myriad Pro, Helvetica Neue condensed). They stay in glyphs but are never a glyph finding, and the board takes
 them out of the denominator; a face difference there is still a style finding), and
 `STATUS OK|NOT_COMPILED|NO_TEXT|FONT_UNMAPPED`: a page with 0 paired glyphs has no residual. FONT_UNMAPPED: most of
 the page's text glyphs are in a family TeX cannot set (e.g. a commercial font), so same-font XOR does not apply.
@@ -93,7 +93,11 @@ SIZEVOTE_SKIP = r"CMEX|MSBM|MSAM|EU[RFSE]"
 #: its shape against the stand-in face measures the judge, not the reading (coordinator, 2026-11-21: the per-glyph
 #: form of FONT_UNMAPPED). A list, not "what FAMILIES does not map": on the board18 pages that complement also held
 #: SFBX/SFTI (cm-super), txsys/rtxr (newtx), BBOLD, esint and BLEX (Belleek, MathTime's free relative), all settable.
-UNSETTABLE = re.compile(r"^R?MT2?(?:MI|SY|EX|MS)[A-Z0-9]{0,3}$|^Optima|^MyriadPro", re.I)
+#: Helvetica Neue's condensed cuts (J8, lib:44e3840fd17e p378's running head, -LtCn / -BdCn): TeX's only condensed
+#: Helvetica is URW's Helvetica Narrow (phv, series c), regular and bold only, and not metric-compatible -- the page's
+#: Light Condensed digits advance 480/1000 where Narrow's are 456, its Bold Condensed I 258 where Narrow Bold's is 228
+UNSETTABLE = re.compile(r"^R?MT2?(?:MI|SY|EX|MS)[A-Z0-9]{0,3}$|^Optima|^MyriadPro|^HelveticaNeue\w*-\w*(?:Cn|Cond)",
+                        re.I)
 
 
 def unsettable(font: str) -> bool:
@@ -1122,6 +1126,67 @@ def line_tex(ln: dict) -> str:
     return display_style(ln["text"]) if ln.get("type") in ("math", "equation") else ln["text"]
 
 
+LIG_NEXT = "fil"                                   # f, then one of these: an f ligature in TeX's text fonts
+_NOLIG_ARG = re.compile(r"\\(?:begin|end|label|ref|eqref|pageref|cite[a-z]*|url|href|includegraphics|input|"
+                        r"fontfamily|usepackage)\*?\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\}")
+
+
+def f_pairs(cs: list) -> list:
+    """a page line's f pairs in reading order: for each f followed by f, i or l, True where the page drew the two
+    as one ligature glyph (the second letter zero-width inside the f's advance, as spelled() places it), False where
+    as two glyphs (J7: lib:3c16fac66fdd p370 sets Auf|lage, German's no ligature across a word joint). `cs` in page
+    order: a ligature's zero-width letter sits at the next letter's origin, and an x sort put that letter first"""
+    cs = [c for c in cs if c[0].strip()]
+    out = []
+    for p, q in zip(cs, cs[1:]):
+        if p[0] == "f" and q[0] in LIG_NEXT:
+            out.append(q[3] == q[5])
+    return out
+
+
+def unligature(t: str, pairs: list) -> str:
+    """a reading's text line with an f ligature broken (f{}l) where the page line drew the pair as two glyphs (J7).
+    The reading's f pairs in text mode (not maths, not a command name, not a label or a URL) are matched to the
+    page's in order; with no page ligature in the line, every one is broken; where the counts differ and the page
+    has both, the line is left as it is"""
+    if not pairs or all(pairs):
+        return t
+    skip = [False] * len(t)
+    for m in _NOLIG_ARG.finditer(t):
+        for k in range(m.start(), m.end()):
+            skip[k] = True
+    pos, math, i = [], False, 0
+    while i < len(t):
+        ch = t[i]
+        if ch == "\\" and i + 1 < len(t):
+            nx = t[i + 1]
+            if nx in "([":
+                math = True
+            elif nx in ")]":
+                math = False
+            i += 2
+            if nx.isalpha():
+                while i < len(t) and t[i].isalpha():
+                    i += 1                               # a command name: \\flat, \\fi
+            continue
+        if ch == "$":
+            math = not math
+        elif not math and not skip[i] and ch == "f" and i + 1 < len(t) and t[i + 1] in LIG_NEXT:
+            pos.append(i)
+        i += 1
+    if not pos:
+        return t
+    if any(pairs):
+        if len(pos) != len(pairs):
+            return t
+        cut = [p for p, lig in zip(pos, pairs) if not lig]
+    else:
+        cut = pos
+    for p in reversed(cut):
+        t = t[:p + 1] + "{}" + t[p + 1:]
+    return t
+
+
 def latex_text(s: str, drop: frozenset = frozenset()) -> str:
     """A reading's line as pdflatex input: raw % and # (and & outside maths) escaped, mapped characters (maths mode
     tracked through $, \\( \\), \\[ \\]), compatibility forms through NFKC, characters in UNMAPPABLE or `drop`
@@ -1989,7 +2054,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     def inside(c, b):
         return b[0] <= (c[3] + c[5]) / 2 * S < b[2] and b[1] <= (c[4] + c[6]) / 2 * S < b[3]
 
-    sizes, lfams = [], []                          # per line: its size, its glyphs' font names
+    sizes, lfams, lpairs = [], [], []              # per line: its size, its glyphs' font names, its f pairs
     cgrid = collections.defaultdict(list)          # glyphs by the cell of their centre, in page order
     for ci, c in enumerate(ac):
         cgrid[(int((c[3] + c[5]) / 2 * S // 256), int((c[4] + c[6]) / 2 * S // 256))].append(ci)
@@ -2001,10 +2066,12 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         cs = [ac[ci][8] for ci in near if nomath[ci] and inside(ac[ci], b)]
         sizes.append(vote_size(cs, is_formula(ln), page_size_pt))
         lfams.append([ac[ci][7] for ci in near if inside(ac[ci], b)])
+        lpairs.append(f_pairs([ac[ci] for ci in near if inside(ac[ci], b) and not re.search(MATHFONT, ac[ci][7])]))
     set_by = "pdflatex"
     texts = []
-    for ln, fs in zip(lv, lfams):
+    for ln, fs, fp in zip(lv, lfams, lpairs):
         t, lf = line_tex(ln), line_family(fs, fam)
+        t = t if ln.get("type") in ("math", "equation", "code") else unligature(t, fp)
         texts.append(t if lf is None else "{\\fontfamily{%s}\\selectfont %s}" % (lf, t))
 
     def reading_of(path):

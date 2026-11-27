@@ -286,6 +286,16 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J7): a ligature the page breaks is broken in the setting.** Per text line, the page's
+    f pairs (f + f/i/l, in page order) are ligature glyphs or two glyphs. The reading's f pairs in text mode (not
+    maths, not a command name, not a label/ref/URL argument) are matched in order, and those the page drew as two
+    glyphs are set as f{}l. With no page ligature in the line, all are broken; with a count mismatch, the line is
+    left as it is.
+    - lib:3c16fac66fdd p370 (Auf|lage): ours glyph 10 → 3, MathPix 7 → 0.
+    - On pages that draw f pairs as two glyphs (1805 p3, 3fe7 p328, d68e p334, RE4B p559), only b_no_glyph moves.
+  - **changed 2026-11-27 (J8): Helvetica Neue condensed is unsettable.** TeX's only condensed Helvetica is URW's
+    Narrow (regular, bold), and it is not metric-compatible: digits 456 against the page's 480/1000, bold I 228
+    against 258. lib:44e3840fd17e p378's head: ours glyph 8 → 0, unmeasurable 0 → 8.
   - **changed 2026-11-27 (J5): a closed frame is its top and bottom edges**, on both sides, in `inkcmp rules` and
     its Python reference (judge.frame_edges) alike. A \boxed display or \fbox rendered as one connected rectangle
     was dropped whole by rule_like, while the page often draws four separate rules. A frame is at least 40 × 30 px

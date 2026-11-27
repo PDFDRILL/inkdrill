@@ -1843,6 +1843,54 @@ class JudgeFrames(unittest.TestCase):
             self.assertEqual((res["rules_missing"], res["rules_invented"]), (0, 0), [l for l in lines if l.startswith("R ")])
 
 
+class JudgeLigatureBreaks(unittest.TestCase):
+    """J7: a page that draws an f pair as two glyphs (German Auf|lage: no ligature across a word joint) is judged
+    against a setting that breaks the ligature there too; lib:3c16fac66fdd p370's four Auflage, 7 glyph findings"""
+
+    def test_unligature(self):
+        u = judge.unligature
+        self.assertEqual(u("Auflage, 3. Auflage", [False, False]), "Auf{}lage, 3. Auf{}lage")
+        self.assertEqual(u("Auflage flach", [False, True]), "Auf{}lage flach")        # in order, page by page
+        self.assertEqual(u("Auflage flach", [True]), "Auflage flach")                  # counts differ: as it is
+        self.assertEqual(u("Auflage", [True]), "Auflage")                              # the page's ligature
+        self.assertEqual(u("Auflage", []), "Auflage")
+        self.assertEqual(u(r"\flat $f l$ \ref{fl} \begin{flalign} offen", [False]),
+                         r"\flat $f l$ \ref{fl} \begin{flalign} of{}fen")              # not maths, a name, a label
+
+    def test_f_pairs(self):
+        f = lambda ch, x0, x1: (ch, x0, 0, x0, 0, x1, 1, "F", 10)
+        self.assertEqual(judge.f_pairs([f("f", 0, 3), f("l", 3, 3), f("a", 3, 6)]), [True])    # fl: l zero-width
+        self.assertEqual(judge.f_pairs([f("f", 0, 3), f("l", 3.1, 5), f("a", 5, 8)]), [False])
+        self.assertEqual(judge.f_pairs([f("a", 0, 3), f("x", 3.1, 5)]), [])
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_broken_ligature_pairs(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-lig-") as d:
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\\usepackage[T1]{fontenc}\\pagestyle{empty}\n\\begin{document}\n"
+                         "\\noindent Die Auf{}lage und die Auf{}lage, schief und flach.\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            b = (min(v[0] for v in bs), min(v[1] for v in bs), max(v[2] for v in bs), max(v[3] for v in bs))
+            w, h = judge.page_size(pdf, 1)
+            k = 200 / 72
+            doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
+                {"type": "text", "text": "Die Auflage und die Auflage, schief und flach.", "region": {
+                    "top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                    "width": int((b[2] - b[0]) * k) + 4, "height": int((b[3] - b[1]) * k) + 4}}]}]}
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route="glyph", setter=False)
+            self.assertGreater(res["glyphs"], 35)
+            self.assertEqual(res["glyph"], 0, [l for l in out.getvalue().splitlines() if l.startswith("G ")
+                                               and l.split()[-1] == "g"])
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of
@@ -1959,10 +2007,12 @@ class JudgeStyleNames(unittest.TestCase):
         """faces with no font program in the TeX tree: MathTime, Optima, Myriad Pro. The free faces that FAMILIES
         does not map either (cm-super, newtx, bbold, esint, Belleek) are settable and stay measured."""
         for name in ("QtxpctLqshvdMTMI", "HcxldrTdxpbjMTMIB", "JnskryTvgfgxMTSYN", "YtllkcRjyfrxMTEX", "MT2SYT",
-                     "ABCDEF+Optima-Bold", "MyriadPro-Bold"):
+                     "ABCDEF+Optima-Bold", "MyriadPro-Bold", "PDBEHA+HelveticaNeueLTStd-LtCn",
+                     "PDBEAN+HelveticaNeueLTStd-BdCn", "HelveticaNeue-CondensedBold"):     # J8: Neue condensed
             self.assertTrue(judge.unsettable(name), name)
         for name in ("BLEX", "SFBX1000", "txsys", "rtxr", "BBOLD7", "Gdvdkgesint10", "MTimes-Roman",
-                     "HffcmrYvygwvTimes-Roman", "CMMI10"):
+                     "HffcmrYvygwvTimes-Roman", "CMMI10", "HelveticaNeueLTStd-Roman", "HelveticaNeue-Bold",
+                     "Helvetica-Narrow"):
             self.assertFalse(judge.unsettable(name), name)
         self.assertTrue(re.search(judge.MATHFONT, "QtxpctLqshvdMTMI"))
         self.assertFalse(re.search(judge.MATHFONT, "HffcmrYvygwvTimes-Roman"))
