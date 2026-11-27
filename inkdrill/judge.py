@@ -1776,7 +1776,7 @@ def page_rules(comps: list, ac: list, page=None) -> list:
 
 
 def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False,
-             up=UP, stage=None, inside_only=False, a_page=None):
+             up=UP, stage=None, inside_only=False, a_page=None, a_owner=None):
     """Non-glyph ink of a formula line (rules, fraction bars, radical vincula), page against rendering.
     - page rules: the page's ink in the line box (+4 px) that none of the page's own glyph quads covers;
     - rendered rules: the snippet page's ink that no glyph covers, where a paired glyph's cover is its PARTNER's page
@@ -1884,9 +1884,9 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
                else a_page)                          # a_page: the page's rules, found once from the page (J9)
     a_map = {p for comp in a_rules for p in comp}
     owner = lambda comp: rule_owner(comp, boxes or [b], glyphs, inside_only)
-    for comp in a_rules:
-        if boxes is not None and owner(comp) != i:
-            continue                                       # another line's rule
+    for k, comp in enumerate(a_rules):
+        if boxes is not None and (owner(comp) if a_owner is None else a_owner[k]) != i:
+            continue                                       # another line's rule (a_owner: once per page, J9)
         if any(covered(accq, x, y) for x, y in comp):
             if a_page is not None:
                 res["rules_a"] += 1                        # a page rule all the same: explained, not missing
@@ -2419,6 +2419,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         a_page = page_rules(got[0], ac, (aw, ah, ab))
         for i, *_ in work:
             stages[i] = (lambda i: lambda side, quads, reg: got[where[(i, side)]])(i)
+        a_owner = [rule_owner(c, boxes, glyph_owners, rules_inside) for c in a_page]
     for i, ln, b, ca, cb, pairs, ulines in work:
         for u in ulines:
             print(u, file=out)
@@ -2446,7 +2447,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
                          glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i],
-                         inside_only=rules_inside, a_page=a_page)
+                         inside_only=rules_inside, a_page=a_page, a_owner=a_owner)
             continue
         pw, ph, pb = pgm(bpdf, bo + i + 1, DPI * UP)
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
@@ -2479,8 +2480,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                      display=ln.get("type") in ("math", "equation"), inside_only=rules_inside)
     if route == "glyph" and work:                   # a page rule no formula line of the reading judged: missing (J9)
         judged = {i for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs}
-        for comp in a_page:
-            li = rule_owner(comp, boxes, glyph_owners, rules_inside)
+        for comp, li in zip(a_page, a_owner):
             if li in judged or (li is None and rules_inside):
                 continue
             res["rules_a"] += 1
