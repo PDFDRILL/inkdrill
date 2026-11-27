@@ -2039,6 +2039,54 @@ class JudgeRenderedRulesSameTest(unittest.TestCase):
             self.assertEqual(res["rules_invented"], 0, [l for l in out.getvalue().splitlines() if l.startswith("R ")])
 
 
+class JudgeJ11(unittest.TestCase):
+    """J11: (a) a ligature the page JOINS at the very start of a line is the line's, though a reading's box drawn tight
+    to the ink starts a fraction right of the glyph's origin (lib:69bc5c71b881 p16 L34: f_i at 340.0, the box at
+    340.8; the setter set f and i apart and both were flagged); (b) a page glyph and a rendered one of one character in
+    the same place pair however the order-based passes left them (lib:3fe71b4ef018 p328 L20's 2)"""
+
+    def test_coincident(self):
+        g = lambda ch, x0, y0, x1, y1: (ch, x0, y1, x0, y0, x1, y1, "F", 10)
+        a2, b2 = g("2", 100, 50, 105, 57), g("2", 100, 50.2, 105, 57.2)
+        a3, b3 = g("3", 200, 50, 205, 57), g("2", 200, 50, 205, 57)            # another character in that place
+        b_far = g("2", 120, 50, 125, 57)
+        pairs, ua, ub = judge.coincident([], [a2, a3], [b3, b2, b_far], [a2, a3], [b3, b2, b_far])
+        self.assertIn((a2, b2), pairs)                                          # same character, same place: a pair
+        self.assertEqual(ua, [a3])
+        self.assertEqual(sorted(ub), sorted([b3, b_far]))
+        self.assertEqual(judge.coincident([], [], [b2], [], [b2]), ([], [], [b2]))
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_line_start_ligature_is_the_lines(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-j11-") as d:
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\\usepackage[T1]{fontenc}\\pagestyle{empty}\n"
+                         "\\begin{document}\n\\noindent field and other words\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            tr = subprocess.run(["mutool", "trace", pdf, "1"], capture_output=True, text=True, check=True).stdout
+            first = re.findall(r'glyph="([^"]*)" x="([\d.]+)"', tr)[0]
+            self.assertEqual(first[0], "fi")                                    # the fixture holds the case
+            ox = float(first[1]) * judge.S
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            b = (min(v[0] for v in bs), min(v[1] for v in bs), max(v[2] for v in bs), max(v[3] for v in bs))
+            w, h = judge.page_size(pdf, 1)
+            x0 = math.floor(ox) + 1                     # the box starts right of the ligature's origin (69bc: 0.8 px)
+            doc = {"pages": [{"page": 1, "page_width": round(w * 400 / 72), "page_height": round(h * 400 / 72),
+                              "lines": [{"type": "text", "text": "field and other words", "region": {
+                                  "top_left_x": x0, "top_left_y": int(b[1] * judge.S) - 4,
+                                  "width": int(b[2] * judge.S) + 4 - x0, "height": int((b[3] - b[1]) * judge.S) + 8}}]}]}
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route="glyph")
+            self.assertIn("set by setter", out.getvalue().splitlines()[0])
+            self.assertEqual(res["glyph"], 0, [l for l in out.getvalue().splitlines() if l.startswith("G ")][:3])   # 2
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

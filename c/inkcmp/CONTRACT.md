@@ -286,6 +286,16 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J11):**
+    - (a) The setter sees a line's page glyphs with 8 px of slack in x as in y. A ligature the page joins at the very
+      start of a line had its origin 0.8 px left of a reading's tight box, so the setter set f and i apart. Both were
+      flagged (lib:69bc5c71b881 p16 L34 f_i).
+    - (b) `coincident`: a last pass over each line's leftovers pairs a page glyph and a rendered glyph of the same
+      character whose quads, carried by the line's offset, overlap by ≥ 50 % of their union (lib:3fe71b4ef018 p328
+      L20's 2, left behind by crosswise pairing).
+    - Board: 69bc p16 ours glyph 6 → 4; new same-place pairs on 3fe7 p328 MathPix (2, M), 0864 p4 ours (E) and
+      Gemma4 (i, a), 1805 p3 ours (r).
+    - coincident's call in judge is held by the board rows only (unit test on the function).
   - **changed 2026-11-27 (J10 follow-up): a rendered glyph's own ink may poke 2 px out of its quad (OWN_PAD).** On
     the J10 path, glyph_piece and the dash rule widen the reading's own glyph quads by 2 px (was 1). Measured on 0864
     p4 L168 (board102): a rotated label set upright, its small-caps R and E top strokes 1.25 px out, its minus 1.11.

@@ -2062,6 +2062,37 @@ def pbox(c, dx: float = 0.0, dy: float = 0.0) -> str:
     return (f"{math.floor((c[3] + dx) * S)} {math.floor((c[4] + dy) * S)} "
             f"{math.ceil((c[5] + dx) * S)} {math.ceil((c[6] + dy) * S)}")
 
+def coincident(pairs, ua, ub, ca, cb) -> tuple:
+    """the last pass over a line's leftovers (J11): a page glyph and a rendered one of the same character whose quads,
+    the rendered one carried into the page by the line's offset (b_to_a), overlap by at least half their union are a
+    pair. The order-based pairings can leave such a pair behind when the reading orders a formula's parts otherwise
+    (lib:3fe71b4ef018 p328 L20: its 2s paired crosswise, and the page's 2 and the reading's, 1 px apart, both unpaired)"""
+    if not ua or not ub:
+        return pairs, ua, ub
+    dx, dy = b_to_a(pairs, ca, cb)
+    pairs, ua, ub = list(pairs), list(ua), list(ub)
+    for a in list(ua):
+        best = None
+        for b in ub:
+            if b[0] != a[0]:
+                continue
+            x0, y0, x1, y1 = b[3] + dx, b[4] + dy, b[5] + dx, b[6] + dy
+            iw = min(a[5], x1) - max(a[3], x0)
+            ih = min(a[6], y1) - max(a[4], y0)
+            if iw <= 0 or ih <= 0:
+                continue
+            inter = iw * ih
+            union = (a[5] - a[3]) * (a[6] - a[4]) + (x1 - x0) * (y1 - y0) - inter
+            iou = inter / union if union > 0 else 0.0
+            if iou >= 0.5 and (best is None or iou > best[0]):
+                best = (iou, b)
+        if best is not None:
+            pairs.append((a, best[1]))
+            ua.remove(a)
+            ub.remove(best[1])
+    return pairs, ua, ub
+
+
 def b_to_a(pairs, ca, cb) -> tuple:
     """the reading's frame -> the page's (pt) for one line: the median origin offset of its pairs; with no pair, the
     offset that lays the rendered glyphs' extent's top left on the page glyphs'"""
@@ -2217,7 +2248,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         line_ligs, line_gaps, line_tcs = [], [], []  # per line box: the page's ligature glyphs, word gap and
         adv_em = setter_mod.advances(spec_a.trace_text)   # letter spacing (em)
         for b in b2:
-            inl = sorted((g for g in traced_spec if b[0] <= g[2] * S < b[2] and b[1] - 8 <= g[3] * S < b[3] + 8
+            # 8 px of slack in x as in y: a glyph's origin is the left edge of its ink, and a reading's box drawn
+            # tight to the ink starts a fraction later (lib:69bc5c71b881 p16 L34: f_i at 340.0, the box at 340.8, so
+            # the line's own ligature was not seen and the setter set f and i apart, J11)
+            inl = sorted((g for g in traced_spec if b[0] - 8 <= g[2] * S < b[2] + 8 and b[1] - 8 <= g[3] * S < b[3] + 8
                           and g[0].strip()), key=lambda g: g[2])     # a drawn space glyph is part of the gap
             line_ligs.append({setter_mod.lig_of(g[1]) for g in inl if setter_mod.lig_of(g[1])})
             gaps, small = [], []
@@ -2385,6 +2419,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         if is_formula(ln):                           # maths only: in prose the x order is the reading order
             pairs, ua, ub = repair(pairs, ua, ub, ca, cb)
             pairs, ua, ub = twins(pairs, ua, ub)
+        pairs, ua, ub = coincident(pairs, ua, ub, ca, cb)
         res["unpaired_A"] += len(ua)
         res["unpaired_B"] += len(ub)
         # positions in the R lines' frame (the page at 400 dpi, px): the page glyph's quad box; a rendered glyph's
