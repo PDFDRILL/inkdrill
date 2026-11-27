@@ -2124,6 +2124,45 @@ class JudgeJ11(unittest.TestCase):
             self.assertEqual(res["glyph"], 0, [l for l in out.getvalue().splitlines() if l.startswith("G ")][:3])   # 2
 
 
+class JudgeGreedyPasses(unittest.TestCase):
+    """audit A17's follow-up: repair() and twins() chose their pairs greedily, best candidate first, as coincident()
+    did; each now takes a best matching (judge.best_matching)"""
+
+    def test_repair_two_by_two(self):
+        """line positions x/100: A1 .02, A2 .04, B1 .02, B2 .00, within near .03: A1-B1 0, A1-B2 .02, A2-B1 .02,
+        A2-B2 .04 (out). Greedy took A1-B1 and left A2 and B2; the best is A1-B2 and A2-B1"""
+        g = lambda ch, x: (ch, x, 10, x, 0, x + 1, 10, "F", 10)
+        A1, A2, B1, B2 = g("x", 2), g("x", 4), g("x", 2), g("x", 0)
+        qa0, qa1, qb0, qb1 = g("q", 0), g("q", 100), g("q", 0), g("q", 100)
+        for ua in ([A1, A2], [A2, A1]):
+            for ub in ([B1, B2], [B2, B1]):
+                pairs, la, lb = judge.repair([(qa0, qb0), (qa1, qb1)], ua, ub, [qa0, A1, A2, qa1], [qb0, B2, B1, qb1])
+                self.assertEqual((la, lb), ([], []))
+                self.assertEqual({(id(a), id(b)) for a, b in pairs[2:]}, {(id(A1), id(B2)), (id(A2), id(B1))})
+
+    def test_twins_least_total_distance(self):
+        """twins' own rule done exhaustively: as many pairs as the character had, each rendered glyph in its partner's
+        column, the least total distance, kept where shorter. Greedy (nearest first) was longer in 2,787 of 20,000
+        random stacks; here 300 of them, seeded"""
+        rng = random.Random(5)
+        anchor = (("q", 50, 50, 50, 46, 53, 50, "F", 4.0),) * 2
+        for _ in range(300):
+            n = rng.randint(2, 4)
+            g = lambda x, y: ("x", x, y, x, y - 4, x + 3, y, "F", 4.0)
+            A = [g(rng.choice([0, 1.5, 3]), rng.choice([0, 10, 20])) for _ in range(n)]
+            B = [g(rng.choice([0, 1.5, 3]), rng.choice([0, 10, 20])) for _ in range(n)]
+            pairs = [anchor] * 5 + list(zip(A, B))                # 5 > n: the line's median offset is 0
+            out, ua, ub = judge.twins(pairs, [], [])
+            self.assertEqual((len(out), ua, ub), (len(pairs), [], []))
+            d = lambda a, b: math.hypot(a[1] - b[1], a[2] - b[2])            # the anchors make the offset 0
+            col = [a[1] for a in A]
+            best = min((sum(d(A[i], B[j]) for i, j in zip(range(n), Js)) for Js in itertools.permutations(range(n))
+                        if all(abs(A[i][1] - col[j]) <= 2.0 for i, j in zip(range(n), Js))), default=None)
+            got = sum(d(a, b) for a, b in out if a[0] == "x")
+            cur = sum(d(a, b) for a, b in zip(A, B))
+            self.assertAlmostEqual(got, min(best, cur), 6, (A, B))
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

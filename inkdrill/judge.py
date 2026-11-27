@@ -323,14 +323,18 @@ def repair(pairs: list, ua: list, ub: list, ca: list, cb: list, near: float = 0.
     xb0, xb1 = min(c[1] for c in cb), max(c[1] for c in cb)
     nx_a = lambda c: (c[1] - xa0) / ((xa1 - xa0) or 1)
     nx_b = lambda c: (c[1] - xb0) / ((xb1 - xb0) or 1)
-    cand = sorted((abs(nx_a(a) - nx_b(b)), ia, ib) for ia, a in enumerate(pa_pool) for ib, b in enumerate(pb_pool)
-                  if a[0] == b[0] and abs(nx_a(a) - nx_b(b)) <= near)
-    got_a, got_b, new = set(), set(), []
-    for _, ia, ib in cand:
-        if ia not in got_a and ib not in got_b:
-            got_a.add(ia)
-            got_b.add(ib)
-            new.append((pa_pool[ia], pb_pool[ib]))
+    # a best matching (most pairs, then the least position difference), not greedy: the nearest pair first could take
+    # the partner of a glyph that had no other (audit A17's follow-up). Pools numbered canonically.
+    key = lambda c: (c[0], c[1], c[2], c[3], c[4], c[5], c[6])
+    oa = sorted(range(len(pa_pool)), key=lambda k: key(pa_pool[k]))
+    ob = sorted(range(len(pb_pool)), key=lambda k: key(pb_pool[k]))
+    pa_pool, pb_pool = [pa_pool[k] for k in oa], [pb_pool[k] for k in ob]
+    edges = {(ia, ib): 1.0 - 0.999 * abs(nx_a(a) - nx_b(b)) / near
+             for ia, a in enumerate(pa_pool) for ib, b in enumerate(pb_pool)
+             if a[0] == b[0] and abs(nx_a(a) - nx_b(b)) <= near}
+    got = best_matching(len(pa_pool), len(pb_pool), edges) if edges else []
+    got_a, got_b = {ia for ia, _ in got}, {ib for _, ib in got}
+    new = [(pa_pool[ia], pb_pool[ib]) for ia, ib in got]
     if not new:
         return pairs, ua, ub
     used_a = {id(pa_pool[k]) for k in got_a}
@@ -1981,16 +1985,12 @@ def twins(pairs: list, ua: list, ub: list) -> tuple:
         # spare one, of where the offset carries it); along a line the x order is right, and the offset drifts
         # where the reading's words differ (board 0864 p4 Gemma4 L45: v, a, e taken from their own words)
         col = [pairs[k][0][1] for k in ks] + [b[1] + dx for b in spare_b[t]]
-        cand = sorted((dist(a, b), i, j) for i, a in enumerate(A) for j, b in enumerate(B)
-                      if abs(a[1] - col[j]) <= 0.5 * max(a[8], 1.0))
-        got_a, got_b, to = set(), set(), []
-        for d, i, j in cand:
-            if len(to) == len(ks):
-                break
-            if i not in got_a and j not in got_b:
-                got_a.add(i)
-                got_b.add(j)
-                to.append((i, j))
+        # the least total distance over as many pairs as the character had: a best matching of that size, not the
+        # nearest pair first (audit A17's follow-up: greedy was longer in 2,787 of 20,000 random stacks)
+        cand = {(i, j): dist(a, b) for i, a in enumerate(A) for j, b in enumerate(B)
+                if abs(a[1] - col[j]) <= 0.5 * max(a[8], 1.0)}
+        top = max(cand.values(), default=0.0) + 1.0
+        to = best_matching(len(A), len(B), {e: 1.0 - d / top for e, d in cand.items()}, limit=len(ks))
         if len(to) < len(ks) or sum(dist(A[i], B[j]) for i, j in to) >= sum(dist(pairs[k][0], pairs[k][1]) for k in ks) - 1e-6:
             continue
         for k, (i, j) in zip(ks, to):
@@ -2074,11 +2074,12 @@ def iou_quads(a, b, dx: float = 0.0, dy: float = 0.0) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def best_matching(na: int, nb: int, edges: dict) -> list:
+def best_matching(na: int, nb: int, edges: dict, limit: int | None = None) -> list:
     """a bipartite matching of most pairs and, among those, the largest total weight; edges {(i, j): w}, 0 < w <= 1.
     Successive shortest paths (Bellman-Ford, the graph is a line's leftovers: a few nodes) on costs -(BIG + w): each
     augmentation adds a pair, so the count is maximal before any weight counts. Deterministic for a given numbering;
-    the caller numbers the nodes canonically, so the input order cannot change the answer (audit A17)"""
+    the caller numbers the nodes canonically, so the input order cannot change the answer (audit A17). `limit`: stop
+    at that many pairs; successive shortest paths leave the best matching of each size, so it is the best of that size"""
     BIG = 1000.0
     mate_a, mate_b = [-1] * na, [-1] * nb
     adj = [[] for _ in range(na)]
@@ -2111,7 +2112,7 @@ def best_matching(na: int, nb: int, edges: dict) -> list:
             if not changed:
                 break
         free = [j for j in range(nb) if mate_b[j] < 0 and db[j] < INF]
-        if not free:
+        if not free or (limit is not None and sum(m >= 0 for m in mate_a) >= limit):
             break
         j = min(free, key=lambda j: (db[j], j))
         if db[j] >= 0:

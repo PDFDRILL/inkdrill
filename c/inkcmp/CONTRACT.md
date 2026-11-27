@@ -286,6 +286,12 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (audit A17 follow-up): repair() and twins() take a best matching too.**
+    - repair(): most pairs, then the least position difference.
+    - twins(): exactly the character's pair count (best_matching's `limit`), then the least total distance.
+    - Both were greedy, nearest first. Failing tests before the change: repair()'s 2×2 case (1 pair of 2), and
+      twins() longer than the exhaustive optimum on random stacks (2,787 of 20,000).
+    - Board, 49 jobs: every count and every line identical; 9 jobs print their lines in another order.
   - **changed 2026-11-27 (audit A17): coincident() is a best matching, not greedy.** The admissible pairs (same
     character, IoU ≥ 0.5) get the most pairs, then the largest total IoU. `best_matching` is successive shortest paths
     with Bellman-Ford, costs −(1000 + IoU). Nodes are numbered canonically, so the leftovers' order cannot change the
