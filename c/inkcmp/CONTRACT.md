@@ -286,6 +286,13 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (audit A17): coincident() is a best matching, not greedy.** The admissible pairs (same
+    character, IoU ≥ 0.5) get the most pairs, then the largest total IoU. `best_matching` is successive shortest paths
+    with Bellman-Ford, costs −(1000 + IoU). Nodes are numbered canonically, so the leftovers' order cannot change the
+    result.
+    - The auditor's 2×2 case (.667 / .538 / .667 / .176): 2 pairs, where greedy found 1.
+    - Tested against brute force on 200 random graphs; the greedy mutant fails.
+    - Board, 49 jobs: counts identical; one line order on 0864 p4 Gemma4.
   - **changed 2026-11-27 (J11):**
     - (a) The setter sees a line's page glyphs with 8 px of slack in x as in y. A ligature the page joins at the very
       start of a line had its origin 0.8 px left of a reading's tight box, so the setter set f and i apart. Both were

@@ -2062,35 +2062,95 @@ def pbox(c, dx: float = 0.0, dy: float = 0.0) -> str:
     return (f"{math.floor((c[3] + dx) * S)} {math.floor((c[4] + dy) * S)} "
             f"{math.ceil((c[5] + dx) * S)} {math.ceil((c[6] + dy) * S)}")
 
+def iou_quads(a, b, dx: float = 0.0, dy: float = 0.0) -> float:
+    """intersection over union of two glyphs' quads, b's carried by (dx, dy) (pt)"""
+    x0, y0, x1, y1 = b[3] + dx, b[4] + dy, b[5] + dx, b[6] + dy
+    iw = min(a[5], x1) - max(a[3], x0)
+    ih = min(a[6], y1) - max(a[4], y0)
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = iw * ih
+    union = (a[5] - a[3]) * (a[6] - a[4]) + (x1 - x0) * (y1 - y0) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def best_matching(na: int, nb: int, edges: dict) -> list:
+    """a bipartite matching of most pairs and, among those, the largest total weight; edges {(i, j): w}, 0 < w <= 1.
+    Successive shortest paths (Bellman-Ford, the graph is a line's leftovers: a few nodes) on costs -(BIG + w): each
+    augmentation adds a pair, so the count is maximal before any weight counts. Deterministic for a given numbering;
+    the caller numbers the nodes canonically, so the input order cannot change the answer (audit A17)"""
+    BIG = 1000.0
+    mate_a, mate_b = [-1] * na, [-1] * nb
+    adj = [[] for _ in range(na)]
+    for (i, j), w in sorted(edges.items()):
+        adj[i].append((j, -(BIG + w)))
+    while True:
+        # Bellman-Ford from a virtual source to every free a; residual: a->b on a non-matched edge, b->a on a matched one
+        INF = float("inf")
+        da, db = [INF] * na, [INF] * nb
+        pa, pb = [-1] * na, [-1] * nb                 # predecessor of a (a b), of b (an a)
+        for i in range(na):
+            if mate_a[i] < 0:
+                da[i] = 0.0
+        for _ in range(na + nb + 1):
+            changed = False
+            for i in range(na):
+                if da[i] == INF:
+                    continue
+                for j, c in adj[i]:
+                    if mate_a[i] == j:
+                        continue
+                    if da[i] + c < db[j] - 1e-12:
+                        db[j], pb[j], changed = da[i] + c, i, True
+            for j in range(nb):
+                i = mate_b[j]
+                if i >= 0 and db[j] != INF:
+                    c = next(c for jj, c in adj[i] if jj == j)
+                    if db[j] - c < da[i] - 1e-12:
+                        da[i], pa[i], changed = db[j] - c, j, True
+            if not changed:
+                break
+        free = [j for j in range(nb) if mate_b[j] < 0 and db[j] < INF]
+        if not free:
+            break
+        j = min(free, key=lambda j: (db[j], j))
+        if db[j] >= 0:
+            break
+        while j >= 0:                                 # flip the path
+            i = pb[j]
+            nj = mate_a[i]
+            mate_a[i], mate_b[j] = j, i
+            j = pa[i] if nj >= 0 else -1
+            if nj >= 0:
+                mate_b[nj] = -1 if mate_b[nj] == i else mate_b[nj]
+    return [(i, mate_a[i]) for i in range(na) if mate_a[i] >= 0]
+
+
 def coincident(pairs, ua, ub, ca, cb) -> tuple:
     """the last pass over a line's leftovers (J11): a page glyph and a rendered one of the same character whose quads,
     the rendered one carried into the page by the line's offset (b_to_a), overlap by at least half their union are a
     pair. The order-based pairings can leave such a pair behind when the reading orders a formula's parts otherwise
-    (lib:3fe71b4ef018 p328 L20: its 2s paired crosswise, and the page's 2 and the reading's, 1 px apart, both unpaired)"""
+    (lib:3fe71b4ef018 p328 L20: its 2s paired crosswise, and the page's 2 and the reading's, 1 px apart, both unpaired).
+    The pairs are a best matching (most pairs, then the largest total IoU), not a greedy choice: audit A17's 2x2 case,
+    IoU A1-B1 .667, A1-B2 .538, A2-B1 .667, A2-B2 .176, has two pairs where greedy found one"""
     if not ua or not ub:
         return pairs, ua, ub
     dx, dy = b_to_a(pairs, ca, cb)
-    pairs, ua, ub = list(pairs), list(ua), list(ub)
-    for a in list(ua):
-        best = None
-        for b in ub:
-            if b[0] != a[0]:
-                continue
-            x0, y0, x1, y1 = b[3] + dx, b[4] + dy, b[5] + dx, b[6] + dy
-            iw = min(a[5], x1) - max(a[3], x0)
-            ih = min(a[6], y1) - max(a[4], y0)
-            if iw <= 0 or ih <= 0:
-                continue
-            inter = iw * ih
-            union = (a[5] - a[3]) * (a[6] - a[4]) + (x1 - x0) * (y1 - y0) - inter
-            iou = inter / union if union > 0 else 0.0
-            if iou >= 0.5 and (best is None or iou > best[0]):
-                best = (iou, b)
-        if best is not None:
-            pairs.append((a, best[1]))
-            ua.remove(a)
-            ub.remove(best[1])
-    return pairs, ua, ub
+    key = lambda c: (c[0], c[3], c[4], c[5], c[6], c[1], c[2])
+    A, B = sorted(ua, key=key), sorted(ub, key=key)          # canonical numbering: the input order does not matter
+    edges = {}
+    for i, a in enumerate(A):
+        for j, b in enumerate(B):
+            if a[0] == b[0]:
+                w = iou_quads(a, b, dx, dy)
+                if w >= 0.5:
+                    edges[(i, j)] = w
+    if not edges:
+        return pairs, ua, ub
+    got = best_matching(len(A), len(B), edges)
+    ia, ib = {id(A[i]) for i, _ in got}, {id(B[j]) for _, j in got}
+    return (list(pairs) + [(A[i], B[j]) for i, j in got], [c for c in ua if id(c) not in ia],
+            [c for c in ub if id(c) not in ib])
 
 
 def b_to_a(pairs, ca, cb) -> tuple:

@@ -9,7 +9,9 @@ any of them is missing.
 import collections
 import copy
 import io
+import itertools
 import json
+import random
 import math
 import os
 import re
@@ -2055,6 +2057,41 @@ class JudgeJ11(unittest.TestCase):
         self.assertEqual(ua, [a3])
         self.assertEqual(sorted(ub), sorted([b3, b_far]))
         self.assertEqual(judge.coincident([], [], [b2], [], [b2]), ([], [], [b2]))
+
+    def test_coincident_is_a_best_matching(self):
+        """audit A17: greedy took A1-B1 and left A2; the best matching is A1-B2 and A2-B1. Quads from intervals that
+        give the auditor's IoUs: A1-B1 .667, A1-B2 .538, A2-B1 .667, A2-B2 .176"""
+        g = lambda x0, x1: ("x", x0, 10, x0, 0, x1, 10, "F", 10)
+        A1, A2, B1, B2 = g(0, 10), g(4, 14), g(2, 12), g(-3, 7)
+        self.assertAlmostEqual(judge.iou_quads(A1, B1), 2 / 3, 3)
+        self.assertAlmostEqual(judge.iou_quads(A1, B2), 7 / 13, 3)
+        self.assertAlmostEqual(judge.iou_quads(A2, B2), 3 / 17, 3)
+        anchor = (g(50, 60), g(50, 60))                          # a pair already made: the line's offset is 0
+        for ua in ([A1, A2], [A2, A1]):                          # the leftovers' order does not matter
+            for ub in ([B1, B2], [B2, B1]):
+                pairs, la, lb = judge.coincident([anchor], ua, ub, [], [])
+                self.assertEqual((la, lb), ([], []), (ua, ub))
+                self.assertEqual({(id(a), id(b)) for a, b in pairs[1:]}, {(id(A1), id(B2)), (id(A2), id(B1))})
+
+    def test_best_matching_against_brute_force(self):
+        rng = random.Random(17)
+
+        def brute(na, nb, E):
+            for k in range(min(na, nb), 0, -1):
+                ws = [sum(E[e] for e in zip(As, Bs)) for As in itertools.combinations(range(na), k)
+                      for Bs in itertools.permutations(range(nb), k) if all(e in E for e in zip(As, Bs))]
+                if ws:
+                    return k, max(ws)
+            return 0, 0.0
+        for _ in range(200):
+            na, nb = rng.randint(1, 5), rng.randint(1, 5)
+            E = {(i, j): round(rng.uniform(0.5, 1), 3) for i in range(na) for j in range(nb) if rng.random() < 0.5}
+            got = judge.best_matching(na, nb, E)
+            self.assertEqual(len({i for i, _ in got}), len(got))
+            self.assertEqual(len({j for _, j in got}), len(got))
+            self.assertTrue(all(e in E for e in got))
+            k, w = brute(na, nb, E)
+            self.assertEqual((len(got), round(sum(E[e] for e in got), 6)), (k, round(w, 6)), E)
 
     @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
     def test_line_start_ligature_is_the_lines(self):
