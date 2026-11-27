@@ -115,20 +115,44 @@ static int run_job(Job *j, long k, FILE *out) {
     if (rr[i].y < by0[r]) by0[r] = rr[i].y;
     if (rr[i].y > by1[r]) by1[r] = rr[i].y;
   }
-  long ncomp = 0;
-  for (size_t i = 0; i < nr; i++) {
-    if (find(par, (int)i) != (int)i) continue;
-    int w = bx1[i] - bx0[i] + 1, h = by1[i] - by0[i] + 1;
-    if (w >= 8 && w >= 3 * h && h <= 6) ncomp++;
-  }
-  fprintf(out, "job %ld %ld\n", k, ncomp);
+  /* the components to report: a rule-like one whole; a closed frame (a \\boxed display, \\fbox) as its top and
+     bottom edges, rows [ya, yb] of it (J5: a rendered frame is one connected rectangle, the page's often four rules).
+     A frame (>= 40 x 30 px: it encloses at least a character; board lib:5a5c76391c9c p4 had a glyph's 16 px remnant
+     pass): its top and bottom bands, each 1..6 rows of >= 90 % of its width, and its left and right columns
+     (within 6 px of its edges) inked on >= 90 % of its rows; judge.frame_edges is the same rule */
+  typedef struct { size_t root; int y0, y1; } Piece;
+  Piece *pc = malloc((nr ? 2 * nr : 1) * sizeof *pc); size_t np = 0;
+  int *rw = malloc(((size_t)H + 1) * sizeof *rw), *lh = malloc(((size_t)H + 1) * sizeof *lh), *rh = malloc(((size_t)H + 1) * sizeof *rh);
+  if (!pc || !rw || !lh || !rh) { free(pc); free(rw); free(lh); free(rh); free(rr); free(rowstart); free(ng); free(par); free(bx0); free(bx1); free(by0); free(by1); return 0; }
   for (size_t i = 0; i < nr; i++) {                  /* roots in increasing index = order of the first run */
     if (find(par, (int)i) != (int)i) continue;
     int w = bx1[i] - bx0[i] + 1, h = by1[i] - by0[i] + 1;
-    if (!(w >= 8 && w >= 3 * h && h <= 6)) continue;
-    long pix = 0, touch = 0, runs = 0;
+    if (w >= 8 && w >= 3 * h && h <= 6) { pc[np++] = (Piece){i, by0[i], by1[i]}; continue; }
+    if (w < 40 || h < 30) continue;                /* a frame encloses at least a character: not a glyph's remnant */
+    for (int y = by0[i]; y <= by1[i]; y++) rw[y] = lh[y] = rh[y] = 0;
     for (size_t t = i; t < nr && rr[t].y <= by1[i]; t++) {
       if (find(par, (int)t) != (int)i) continue;
+      rw[rr[t].y] += rr[t].x1 - rr[t].x0 + 1;
+      if (rr[t].x0 <= bx0[i] + 6) lh[rr[t].y] = 1;
+      if (rr[t].x1 >= bx1[i] - 6) rh[rr[t].y] = 1;
+    }
+    int top = by0[i], bot = by1[i], side = 0;
+    while (top <= by1[i] && 10 * rw[top] >= 9 * w) top++;
+    while (bot >= by0[i] && 10 * rw[bot] >= 9 * w) bot--;
+    for (int y = by0[i]; y <= by1[i]; y++) side += lh[y] && rh[y];
+    int tb = top - by0[i], bb = by1[i] - bot;
+    if (tb >= 1 && tb <= 6 && bb >= 1 && bb <= 6 && top <= bot && 10 * side >= 9 * h) {
+      pc[np++] = (Piece){i, by0[i], top - 1};
+      pc[np++] = (Piece){i, bot + 1, by1[i]};
+    }
+  }
+  free(rw); free(lh); free(rh);
+  fprintf(out, "job %ld %ld\n", k, (long)np);
+  for (size_t q = 0; q < np; q++) {
+    size_t i = pc[q].root;
+    long pix = 0, touch = 0, runs = 0;
+    for (size_t t = i; t < nr && rr[t].y <= pc[q].y1; t++) {
+      if (find(par, (int)t) != (int)i || rr[t].y < pc[q].y0) continue;
       runs++;
       pix += rr[t].x1 - rr[t].x0 + 1;
       for (int x = rr[t].x0; x <= rr[t].x1; x++) {
@@ -142,9 +166,10 @@ static int run_job(Job *j, long k, FILE *out) {
       }
     }
     fprintf(out, "comp %ld %ld %ld\n", pix, touch, runs);
-    for (size_t t = i; t < nr && rr[t].y <= by1[i]; t++)
-      if (find(par, (int)t) == (int)i) fprintf(out, "run %d %d %d\n", j->ya + rr[t].y, j->xa + rr[t].x0, j->xa + rr[t].x1);
+    for (size_t t = i; t < nr && rr[t].y <= pc[q].y1; t++)
+      if (find(par, (int)t) == (int)i && rr[t].y >= pc[q].y0) fprintf(out, "run %d %d %d\n", j->ya + rr[t].y, j->xa + rr[t].x0, j->xa + rr[t].x1);
   }
+  free(pc);
   free(rr); free(rowstart); free(ng); free(par); free(bx0); free(bx1); free(by0); free(by1);
   return 1;
 }

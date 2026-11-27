@@ -1820,6 +1820,29 @@ class JudgeFontExpansion(unittest.TestCase):
             self.assertEqual(res["glyph"], 0)                    # 23 unexpanded
 
 
+class JudgeFrames(unittest.TestCase):
+    """J5: a closed frame (\\boxed, \\fbox) is one connected rectangle that rule_like drops whole; it is taken as its
+    top and bottom edges on both sides (judge.frame_edges, inkcmp rules). c57a p293's (13.9), a faithful \\boxed
+    reading: 2 rules missing -> 0"""
+
+    def test_frame_edges(self):
+        frame = [(0, 0, 99)] + [(y, 0, 1) for y in range(1, 39)] + [(y, 98, 99) for y in range(1, 39)] + [(39, 0, 99)]
+        self.assertEqual(judge.frame_edges((0, 0, 99, 39), frame), [(0, 0), (39, 39)])
+        sigma = [(0, 0, 99)] + [(y, y, y + 3) for y in range(1, 39)] + [(39, 0, 99)]      # top and bottom bars, no sides
+        self.assertEqual(judge.frame_edges((0, 0, 99, 39), sigma), [])
+        self.assertEqual(judge.frame_edges((0, 0, 99, 9), frame[:1] + [(y, 0, 1) for y in range(1, 9)] + [(9, 0, 99)]), [])
+        small = [(0, 0, 15)] + [(y, 0, 1) for y in range(1, 15)] + [(y, 14, 15) for y in range(1, 15)] + [(15, 0, 15)]
+        self.assertEqual(judge.frame_edges((0, 0, 15, 15), small), [], "a glyph's remnant (5a5c p4: 16 px), not a frame")
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_boxed_formula_pairs_its_frame(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-boxed-") as d:
+            res, lines = _accent_case(d, "b", "The law $\\boxed{a+b=c}$ holds.", "The law \\(\\boxed{a+b=c}\\) holds.",
+                                      "\\usepackage{amsmath}\n", route="glyph", typ="math")
+            self.assertGreaterEqual(res["rules_a"], 2, lines)                # the frame's top and bottom
+            self.assertEqual((res["rules_missing"], res["rules_invented"]), (0, 0), [l for l in lines if l.startswith("R ")])
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

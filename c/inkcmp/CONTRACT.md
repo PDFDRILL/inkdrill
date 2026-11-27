@@ -286,6 +286,14 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J5): a closed frame is its top and bottom edges**, on both sides, in `inkcmp rules` and
+    its Python reference (judge.frame_edges) alike. A \boxed display or \fbox rendered as one connected rectangle
+    was dropped whole by rule_like, while the page often draws four separate rules. A frame is at least 40 × 30 px
+    (it encloses at least a character), with top and bottom bands of 1–6 rows at ≥ 90 % of its width and left and
+    right columns inked on ≥ 90 % of its rows.
+    - Measured: c57a p293's (13.9) with pdfdrill-bd's faithful \boxed reading goes from 2 rules missing to 0.
+    - The 49 board jobs are byte-identical to 47326fc. Without the size floor, a 16 px glyph remnant on lib:5a5c76391c9c
+      p4 had passed as a frame.
   - **changed 2026-11-27 (J6): font expansion and Latin Modern.** Two causes on one page:
     - microtype's font expansion draws a justified line's glyphs up to 2–3 % wider or narrower, as the glyph
       matrix's x scale against its y scale. Where the page glyph's matrix is upright and that ratio is within 3 %, the

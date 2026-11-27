@@ -231,6 +231,7 @@ def test_R1_rules_equal_python(tmp):
 Text $\frac{a+b}{c}$ and $\overline{xy} + \sqrt{z+1}$ then $\underline{u} \frac{1}{2}$.
 \[ \frac{\overline{A} + B}{\sqrt{C^2 + D^2}} = \overline{\overline{E}} \]
 A rule \rule{3cm}{0.4pt} and a thick one \rule{1cm}{3pt} and text.
+A frame \fbox{\rule{0pt}{1cm}boxed words} (J5: its top and bottom edges, in C and Python alike).
 \end{document}"""
     Path(f"{tmp}/r.tex").write_text(tex)
     subprocess.run(["pdflatex", "-interaction=batchmode", "r.tex"], cwd=tmp, capture_output=True)
@@ -252,7 +253,7 @@ A rule \rule{3cm}{0.4pt} and a thick one \rule{1cm}{3pt} and text.
             assert got == ref_a, (up, k, len(got), len(ref_a))
             cases += 1
             if k == 0:
-                assert len(ref_a) >= 6, len(ref_a)          # the page's rules are found, not two empty lists
+                assert len(ref_a) >= 8, len(ref_a)          # the page's rules are found, the frame's two edges too
     return cases
 
 

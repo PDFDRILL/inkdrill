@@ -1488,12 +1488,42 @@ def rule_components(rows: list) -> list:
             b[3] = y                                  # runs come in increasing y
     keep = {r for r, b in box.items() if (b[2] - b[0] + 1) >= 8 and (b[2] - b[0] + 1) >= 3 * (b[3] - b[1] + 1)
             and b[3] - b[1] + 1 <= 6}
-    groups = {}
+    groups, members = {}, {}
     for k, (y, x0, x1) in enumerate(runs):
         r = f(k)
+        members.setdefault(r, []).append(k)
         if r in keep:
             groups.setdefault(r, []).extend((x, y) for x in range(x0, x1 + 1))
-    return [groups[r] for r in sorted(groups)]
+    out = []
+    for r in sorted(members):                         # in the order of the first run; a frame as its two edges
+        if r in keep:
+            out.append(groups[r])
+            continue
+        for y0, y1 in frame_edges(box[r], [runs[k] for k in members[r]]):
+            out.append([(x, y) for k in members[r] for y, x0, x1 in (runs[k],) if y0 <= y <= y1 for x in range(x0, x1 + 1)])
+    return out
+
+
+def frame_edges(b, rr) -> list:
+    """a closed frame (a \\boxed display, \\fbox) as its top and bottom edges [(y0, y1), (y0, y1)], else []: its top and
+    bottom bands each 1..6 rows of >= 90 % of its width, its left and right columns (within 6 px of its edges) inked on
+    >= 90 % of its rows. A rendered frame is one connected rectangle that rule_like drops whole, where the page often
+    draws four rules (J5: c57a p293's (13.9), 2 rules missing on a faithful \\boxed reading). C: inkcmp rules, the same"""
+    w, h = b[2] - b[0] + 1, b[3] - b[1] + 1
+    if w < 40 or h < 30:                          # a frame encloses at least a character (5a5c p4: a 16 px glyph remnant)
+        return []
+    rw, lh, rh = collections.Counter(), set(), set()
+    for y, x0, x1 in rr:
+        rw[y] += x1 - x0 + 1
+        if x0 <= b[0] + 6: lh.add(y)
+        if x1 >= b[2] - 6: rh.add(y)
+    top, bot = b[1], b[3]
+    while top <= b[3] and 10 * rw[top] >= 9 * w: top += 1
+    while bot >= b[1] and 10 * rw[bot] >= 9 * w: bot -= 1
+    tb, bb = top - b[1], b[3] - bot
+    if 1 <= tb <= 6 and 1 <= bb <= 6 and top <= bot and 10 * len(lh & rh) >= 9 * h:
+        return [(b[1], top - 1), (bot + 1, b[3])]
+    return []
 
 
 def rule_pixels(acrop, bpage, up, acov, bcov, region) -> tuple:
