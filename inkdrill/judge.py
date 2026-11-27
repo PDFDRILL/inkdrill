@@ -1775,6 +1775,19 @@ def page_rules(comps: list, ac: list, page=None) -> list:
     return out
 
 
+#: how far a rendered glyph's own ink may poke out of its quad (px, 400 grid) and still be that glyph's on the J10 path:
+#: measured 1.25 (0864 p4 L168, small-caps R and E set upright for a rotated label) and 1.11 (its minus); at 1 px they
+#: were invented rules in two columns (board102)
+OWN_PAD = 2
+
+
+def inside_quads(comp, quads, pad) -> bool:
+    """a component's pixels all inside one quad (x0, y0, x1, y1), each widened by `pad` px"""
+    xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+    x0, y0, x1, y1 = min(xs), min(ys), max(xs) + 1, max(ys) + 1
+    return any(q[0] - pad <= x0 and x1 <= q[2] + pad and q[1] - pad <= y0 and y1 <= q[3] + pad for q in quads)
+
+
 #: characters whose whole glyph is a horizontal bar: on the rendered side, ink inside one's own quad is the glyph (J10)
 DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2212_") | {"&#x2010;", "&#x2013;", "&#x2014;", "&#x2212;"}
 
@@ -1868,11 +1881,9 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
     # a piece of a rendered glyph's own ink that its partner's quad leaves out: inside the glyph's own quad and joined
     # to covered ink (p293: StandardSymL's alpha reaches 4 px above MathTime's, a 14 x 3 cap touching on 7 px). A rule
     # stands free of glyph ink (an overline under TeX's tall M quad: touch 0) or leaves the quad (a fraction bar).
-    own_b = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in cb]
-    def glyph_piece(comp, touch):
-        xs, ys = [p[0] for p in comp], [p[1] for p in comp]
-        return touch > 0 and any(q[0] <= min(xs) and max(xs) + 1 <= q[2] and q[1] <= min(ys) and max(ys) + 1 <= q[3]
-                                 for q in own_b)
+    op = OWN_PAD if a_page is not None else pad       # J10 path: OWN_PAD; the render route keeps its pad
+    own_b = [(c[3] * S, c[4] * S, c[5] * S, c[6] * S) for c in cb]
+    glyph_piece = lambda comp, touch: touch > 0 and inside_quads(comp, own_b, op)
     b_rules = []
     if a_page is None:
         kept = [comp for comp, touch in b_comps
@@ -1881,10 +1892,8 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         partner = {id(pbb): pa for pa, pbb in pairs}       # reading's glyphs; one whose page partner is maths-font is
         gb = [c if not (id(c) in partner and re.search(mf, partner[id(c)][7]))   # maths, as before. Bars over text
               else c[:7] + (partner[id(c)][7],) + c[8:] for c in cb]              # digits paired with nothing
-        dash_b = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in cb if c[0] in DASHES]
-        in_dash = lambda comp: any(q[0] <= min(p[0] for p in comp) and max(p[0] for p in comp) + 1 <= q[2]
-                                   and q[1] <= min(p[1] for p in comp) and max(p[1] for p in comp) + 1 <= q[3]
-                                   for q in dash_b)    # a misplaced hyphen's own ink (c9da p68 MathPix L23)
+        dash_b = [(c[3] * S, c[4] * S, c[5] * S, c[6] * S) for c in cb if c[0] in DASHES]
+        in_dash = lambda comp: inside_quads(comp, dash_b, op)    # a misplaced hyphen's own ink (c9da p68 MathPix L23)
         kept = page_rules([(comp, touch) for comp, touch in b_comps if not glyph_piece(comp, touch)
                            and not in_dash(comp)], gb,
                           (pw, ph, pb) if up == 1 else None)       # (1511.08771 p2709's 8 overlines: 8 missing)

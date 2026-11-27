@@ -1999,6 +1999,16 @@ class JudgeRenderedRulesSameTest(unittest.TestCase):
             self.assertEqual(res["rules_a"], 2, rl)                         # the \tfrac bar and the overline
             self.assertEqual((res["rules_missing"], res["rules_invented"]), (0, 0), rl)   # before J10: 2 missing
 
+    def test_own_quad_pad(self):
+        """0864 p4 L168 (board102): a rotated label set upright; the small-caps R's top stroke (rows 26-27) pokes 1.25 px
+        out of its own quad (top 27.25) and was an invented rule in two columns. With OWN_PAD it is the glyph's ink"""
+        stroke = [(x, y) for x in range(125, 137) for y in (26, 27)]
+        r_quad = (124.0, 27.25, 144.0, 48.0)
+        self.assertTrue(judge.inside_quads(stroke, [r_quad], judge.OWN_PAD))
+        self.assertFalse(judge.inside_quads(stroke, [r_quad], 1))                   # the 1 px pad: outside
+        bar = [(x, y) for x in range(125, 137) for y in (20, 21)]                   # 6 px above it: an overline
+        self.assertFalse(judge.inside_quads(bar, [r_quad], judge.OWN_PAD))
+
     @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
     def test_misplaced_hyphen_is_no_rule(self):
         """c9da p68 MathPix L23: the reading sets "-valued functor." inside a superscript; its hyphen, away from the

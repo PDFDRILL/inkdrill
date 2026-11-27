@@ -286,6 +286,14 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J10 follow-up): a rendered glyph's own ink may poke 2 px out of its quad (OWN_PAD).** On
+    the J10 path, glyph_piece and the dash rule widen the reading's own glyph quads by 2 px (was 1). Measured on 0864
+    p4 L168 (board102): a rotated label set upright, its small-caps R and E top strokes 1.25 px out, its minus 1.11.
+    These were invented rules in ours and Gemma4 (+4 each).
+    - Tried and dropped: touch 0 for the overline test. On the rendered side touch is measured against the page
+      partners' quads, and it lost 3fe7 p328 ours' two real Q-bars.
+    - The constant is unit-tested; its use in rule_ink is held only by the board row (a synthetic rotated label
+      does not overhang).
   - **changed 2026-11-27 (J10): the rendered side keeps rules by the page side's own test.** A rendered rule went
     through over_maths (a maths-font glyph, or one with a maths-font partner, under it in x), while page rules went
     through page_rules. So a reading's bars over text digits could never pair: 1511.08771 p2709, a reading drawing 6
