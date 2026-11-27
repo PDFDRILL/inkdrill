@@ -1891,6 +1891,81 @@ class JudgeLigatureBreaks(unittest.TestCase):
                                                and l.split()[-1] == "g"])
 
 
+class JudgePageRules(unittest.TestCase):
+    """J9: the page's rules are found once from the page, not in the reading's formula lines and boxes; a reading that
+    types a formula as text is charged for its rules (2103.01507 p118: MathPix rules_a 0, ours 26)"""
+
+    @staticmethod
+    def bar(x0, x1, y):
+        return [(x, yy) for x in range(x0, x1) for yy in (y, y + 1)]
+
+    def test_page_rules_maths_test(self):
+        g = lambda ch, x0, y0, x1, y1, f: (ch, x0 / judge.S, y1 / judge.S, x0 / judge.S, y0 / judge.S, x1 / judge.S,
+                                           y1 / judge.S, f, 10)
+        bar = self.bar(100, 160, 200)
+        frac_maths = [g("a", 110, 170, 130, 195, "CMMI10")]
+        self.assertEqual(len(judge.page_rules([(bar, 0)], frac_maths)), 1)                  # a maths glyph over it
+        frac_text = [g("1", 102, 170, 158, 195, "CMR10"), g("2", 102, 210, 158, 235, "CMR10")]   # 1805 p3: 757-817
+                                                                                    # over a 759-819 bar
+        self.assertEqual(len(judge.page_rules([(bar, 0)], frac_text)), 1)                   # text above and below
+        self.assertEqual(judge.page_rules([(bar, 0)], [g("1", 102, 160, 158, 185, "CMR10")]), [])   # above only,
+                                                                                    # 15 px off: no fraction, no underline
+        head = [g("5", 150, 170, 160, 195, "CMR10"), g("x", 100, 210, 110, 235, "CMR10")]   # 1/6 of the bar each
+        self.assertEqual(judge.page_rules([(bar, 0)], head), [])                            # a running head's rule
+        q = [g("Q", 105, 210, 156, 257, "Times-Italic")]                         # 3fe7 p328: 8 px under, 85 %
+        self.assertEqual(len(judge.page_rules([(bar, 0)], q)), 1)                           # an overline on text
+        self.assertEqual(judge.page_rules([(bar, 0)], [g("Q", 105, 240, 156, 287, "Times-Italic")]), [])  # 38 px: no
+        self.assertEqual(judge.page_rules([(bar, 0)], [g("a", 110, 100, 130, 125, "CMMI10")]), [])   # too far
+        self.assertEqual(judge.page_rules([(bar, len(bar))], frac_maths), [])               # glyph ink: not a rule
+
+    def test_table_rules(self):
+        w, h = 800, 200
+        grey = bytearray(b"\xff" * (w * h))
+        for y in range(20, 101):                                       # a frame's sides between y 20 and 100
+            for x in (10, 11, 410, 411):
+                grey[y * w + x] = 0
+        page = (w, h, bytes(grey))
+        frame = [self.bar(10, 412, 20), self.bar(10, 412, 100)]
+        self.assertEqual(judge.table_rules(frame, page), set())                     # a \boxed frame's two edges
+        table2 = [self.bar(450, 790, 20), self.bar(450, 790, 100)]
+        self.assertEqual(judge.table_rules(table2, page), {0, 1})                  # two edges, no sides: a table
+        table3 = [self.bar(10, 412, 20), self.bar(10, 412, 60), self.bar(10, 412, 100)]
+        self.assertEqual(judge.table_rules(table3, page), {0, 1, 2})               # three: a table, sides or not
+        self.assertEqual(judge.table_rules([self.bar(450, 675, 20), self.bar(450, 675, 100)], page), set())  # two
+        # equal 225 px overlines (1511.08771 p2709's 138600 and 138600'): no table
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_rules_a_is_the_pages(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-pagerules-") as d:
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\\pagestyle{empty}\n\\begin{document}\n"
+                         "\\noindent The ratio $\\frac{a}{b}$ and $\\overline{xy}$ hold.\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            b = (min(v[0] for v in bs), min(v[1] for v in bs), max(v[2] for v in bs), max(v[3] for v in bs))
+            w, h = judge.page_size(pdf, 1)
+            k = 200 / 72
+            got = {}
+            for name, text in (("maths", "The ratio $\\frac{a}{b}$ and $\\overline{xy}$ hold."),
+                               ("text", "The ratio a/b and xy hold.")):
+                doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
+                    {"type": "text", "text": text, "region": {
+                        "top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                        "width": int((b[2] - b[0]) * k) + 4, "height": int((b[3] - b[1]) * k) + 4}}]}]}
+                lj = os.path.join(d, name + ".lines.json")
+                with open(lj, "w") as fh:
+                    json.dump(doc, fh)
+                got[name] = judge.judge(pdf, 1, lj, os.path.join(d, "w-" + name), out=io.StringIO(), route="glyph",
+                                        setter=False)
+            self.assertEqual(got["maths"]["rules_a"], 2)                       # the bar and the overline
+            self.assertEqual(got["text"]["rules_a"], got["maths"]["rules_a"])   # the page's, whatever the reading
+            self.assertEqual(got["maths"]["rules_missing"], 0)
+            self.assertEqual(got["text"]["rules_missing"], 2)                  # before J9: rules_a 0, nothing missing
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

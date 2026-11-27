@@ -1662,8 +1662,121 @@ def rules_job(requests: list, wd: str) -> list:
     return out
 
 
+def rule_owner(comp, boxes, glyphs, inside_only=False):
+    """the reading line (index into `boxes`) a page rule belongs to: the smallest box holding its centre; else the line
+    of the glyph under it (an overline); else the nearest box it overlaps in x. None: no line (`inside_only`: outside
+    every box)"""
+    xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+    mnx, mxx, mxy = min(xs), max(xs), max(ys)
+    cx, cy = (mnx + mxx + 1) / 2, (min(ys) + mxy + 1) / 2
+    inside = [((q[2] - q[0]) * (q[3] - q[1]), li) for li, q in enumerate(boxes)
+              if q[0] <= cx <= q[2] and q[1] <= cy <= q[3]]
+    if inside:
+        return min(inside)[1]
+    if inside_only:             # one rectangle judged alone (rects.py): a rule outside it is no line's, neither the
+        return None             # nearest line's nor that of a glyph below it (2103.01507 p118: a rule of the text
+    below = []                  # line above, 58 px over the rectangle, went to its "(")                                         # an overline/vinculum: the line of the glyph under it
+    for (c, li) in glyphs or []:
+        gx0, gy0, gx1, gy1 = c[3] * S, c[4] * S, c[5] * S, c[6] * S
+        if gx1 <= mnx or gx0 >= mxx + 1:
+            continue
+        gap = gy0 - (mxy + 1)
+        if -2 <= gap <= 1.5 * max(gy1 - gy0, 4.0):
+            below.append((gap, li))
+    if below:
+        return min(below)[1]
+    best = None
+    for li, q in enumerate(boxes):
+        if q[2] <= mnx or q[0] >= mxx + 1:
+            continue
+        d = max(q[1] - cy, 0, cy - q[3])
+        key = (d, (q[2] - q[0]) * (q[3] - q[1]))
+        if best is None or key < best[0]:
+            best = (key, li)
+    return best[1] if best else None
+
+
+def table_rules(rules: list, page) -> set:
+    """indices of rules that rule a table: long (>= 300 px) rules sharing their x span (within 3 px) with two or more
+    long rules, or with one unless the two are a frame's top and bottom edges (its left and right sides inked on >= 90 % of the rows
+    between them: J5's \\boxed). A table rule sits next to maths cells and passed page_rules' maths test (board
+    lib:d68e0271bd4d p334: 8 booktabs rules, 2312.11532 p7: 4)"""
+    aw, ah, ab = page
+    ext = []
+    for k, comp in enumerate(rules):
+        xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+        if max(xs) - min(xs) + 1 >= 300:            # 1511.08771 p2709: two equal 225 px overlines are no table
+            ext.append((k, min(xs), max(xs), min(ys), max(ys)))
+
+    def inked(x, y0, y1):
+        n = sum(1 for y in range(y0, y1 + 1) if any(0 <= x + d < aw and 0 <= y < ah and ab[y * aw + x + d] < INK
+                                                    for d in range(-3, 4)))
+        return n >= 0.9 * (y1 - y0 + 1)
+    out = set()
+    for a in ext:
+        same = [b for b in ext if b[0] != a[0] and abs(a[1] - b[1]) <= 3 and abs(a[2] - b[2]) <= 3]
+        if len(same) > 1:                            # three or more: a table, ruled or not (a frame has two edges;
+            out.add(a[0])                            # a ruled table's verticals ink every pair's sides: d68e p334)
+        elif same:
+            b = same[0]
+            top, bot = (a, b) if a[3] < b[3] else (b, a)
+            if not (inked(min(a[1], b[1]), top[4] + 1, bot[3] - 1) and inked(max(a[2], b[2]), top[4] + 1, bot[3] - 1)):
+                out.add(a[0])
+    return out
+
+
+def page_rules(comps: list, ac: list, page=None) -> list:
+    """the page's rules, from the page alone (J9): of the rule-like components of the ink no page glyph quad covers
+    ([(pixels, touch)] over the whole page), those free of glyph ink (touch <= 30 %) that are maths -- a maths-font glyph
+    overlaps them in x within 1.5 of its heights above or below (a fraction bar, an overline, a vinculum, a frame's
+    edge), or glyphs of any face lie within 1.5 heights above and below (a fraction of text digits, Libertine's maths),
+    or glyphs within half their height span >= 80 % of it (an overline over text italic). Before, a page rule was
+    looked for only in the reading's own formula lines and boxes, so a reading that typed a formula as text was not
+    charged for its rules (2103.01507 p118: MathPix rules_a 0, ours 26)"""
+    mf = MATHFONT + r"|MSBM|MSAM|EUF|EUS"
+    gl = [(c[3] * S, c[4] * S, c[5] * S, c[6] * S, bool(re.search(mf, c[7]))) for c in ac if c[5] > c[3]]
+    out = []
+    for comp, touch in comps:
+        if touch > 0.3 * len(comp):
+            continue
+        xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+        x0, x1, y0, y1 = min(xs), max(xs) + 1, min(ys), max(ys) + 1
+        maths, above, below, tight = False, [], [], []
+        for gx0, gy0, gx1, gy1, m in gl:
+            if gx1 <= x0 or gx0 >= x1:
+                continue
+            gh = max(gy1 - gy0, 4.0)
+            gap = max(gy0 - y1, y0 - gy1)
+            if m and gap <= 1.5 * gh:
+                maths = True
+                break
+            if gap <= 1.5 * gh:                       # 1805.01788 p3: a Libertine \\frac's denominator 25 px under
+                (above if gy1 <= (y0 + y1) / 2 else below).append((max(gx0, x0), min(gx1, x1)))   # its bar, 22 px tall
+            if gap <= 0.5 * gh:
+                tight.append((max(gx0, x0), min(gx1, x1)))
+
+        def cover(spans):
+            n, end = 0.0, x0
+            for a, b in sorted(spans):
+                if b > end:
+                    n += b - max(a, end)
+                    end = b
+            return n
+        # a fraction's numerator or denominator spans most of its bar; a running head's rule has the page number over
+        # it and the first line under it, 5 % of its width (RE4B-DE p559)
+        # an overline or underline over text letters: a glyph within half its height of it, spanning >= 80 % of it
+        # (lib:3fe71b4ef018 p328: Times-Italic Q-bars, 8 px over a 47 px Q, 40 of 47 px)
+        if (maths or (above and below and max(cover(above), cover(below)) >= 0.5 * (x1 - x0))
+                or cover(tight) >= 0.8 * (x1 - x0)):
+            out.append(comp)
+    if page is not None:
+        drop = table_rules(out, page)
+        out = [c for k, c in enumerate(out) if k not in drop]
+    return out
+
+
 def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False,
-             up=UP, stage=None, inside_only=False):
+             up=UP, stage=None, inside_only=False, a_page=None):
     """Non-glyph ink of a formula line (rules, fraction bars, radical vincula), page against rendering.
     - page rules: the page's ink in the line box (+4 px) that none of the page's own glyph quads covers;
     - rendered rules: the snippet page's ink that no glyph covers, where a paired glyph's cover is its PARTNER's page
@@ -1733,7 +1846,7 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
     ya, yb, xa, xb = int(b[1]) - ext, int(b[3]) + ext, int(b[0]) - 4, int(b[2]) + 4   # neighbours' rules out
     PW, PH = pw // up, ph // up
     if stage is not None:
-        a_comps = stage("A", acov, (xa, ya, xb, yb))
+        a_comps = stage("A", acov, (xa, ya, xb, yb)) if a_page is None else []
         b_comps = stage("B", bcov, (0, 0, PW - 1, PH - 1))
     else:
         a_comps, b_comps = rule_pixels(acrop, bpage, up, acov, bcov, (xa, ya, xb, yb))
@@ -1767,41 +1880,16 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         b_rules.append([(round(x + dx), round(y + dy)) for x, y in comp])
     b_map = {p for comp in b_rules for p in comp}
     near = lambda pts, x, y: any((x + ddx, y + ddy) in pts for ddx in range(-tol, tol + 1) for ddy in range(-tol, tol + 1))
-    a_rules = [c for c, touch in a_comps if touch <= 0.3 * len(c) and over_maths(c, mx_a)]
+    a_rules = ([c for c, touch in a_comps if touch <= 0.3 * len(c) and over_maths(c, mx_a)] if a_page is None
+               else a_page)                          # a_page: the page's rules, found once from the page (J9)
     a_map = {p for comp in a_rules for p in comp}
-    def owner(comp):
-        xs, ys = [p[0] for p in comp], [p[1] for p in comp]
-        mnx, mxx, mxy = min(xs), max(xs), max(ys)
-        cx, cy = (mnx + mxx + 1) / 2, (min(ys) + mxy + 1) / 2
-        inside = [((q[2] - q[0]) * (q[3] - q[1]), li) for li, q in enumerate(boxes or [b])
-                  if q[0] <= cx <= q[2] and q[1] <= cy <= q[3]]
-        if inside:
-            return min(inside)[1]
-        if inside_only:             # one rectangle judged alone (rects.py): a rule outside it is no line's, neither the
-            return None             # nearest line's nor that of a glyph below it (2103.01507 p118: a rule of the text
-        below = []                  # line above, 58 px over the rectangle, went to its "(")                                         # an overline/vinculum: the line of the glyph under it
-        for (c, li) in glyphs or []:
-            gx0, gy0, gx1, gy1 = c[3] * S, c[4] * S, c[5] * S, c[6] * S
-            if gx1 <= mnx or gx0 >= mxx + 1:
-                continue
-            gap = gy0 - (mxy + 1)
-            if -2 <= gap <= 1.5 * max(gy1 - gy0, 4.0):
-                below.append((gap, li))
-        if below:
-            return min(below)[1]
-        best = None
-        for li, q in enumerate(boxes or [b]):
-            if q[2] <= mnx or q[0] >= mxx + 1:
-                continue
-            d = max(q[1] - cy, 0, cy - q[3])
-            key = (d, (q[2] - q[0]) * (q[3] - q[1]))
-            if best is None or key < best[0]:
-                best = (key, li)
-        return best[1] if best else None
+    owner = lambda comp: rule_owner(comp, boxes or [b], glyphs, inside_only)
     for comp in a_rules:
         if boxes is not None and owner(comp) != i:
             continue                                       # another line's rule
         if any(covered(accq, x, y) for x, y in comp):
+            if a_page is not None:
+                res["rules_a"] += 1                        # a page rule all the same: explained, not missing
             continue                                       # the partner of an accent measured on ink
         res["rules_a"] += 1
         if sum(1 for x, y in comp if near(b_map, x, y)) < 0.5 * len(comp):
@@ -2310,9 +2398,10 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
         scores, page400, bpages, gnames = glyph_scores(side_a, side_b, spec_b, bpdf, ac, work, wd, res, bo)
     stages = {}
     if route == "glyph" and work:                   # rule_ink's pixel stage for every formula line in one C call:
-        aw, ah, ab, a400 = page400.get() if any(is_formula(w[1]) and w[5] for w in work) else (0, 0, b"", "")
-        # a first pass collects the requests, the second reads them
-        reqs, where = [], {}
+        aw, ah, ab, a400 = page400.get()
+        # a first pass collects the requests, the second reads them; the page's own rules are one request (J9)
+        reqs, where = [((a400, INK, 1, 0, 0), [(c[3] * S - 1, c[4] * S - 1, c[5] * S + 1, c[6] * S + 1) for c in ac],
+                        (0, 0, aw - 1, ah - 1))], {}
 
         def collect(i):
             def st(side, quads, reg):
@@ -2325,8 +2414,9 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             if is_formula(ln) and pairs:
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], collections.Counter(), io.StringIO(),
                          boxes=boxes, glyphs=[], display=ln.get("type") in ("math", "equation"), up=1,
-                         stage=collect(i), inside_only=rules_inside)
-        got = rules_job(reqs, wd) if reqs else []
+                         stage=collect(i), inside_only=rules_inside, a_page=[])
+        got = rules_job(reqs, wd)
+        a_page = page_rules(got[0], ac, (aw, ah, ab))
         for i, *_ in work:
             stages[i] = (lambda i: lambda side, quads, reg: got[where[(i, side)]])(i)
     for i, ln, b, ca, cb, pairs, ulines in work:
@@ -2356,7 +2446,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 aw, ah, ab, _ = page400.get()
                 rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, 0, 0), bpages[i][:3], res, out, boxes=boxes,
                          glyphs=glyph_owners, display=ln.get("type") in ("math", "equation"), up=1, stage=stages[i],
-                         inside_only=rules_inside)
+                         inside_only=rules_inside, a_page=a_page)
             continue
         pw, ph, pb = pgm(bpdf, bo + i + 1, DPI * UP)
         mg = 240                                              # 30 px at 400 dpi: ink above a tight box (accents)
@@ -2387,6 +2477,17 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
             rule_ink(i, b, ca, cb, pairs, (aw, ah, ab, cx0, cy0), (pw, ph, pb), res, out, boxes=boxes,
                      glyphs=glyph_owners,
                      display=ln.get("type") in ("math", "equation"), inside_only=rules_inside)
+    if route == "glyph" and work:                   # a page rule no formula line of the reading judged: missing (J9)
+        judged = {i for i, ln, b, ca, cb, pairs, _ in work if is_formula(ln) and pairs}
+        for comp in a_page:
+            li = rule_owner(comp, boxes, glyph_owners, rules_inside)
+            if li in judged or (li is None and rules_inside):
+                continue
+            res["rules_a"] += 1
+            res["rules_missing"] += 1
+            xs, ys = [p[0] for p in comp], [p[1] for p in comp]
+            print(f"R L{'-' if li is None else li} missing {min(xs)} {min(ys)} {max(xs) + 1} {max(ys) + 1} {len(comp)}",
+                  file=out)
     # page-wide counts for the board's ink residual (coordinator, 2026-11-17): every original glyph that paired
     # with nothing (outside any line, in an empty or uncompiled line, or skipped by the alignment) and every
     # rendered glyph with no partner

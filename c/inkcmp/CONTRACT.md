@@ -286,6 +286,20 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J9): the page's rules come from the page, not from the reading.** Before, a page rule was
+    looked for only in the reading's formula lines, inside that reading's line box. So rules_a differed between a
+    page's columns on 5 of the 49 board jobs (2103.01507 p118: MathPix 0, ours 26), and a reading that typed a formula
+    as text was not charged for its rules. Now:
+    - Once per page (glyph route), the rule-like ink no page glyph quad covers is found over the whole page.
+      `page_rules` keeps the components free of glyph ink that are maths by the page alone:
+      - a maths-font glyph within 1.5 of its heights above or below;
+      - glyphs above and below within 1.5 heights, one side spanning ≥ 50 % (a fraction in a text face);
+      - glyphs within half their height spanning ≥ 80 % (an overline or underline on text letters).
+    - `table_rules` drops rules ≥ 300 px that share their x span with two or more others, or with one unless the
+      pair's sides are inked (a \boxed frame).
+    - Each page rule goes to a line by `rule_owner`. One that no formula line of the reading judges is missing; one
+      explained as an accent measured on ink counts in rules_a, not as missing.
+    - rules_a is equal across columns on all 49 board jobs. The render route is unchanged.
   - **changed 2026-11-27 (J7): a ligature the page breaks is broken in the setting.** Per text line, the page's
     f pairs (f + f/i/l, in page order) are ligature glyphs or two glyphs. The reading's f pairs in text mode (not
     maths, not a command name, not a label/ref/URL argument) are matched in order, and those the page drew as two
