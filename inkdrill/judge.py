@@ -1775,6 +1775,10 @@ def page_rules(comps: list, ac: list, page=None) -> list:
     return out
 
 
+#: characters whose whole glyph is a horizontal bar: on the rendered side, ink inside one's own quad is the glyph (J10)
+DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2212_") | {"&#x2010;", "&#x2013;", "&#x2014;", "&#x2212;"}
+
+
 def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=None, glyphs=None, display=False,
              up=UP, stage=None, inside_only=False, a_page=None, a_owner=None):
     """Non-glyph ink of a formula line (rules, fraction bars, radical vincula), page against rendering.
@@ -1870,8 +1874,20 @@ def rule_ink(i, b, ca, cb, pairs, acrop, bpage, res, out, pad=1, tol=2, boxes=No
         return touch > 0 and any(q[0] <= min(xs) and max(xs) + 1 <= q[2] and q[1] <= min(ys) and max(ys) + 1 <= q[3]
                                  for q in own_b)
     b_rules = []
-    kept = [comp for comp, touch in b_comps
-            if touch <= 0.3 * len(comp) and over_maths(comp, mx_b) and not glyph_piece(comp, touch)]
+    if a_page is None:
+        kept = [comp for comp, touch in b_comps
+                if touch <= 0.3 * len(comp) and over_maths(comp, mx_b) and not glyph_piece(comp, touch)]
+    else:                                   # J10: the page side's own rule (page_rules) on the rendered side, with the
+        partner = {id(pbb): pa for pa, pbb in pairs}       # reading's glyphs; one whose page partner is maths-font is
+        gb = [c if not (id(c) in partner and re.search(mf, partner[id(c)][7]))   # maths, as before. Bars over text
+              else c[:7] + (partner[id(c)][7],) + c[8:] for c in cb]              # digits paired with nothing
+        dash_b = [(c[3] * S - pad, c[4] * S - pad, c[5] * S + pad, c[6] * S + pad) for c in cb if c[0] in DASHES]
+        in_dash = lambda comp: any(q[0] <= min(p[0] for p in comp) and max(p[0] for p in comp) + 1 <= q[2]
+                                   and q[1] <= min(p[1] for p in comp) and max(p[1] for p in comp) + 1 <= q[3]
+                                   for q in dash_b)    # a misplaced hyphen's own ink (c9da p68 MathPix L23)
+        kept = page_rules([(comp, touch) for comp, touch in b_comps if not glyph_piece(comp, touch)
+                           and not in_dash(comp)], gb,
+                          (pw, ph, pb) if up == 1 else None)       # (1511.08771 p2709's 8 overlines: 8 missing)
     bars = [(min(p[0] for p in c), max(p[0] for p in c) + 1, (min(p[1] for p in c) + max(p[1] for p in c) + 1) / 2)
             for c in kept]
     for comp, bar in zip(kept, bars):

@@ -286,6 +286,14 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J10): the rendered side keeps rules by the page side's own test.** A rendered rule went
+    through over_maths (a maths-font glyph, or one with a maths-font partner, under it in x), while page rules went
+    through page_rules. So a reading's bars over text digits could never pair: 1511.08771 p2709, a reading drawing 6
+    overlines scored 8 missing. Now page_rules runs on the rendered side with the reading's glyphs; a glyph whose
+    page partner is maths-font counts as maths, as before. Ink inside a rendered dash's own quad (DASHES) is that
+    glyph's: a misplaced minus or hyphen was counted again as an invented rule, which before had passed over_maths
+    or would have passed now (c9da p68 MathPix's superscript hyphen, 1a36 p154 ours' three minus signs).
+    - Gate: the pdfdrill-bd 1511 reading goes 8 missing → 2 (the two primed numbers it writes without a bar), 0 invented.
   - **changed 2026-11-27 (J9): the page's rules come from the page, not from the reading.** Before, a page rule was
     looked for only in the reading's formula lines, inside that reading's line box. So rules_a differed between a
     page's columns on 5 of the 49 board jobs (2103.01507 p118: MathPix 0, ours 26), and a reading that typed a formula

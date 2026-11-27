@@ -1966,6 +1966,69 @@ class JudgePageRules(unittest.TestCase):
             self.assertEqual(got["text"]["rules_missing"], 2)                  # before J9: rules_a 0, nothing missing
 
 
+class JudgeRenderedRulesSameTest(unittest.TestCase):
+    """J10: a rendered rule is kept by the page side's own rule (page_rules, the reading's glyphs); before, only a bar
+    over a maths-font glyph was, so a faithful reading's bars over text digits could never pair (1511.08771 p2709's 8
+    overlines over CMBX numbers: 8 missing, 0 invented)"""
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_bars_over_text_digits_pair(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-j10-") as d:
+            line = "Half $\\tfrac{1}{2}$ and $\\overline{\\mathbf{138600}}$ here."
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\\usepackage{amsmath}\\pagestyle{empty}\n\\begin{document}\n"
+                         "\\noindent " + line + "\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            b = (min(v[0] for v in bs), min(v[1] for v in bs), max(v[2] for v in bs), max(v[3] for v in bs))
+            w, h = judge.page_size(pdf, 1)
+            k = 200 / 72
+            doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
+                {"type": "text", "text": line, "region": {
+                    "top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                    "width": int((b[2] - b[0]) * k) + 4, "height": int((b[3] - b[1]) * k) + 4}}]}]}
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route="glyph", setter=False)
+            rl = [l for l in out.getvalue().splitlines() if l.startswith("R ")]
+            self.assertEqual(res["rules_a"], 2, rl)                         # the \tfrac bar and the overline
+            self.assertEqual((res["rules_missing"], res["rules_invented"]), (0, 0), rl)   # before J10: 2 missing
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_misplaced_hyphen_is_no_rule(self):
+        """c9da p68 MathPix L23: the reading sets "-valued functor." inside a superscript; its hyphen, away from the
+        page's, is the hyphen glyph's own ink, not an invented rule"""
+        with tempfile.TemporaryDirectory(prefix="test-judge-j10h-") as d:
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\\usepackage{amsmath}\\pagestyle{empty}\n\\begin{document}\n"
+                         "\\noindent the $\\operatorname{Mod}_{\\mathbf{Z}}^{\\mathrm{cn}}$-valued functor.\n"
+                         "\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+            bs = [tuple(float(v) for v in m) for m in WORD.findall(x)]
+            b = (min(v[0] for v in bs), min(v[1] for v in bs), max(v[2] for v in bs), max(v[3] for v in bs))
+            w, h = judge.page_size(pdf, 1)
+            k = 200 / 72
+            doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
+                {"type": "text", "text": "the \\(\\operatorname{Mod}_{\\mathbf{Z}}^{\\text {cn-valued functor. }}\\)",
+                 "region": {"top_left_x": int(b[0] * k) - 2, "top_left_y": int(b[1] * k) - 2,
+                            "width": int((b[2] - b[0]) * k) + 4, "height": int((b[3] - b[1]) * k) + 4}}]}]}
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route="glyph", setter=False)
+            self.assertGreater(res["glyphs"], 10)
+            self.assertEqual(res["rules_invented"], 0, [l for l in out.getvalue().splitlines() if l.startswith("R ")])
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of
