@@ -1776,6 +1776,50 @@ class JudgeFindingKind(unittest.TestCase):
             self.assertGreater(kinds["s"], 0)
 
 
+class JudgeFontExpansion(unittest.TestCase):
+    """J6: a page set with microtype's font expansion draws a justified line's glyphs up to 2-3 % wider or narrower
+    (the glyph matrix's x scale against its y scale), and a page in Latin Modern draws LM's designs; the judge set the
+    reading unexpanded, in T1 cm-super. Board lib:c9daf79960c3 p68: 11 of ours' 14 glyph findings were LMRoman12 a's,
+    i and b at the right place; with lmodern and the page's expansion, 1 is left"""
+
+    def test_expanded(self):
+        e = judge.expanded
+        self.assertEqual(e((50.82, 0, 0, -49.81), (49.81, 0, 0, -49.81))[0], 50.82)            # +2 %: taken
+        self.assertEqual(e((49.81, 0, 0, -49.81), (60, 0, 0, -60)), (60, 0, 0, -60))           # none, any size
+        self.assertAlmostEqual(e((50.82, 0, 0, -49.81), (60, 0, 0, -60))[0], 60 * 50.82 / 49.81)   # the ratio, not the size
+        self.assertEqual(e((52, 0, 0, -49.81), (49.81, 0, 0, -49.81)), (49.81, 0, 0, -49.81))  # 4.4 %: not expansion
+        self.assertEqual(e((49.81, 3, 0, -49.81), (49.81, 0, 0, -49.81)), (49.81, 0, 0, -49.81))  # slanted: not
+        self.assertEqual(e(None, (1, 0, 0, 1)), (1, 0, 0, 1))
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_expanded_lm_line_pairs(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-expansion-") as d:
+            with open(os.path.join(d, "page.tex"), "w") as fh:
+                fh.write("\\documentclass[12pt]{article}\\usepackage[T1]{fontenc}\\usepackage{lmodern}"
+                         "\\usepackage[expansion=true,stretch=30,shrink=30,step=5]{microtype}\\pagestyle{empty}\n"
+                         "\\begin{document}\n\\noindent WWW MMM mmm WWM wmw MWM www mmw WMW MMW www mmm WWW MWM mmw wmw "
+                         "MMM WWW mmm WMW mmw www.\n\\end{document}\n")
+            subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "page.tex"], cwd=d,
+                           capture_output=True, check=True)
+            pdf = os.path.join(d, "page.pdf")
+            self.assertEqual(judge.font_preamble(pdf, 1), ("cm", "\\usepackage{lmodern}"))
+            x = subprocess.run(["pdftotext", "-bbox-layout", pdf, "-"], capture_output=True, text=True, check=True).stdout
+            L = re.findall(r'<line xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</line>', x, re.S)
+            x0, y0, x1, y1, body = L[0]                  # the first line: justified, expanded 3 %
+            w, h = judge.page_size(pdf, 1)
+            k = 200 / 72
+            doc = {"pages": [{"page": 1, "page_width": round(w * k), "page_height": round(h * k), "lines": [
+                {"type": "text", "text": " ".join(re.findall(r">([^<]+)</word>", body)), "region": {
+                    "top_left_x": int(float(x0) * k) - 2, "top_left_y": int(float(y0) * k) - 2,
+                    "width": int((float(x1) - float(x0)) * k) + 4, "height": int((float(y1) - float(y0)) * k) + 4}}]}]}
+            lj = os.path.join(d, "r.lines.json")
+            with open(lj, "w") as fh:
+                json.dump(doc, fh)
+            res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=io.StringIO(), route="glyph", setter=False)
+            self.assertGreater(res["glyphs"], 30)
+            self.assertEqual(res["glyph"], 0)                    # 23 unexpanded
+
+
 class JudgeMathAlphanumerics(unittest.TestCase):
     """A Mathematical Alphanumeric Symbol pairs as its letter. The judge sets a reading's $i$ in LibertineMathMI, whose
     ToUnicode says U+1D456; a page whose map says i for the same letter (board 1805.01788 p3, LinLibertineI7: 20 of

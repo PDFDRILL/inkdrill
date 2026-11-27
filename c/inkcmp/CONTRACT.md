@@ -286,6 +286,16 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-27 (J6): font expansion and Latin Modern.** Two causes on one page:
+    - microtype's font expansion draws a justified line's glyphs up to 2–3 % wider or narrower, as the glyph
+      matrix's x scale against its y scale. Where the page glyph's matrix is upright and that ratio is within 3 %, the
+      rendered glyph and its window neighbours take the same ratio (`expanded`). Only the ratio, never the size: a
+      reading at the wrong size still differs.
+    - a page in Latin Modern (LMRoman) is set with \usepackage{lmodern}, LM's own designs, where T1 cm-super had
+      been used.
+    - Board lib:c9daf79960c3 p68: ours 0.0123 → 0.0053, MathPix 0.0247 → 0.0170, Gemma4 0.0223 → 0.0147 (11 a, i, b
+      findings at the right place went). 0864 p4 Gemma4 +0.0002: one e at solid exactly 7, the threshold. The
+      other pages with expansion (1805 p3, 2311 p10) are unchanged.
   - **added 2026-11-27 (J4):** each G line ends with what JUDGE1 counted for the pair: `g` glyph finding, `s` style
     finding, `-` none. A flagged pair in a face TeX cannot set (MathTime, Optima, Myriad Pro) is `-`, and a pair in
     the wrong place is `g` in any face. A reader of the G lines (board_run's finding_boxes) can then count as the

@@ -116,7 +116,8 @@ MATHFAM = [(r"EURM|EUSM|EUFM|EUEX", r"\usepackage{eulervm}"), (r"NewTXMI|ntxmi|t
            (r"TeX-math[ab]\d|^math[ab]\d", r"\usepackage{mathabx}"),   # mathabx: its own designs of \in, \geq, ...
            (r"MTMI|MTSY|MTEX", r"\usepackage{mathptmx}"),  # MathTime: no free version; mathptmx is its Times relative
            (r"esint\d*$", r"\usepackage{esint}"),          # its integrals (board lib:6d90e8d27b8b p174), not CMEX's
-           (r"BBOLD\d*$", r"\usepackage{bbold}")]          # \mathbb from bbold, lowercase included (2103.01507 p118's k)
+           (r"BBOLD\d*$", r"\usepackage{bbold}"),
+           (r"^LMRoman\d", r"\usepackage{lmodern}")]     # Latin Modern's own designs, not T1 cm-super's (J6)          # \mathbb from bbold, lowercase included (2103.01507 p118's k)
 #: maths letters in Libertine (LinLibertineI 5 7 from an older newtx, LibertineMathMI from today's): newtxmath with
 #: its libertine option. Plain newtxmath sets them in Times-like NewTXMI (board 1805.01788 p3: 20 maths italics
 #: flagged with equal styles)
@@ -739,6 +740,24 @@ def snap(side, adds, X: float, Y: float):
     return side, [a if a[0] != "B" else a[:4] + (a[4] + dx, a[5] + dy) for a in adds]
 
 
+#: the largest horizontal font expansion (microtype, pdfTeX's \\pdfadjustspacing) a page glyph's matrix may carry
+EXPANSION = 0.03
+
+
+def expanded(ma, mb):
+    """the rendered glyph's matrix mb with the page glyph's horizontal expansion: where ma is upright and its x scale
+    differs from its y scale by at most EXPANSION, mb's x components take the same ratio. Only the ratio, never the
+    size: a reading at the wrong size still differs. pdfTeX expands a justified line's glyphs by up to 2-3 % (board
+    lib:c9daf79960c3 p68: LMRoman12 at x 11.716-12.194 against y 11.955; 11 of ours' 14 glyph findings were such
+    a's, i and b at the right place, the judge setting them unexpanded)"""
+    if not ma or not mb or abs(ma[3]) < 1e-9 or abs(ma[1]) > 1e-6 * abs(ma[0]) or abs(ma[2]) > 1e-6 * abs(ma[3]):
+        return mb
+    r = abs(ma[0]) / abs(ma[3])
+    if not 1e-4 < abs(r - 1) <= EXPANSION:
+        return mb
+    return (mb[0] * r, mb[1], mb[2] * r, mb[3])
+
+
 def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res, bo: int = 0) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
@@ -793,6 +812,7 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                 mb = tuple(v * S for v in gb[5])
                 if u:
                     mb = turned(mb[:2], u) + turned(mb[2:], u)
+            mb = expanded(sa[2], mb) if sa is not None and not u else mb   # the page line's font expansion
             sb = (FB.find(gb[4]), gb[1], mb, X, Y) if gb else "none"
             ink_b = fname(gb[4] if gb else pbb[7]) in t3b     # a ligature's second letter too: its ink is there
             if ink_b:
@@ -827,7 +847,9 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                         adds.append(("B", FB.find(g[4]), g[1], turned(m[:2], u) + turned(m[2:], u), X + o[0], Y + o[1]))
                     continue
                 if hit((q[3] * S + dx - 4, q[4] * S + dy - 4, q[5] * S + dx + 4, q[6] * S + dy + 4), win):
-                    adds.append(("B", FB.find(g[4]), g[1], tuple(v * S for v in g[5]), q[1] * S + dx, q[2] * S + dy))
+                    m = tuple(v * S for v in g[5])
+                    adds.append(("B", FB.find(g[4]), g[1], expanded(sa[2], m) if sa is not None else m,
+                                 q[1] * S + dx, q[2] * S + dy))
             if sa is None and fname(pa[7]) in t3() and not ink_b:     # the page's ink from the start, drawn snapped
                 sb, adds = snap(sb, adds, X, Y)
             jobs.append((sa, sb, win, adds))
