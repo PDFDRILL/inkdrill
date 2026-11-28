@@ -286,6 +286,18 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (board 113 lib:3fe71b4ef018 p328): the page's maths sizes apply, also on MathTime; holes
+    tell letters apart only.**
+    - `math_sizes` named its `\DeclareMathSizes` `{10}` (round to 2 places) while the line is set at
+      `\fontsize{10.0004}`. LaTeX finds the declaration by that name, so it never applied on a size that does not
+      snap. The name is now the line's (%.4f of the glyphs' own size, not of its rounding).
+    - On a MathTime page (mathptmx stands in: 7.4 / 6 pt under 10) the glyphs within T/2 of a MathTime glyph vote
+      for the script size too (`mathtime_scripts`): MathTime sets scripts in Times. p328: 7 / 5 pt.
+    - `glyph_flag`: another number of holes flags a pair only when its two characters differ. p328 L20's e of
+      alpha_e is xor 1 px on its own, its eye open on the page and closed in Nimbus.
+    - p328, three columns: ours glyph 3 -> 0 (L10's and L17's superscript 2, L20's e), MathPix 35 -> 32,
+      Gemma4 7 -> 4; the same three pairs each time. lib:c57ac038ae5f p293 (now 7.6 / 6 pt): ours glyph 5 -> 2,
+      MathPix 16 -> 15 (Times script digits). Board, 49 jobs: 6 differ (3fe7, c57a, 6d90 p174 with equal counts).
   - **changed 2026-11-27 (audit A17 follow-up): repair() and twins() take a best matching too.**
     - repair(): most pairs, then the least position difference.
     - twins(): exactly the character's pair count (best_matching's `limit`), then the least total distance.

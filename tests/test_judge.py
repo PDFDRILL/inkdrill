@@ -1152,6 +1152,20 @@ class LigatureLetterOrder(unittest.TestCase):
         self.assertTrue(f[1] < got[1][1] < n[1], got[1])
 
 
+class GlyphFlagUnit(unittest.TestCase):
+    """the flag of one pair: solid at THRESHOLD, or another number of holes between two letters"""
+
+    def test_holes_tell_letters_apart_not_one_letter(self):
+        T = judge.THRESHOLD
+        self.assertTrue(judge.glyph_flag(T, (1, 1), "e", "e"))              # solid alone, either way
+        self.assertFalse(judge.glyph_flag(T - 1, (1, 1), "e", "e"))
+        self.assertTrue(judge.glyph_flag(4, (1, 0), "e", "c"))              # the crossbar: solid 4 at 10 pt
+        self.assertFalse(judge.glyph_flag(4, (1, 1), "e", "c"))
+        # board 113 lib:3fe71b4ef018 p328 L20, as inkcmp glyphs gave it: alpha_e's e, solid 2, holes 0 and 1
+        self.assertFalse(judge.glyph_flag(2, (0, 1), "e", "e"))
+        self.assertFalse(judge.glyph_flag(4, None, "e", "c"))               # no hole count: solid only
+
+
 class MathSizesUnit(unittest.TestCase):
     """the page's maths sizes and a formula line's size vote (board 1805.01788 p3)"""
 
@@ -1161,17 +1175,38 @@ class MathSizesUnit(unittest.TestCase):
     def test_script_size_measured_from_the_maths_letters(self):
         ac = self.glyphs(("ABCDEF+LinLibertineT", 8.966, 200), ("GMLQBI+LinLibertineI", 8.966, 35),
                          ("IVFFFD+LinLibertineI7", 7.273, 49), ("XYZ+LinLibertineT", 7.273, 30))
-        self.assertEqual(judge.math_sizes(ac), r"\DeclareMathSizes{9}{9}{7.3}{4.5}")
+        self.assertEqual(judge.math_sizes(ac), r"\DeclareMathSizes{8.9996}{8.9996}{7.3}{4.5}")
         ac += self.glyphs(("ZDIDON+LinLibertineI5", 5.479, 4))
-        self.assertEqual(judge.math_sizes(ac), r"\DeclareMathSizes{9}{9}{7.3}{5.5}")
+        self.assertEqual(judge.math_sizes(ac), r"\DeclareMathSizes{8.9996}{8.9996}{7.3}{5.5}")
         self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 9.963, 300), ("CMMI10", 9.963, 20),
-                                                       ("CMMI7", 6.974, 12))), r"\DeclareMathSizes{10}{10}{7}{5}")
+                                                       ("CMMI7", 6.974, 12))), r"\DeclareMathSizes{10.0004}{10.0004}{7}{5}")
         self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 9.963, 300), ("CMMI7", 6.974, 4))), "")
         self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 9.963, 300))), "")
         self.assertEqual(judge.math_sizes(self.glyphs(("Times-Roman", 9.963, 300), ("QtxpctLqshvdMTMI", 7.572, 93),
-                                                       ("QtxpctLqshvdMTMI", 9.963, 83))), "")    # MathTime: none
+                                                       ("QtxpctLqshvdMTMI", 9.963, 83))),
+                         r"\DeclareMathSizes{10.0004}{10.0004}{7.6}{5}")    # MathTime: its own (c57a p293)
         self.assertEqual(judge.math_sizes(self.glyphs(("CMR10", 10.062, 300), ("CMMI7", 6.974, 26),
-                                                       ("CMMI6", 5.978, 6))), r"\DeclareMathSizes{10}{10}{7}{6}")
+                                                       ("CMMI6", 5.978, 6))), r"\DeclareMathSizes{10.0000}{10.0000}{7}{6}")
+
+    def test_the_size_is_named_as_a_line_is_set(self):
+        # LaTeX finds a \DeclareMathSizes by the size's name: a page at 9.963 bp is set at \fontsize{10.0004}, and
+        # {10} never applied there (board 113 lib:3fe71b4ef018 p328)
+        ms = judge.math_sizes(self.glyphs(("CMR10", 9.963, 300), ("CMMI7", 6.974, 12)))
+        self.assertTrue(ms.startswith("\\DeclareMathSizes{%.4f}{%.4f}" % ((judge.set_size(9.963),) * 2)), ms)
+
+    def test_mathtime_scripts_are_the_glyphs_beside_its_maths(self):
+        # board 113 lib:3fe71b4ef018 p328 (bp, as mutool gives them): MTMI rho at 9.963 and its superscript 2 in
+        # Times-Roman at 6.974 one pt to its right; the running head's Times at 8.468, 250 pt above any maths
+        rho = ("ρ", 0, 0, 150.0, 237.4, 155.6, 243.9, "MjhtdgMTMI", 9.963)
+        two = ("2", 0, 0, 197.6, 225.4, 201.2, 230.2, "KhnwyxTimes-Roman", 6.974)
+        sup = ("2", 0, 0, 156.6, 233.0, 160.2, 237.8, "KhnwyxTimes-Roman", 6.974)
+        head = ("G", 0, 0, 254.5, 36.5, 260.8, 42.5, "KhnwyxTimes-Roman", 8.468)
+        body = [("a", 0, 0, 60.0 + 5 * k, 300.0, 64.0 + 5 * k, 305.0, "KhnwyxTimes-Roman", 9.963) for k in range(300)]
+        self.assertEqual(judge.mathtime_scripts(body + [rho, sup, two, head], 9.963), [sup])
+        self.assertEqual(judge.mathtime_scripts(body + [sup, two, head], 9.963), [])            # no MathTime: none
+        page = body + [rho] * 6 + [sup] * 6 + [head] * 9          # more running head than scripts: the scripts win
+        self.assertEqual(judge.math_sizes(page), r"\DeclareMathSizes{10.0004}{10.0004}{7}{5}")
+        self.assertEqual(judge.math_sizes(body + [rho] * 6 + [sup] * 4 + [head] * 9), "")      # too few to tell
 
     def test_formula_line_takes_its_base_size(self):
         cs = [8.966] * 11 + [7.273] * 12
@@ -1196,6 +1231,25 @@ class JudgePageMathSizes(unittest.TestCase):
                          "\\DeclareMathSizes{10}{10}{8}{6}\n")
             pdf = os.path.join(d, "s", "page.pdf")
             self.assertIn("CMMI8", subprocess.run(["pdffonts", pdf], capture_output=True, text=True).stdout)
+            out = io.StringIO()
+            res = judge.judge(pdf, 1, os.path.join(d, "s", "r.lines.json"), os.path.join(d, "s", "g"), out=out,
+                              route="glyph", setter=False)
+            flagged = [ln for ln in out.getvalue().splitlines() if ln.startswith("G ") and ln.split()[8] == "1"]
+            self.assertEqual((res["glyph"], res["style"]), (0, 0), flagged)
+
+
+    def test_scripts_at_the_page_size_on_a_size_that_does_not_snap(self):
+        # board 1805.01788 p3's body, 8.966 bp, is set at \fontsize{8.9996} (within SNAP_MIN of 9, kept): its
+        # declaration must be named so, {9} is another size to LaTeX and the scripts fell back to 0.7 of the body
+        # (6.3 pt, CMMI6) against the page's 7.3 (CMMI7). Board 113 lib:3fe71b4ef018 p328 is the same at 10.0004
+        with tempfile.TemporaryDirectory(prefix="test-judge-msz-") as d:
+            line = "Here $a_{i} + b_{j}^{k} = c_{m} + d_{n} + e_{p} + f_{q}$ holds for all of them."
+            _accent_case(d, "s", "\\fontsize{8.9996}{10.8}\\selectfont " + line,
+                         "Here \\(a_{i} + b_{j}^{k} = c_{m} + d_{n} + e_{p} + f_{q}\\) holds for all of them.",
+                         "\\usepackage{fix-cm}\\DeclareMathSizes{8.9996}{8.9996}{7.3}{5.5}\n")   # 8.9996, not 9
+            pdf = os.path.join(d, "s", "page.pdf")
+            self.assertIn(8.966, {round(c[8], 3) for c in judge.chars(pdf, 1, 1)[0]})          # 1805 p3's body
+            self.assertIn("CMMI7", subprocess.run(["pdffonts", pdf], capture_output=True, text=True).stdout)
             out = io.StringIO()
             res = judge.judge(pdf, 1, os.path.join(d, "s", "r.lines.json"), os.path.join(d, "s", "g"), out=out,
                               route="glyph", setter=False)

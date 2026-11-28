@@ -766,6 +766,15 @@ def expanded(ma, mb):
     return (mb[0] * r, mb[1], mb[2] * r, mb[3])
 
 
+def glyph_flag(solid: int, holes: tuple | None, t: str, tb: str) -> bool:
+    """a pair is flagged at solid >= THRESHOLD, or when its two glyphs have another number of holes: then it is another
+    glyph, however thin the stroke that makes the difference (e -> c: the crossbar, solid 4 at 10 pt). Holes tell two
+    LETTERS apart only: two of one letter are told apart by their ink alone, since a stroke under a pixel wide can
+    close an eye on one side and leave it open on the other (board 113 lib:3fe71b4ef018 p328 L20: the subscript e of
+    alpha_e at 7 pt, xor 1 px on its own, its eye open on the page and closed in Nimbus)"""
+    return solid >= THRESHOLD or (holes is not None and holes[0] != holes[1] and t != tb)
+
+
 def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list, wd: str, res, bo: int = 0) -> tuple:
     """the glyph-raster route (CONTRACT unit 5): every pair's (xor, solid, piece) from both glyphs' own font programs,
     rasterised by `inkcmp glyphs` at A's origin; an A side without an outline (no font program, a Type 3 or TrueType
@@ -1260,22 +1269,52 @@ SNAP_MIN = 0.001
 MATHLETTER = r"CMMI|MTMI|MT2MI|EURM|rtxmi|ntxmi|NewTXMI|zplm|pxmi|LinLibertineI\d*$|LibertineMathMI"
 
 
+#: MathTime's fonts: it sets a formula's letters and digits in Times, so a script there is any glyph beside one of these
+MATHTIME = r"MTMI|MT2MI|MTSY|MTEX|MT2SY|MT2EX"
+
+
+def mathtime_scripts(ac: list, T: float) -> list:
+    """on a MathTime page, the glyphs at 0.35 to 0.95 of the body size T that lie within T/2 of a MathTime glyph: its
+    formulas' scripts, which MathTime sets in Times as often as in MTMI (board 113 lib:3fe71b4ef018 p328: the
+    superscript 2s and the subscript e of alpha_e in Times at 6.974 bp, beside MTMI rho and alpha), and not the
+    page's running head or footnotes at 8.468 bp, which no MathTime glyph is near"""
+    mt = [c for c in ac if re.search(MATHTIME, c[7])]
+    if not mt:
+        return []
+    h = T / 2
+    grid = collections.defaultdict(list)
+    for c in mt:
+        for gy in range(int((c[4] - h) // T), int((c[6] + h) // T) + 1):
+            grid[gy].append(c)
+    out = []
+    for c in ac:
+        if not 0.35 * T <= c[8] < 0.95 * T or re.search(MATHTIME, c[7]):
+            continue
+        if any(m[3] - h <= c[5] and c[3] <= m[5] + h and m[4] - h <= c[6] and c[4] <= m[6] + h
+               for m in grid.get(int(c[4] // T), ())):
+            out.append(c)
+    return out
+
+
 def math_sizes(ac: list) -> str:
     """the page's own maths sizes, as \\DeclareMathSizes for its body size: the commonest maths-letter size between 0.65
     and 0.95 of the body size is its script size, the one below 0.9 of that its scriptscript size (or half the body
     size where the page has none: 5.5 pt under 9 pt is 0.61 of it). A package's sizes change between versions: newtxmath sets 9 pt scripts at 6.6 pt
     today and set them at 7.3 pt in 2018 (board 1805.01788 p3: 25 maths italics in LibertineMathMI7 at 6.575 bp
-    against the page's LinLibertineI7 at 7.273, flagged as glyph findings). "" when the page has too few to tell,
-    or when its maths is MathTime, which mathptmx only stands in for: at the page's sizes its Symbol letters move
-    against their neighbours (board35 lib:c57ac038ae5f p293: an alpha out of order, two pieces of glyphs read as
-    rules, both columns worse)."""
-    if any(re.search(r"MTMI|MT2MI|MTSY|MTEX", c[7]) for c in ac):
-        return ""
+    against the page's LinLibertineI7 at 7.273, flagged as glyph findings). On a MathTime page (which mathptmx stands
+    in for, always at 7.4 and 6 pt under 10) the script glyphs beside its maths fonts vote too (`mathtime_scripts`).
+    "" when the page has too few to tell.
+
+    The size is written as `compile_lines` writes a line's (%.4f): LaTeX finds a \\DeclareMathSizes by the size's
+    name, and `{10}` is not the size of a line set at `\\fontsize{10.0004}` (every 10 pt page whose size does not snap:
+    the declaration was there and was never used, board 113 p328's superscripts at mathptmx's 7.4 pt against the
+    page's 7)."""
     body = collections.Counter(round(c[8], 3) for c in ac if c[8] > 0)
     if not body:
         return ""
     T = body.most_common(1)[0][0]
     ms = collections.Counter(round(c[8], 3) for c in ac if re.search(MATHLETTER, c[7].split("+")[-1]))
+    ms.update(round(c[8], 3) for c in mathtime_scripts(ac, T))
     s1 = [(n, z) for z, n in ms.items() if 0.65 * T <= z < 0.95 * T]
     if not s1 or max(s1)[0] < 5:
         return ""
@@ -1283,8 +1322,9 @@ def math_sizes(ac: list) -> str:
     s2 = [(n, z) for z, n in ms.items() if 0.35 * T <= z < 0.9 * s1]
     s2 = max(s2)[1] if s2 and max(s2)[0] >= 3 else 0.5 * T
     pt = lambda z: round(z * 72.27 / 72, 2)
-    t = set_size(T)
-    return "\\DeclareMathSizes{%g}{%g}{%g}{%g}" % (round(t, 2), round(t, 2), pt(s1), pt(s2))
+    exact = collections.Counter(c[8] for c in ac if round(c[8], 3) == T)       # a line is set from its glyphs' own
+    t = set_size(exact.most_common(1)[0][0])                                    # size, not from its rounding
+    return "\\DeclareMathSizes{%.4f}{%.4f}{%g}{%g}" % (t, t, pt(s1), pt(s2))
 
 
 def size_voters(ac: list) -> tuple:
@@ -2553,9 +2593,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                     continue
                 xo, so, pc = r[:3]
                 holes = r[3:5] if len(r) >= 5 and min(r[3:5]) >= 0 else None
-                # a glyph whose outline has another number of holes is another glyph, however thin the stroke that
-                # makes the difference (e -> c: the crossbar, solid 4 at 10 pt)
-                flag = so >= THRESHOLD or (holes is not None and holes[0] != holes[1])
+                flag = glyph_flag(so, holes, t, tb)
                 ga, gb = gnames.get((i, k), ("", ""))
                 sa, sb = face(fa, ga), face(fb, gb)
                 if maths_digit(t, tb, fa, fb, fam) and "x" not in sa:
