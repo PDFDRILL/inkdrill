@@ -286,6 +286,13 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (pdfdrill-51, board 119 lib:c9daf79960c3 p68 L17): page_rules' "tight" uses the tallest glyph.**
+    - The page's \underline{Map} paired on the page side. The rendered underline (128 x 3 px) failed the tight test:
+      glyphs within half their own height must cover >= 80 % of the bar. M and p did, at 19 and 6 px over;
+      a, 18.5 px over a 30 px glyph, did not, so the cover was 74 % and the bar counted as missing.
+    - An underline sits at a fixed depth under the baseline, so "tight" now means half the TALLEST glyph over the bar.
+    - Board, 49 jobs: c9da p68 MathPix and Gemma4 rules_missing 1 -> 0 (both write \underline); ours unchanged, since
+      its reading has no \underline. pdfdrill-51's reading with it: rules_missing 1 -> 0.
   - **changed 2026-11-28 (pdfdrill-51, board 117 0864 p4): a page glyph's own ink beyond its quad is no page rule.**
     - On 0864 p4, the rotated italic F of the y-axis labels "F^_0 : Greedy - Opus" (L168, L169) reaches 3.6 and
       4.4 px past its quad's top.

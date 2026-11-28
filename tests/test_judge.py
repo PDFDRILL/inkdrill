@@ -1331,6 +1331,20 @@ class VariantLetterUnit(unittest.TestCase):
         self.assertEqual(judge.variant_letters([de], [("&#x434;", "afii10069", 457.9, 704.7)])[0][0], "&#x434;")
 
 
+class UnderlineUnit(unittest.TestCase):
+    """an underline under a word of tall and short letters is a page rule on either side (lib:c9daf79960c3 p68 L17)"""
+
+    def test_underline_under_map(self):
+        S = judge.S
+        # as rendered at 400 dpi: \underline{Map}'s bar (1346,80)-(1474,83), touch 3; M, a, p's quads over it
+        bar = [(x, y) for y in range(80, 83) for x in range(1346, 1474)]
+        g = lambda ch, x0, y0, x1, y1: (ch, 0, 0, x0 / S, y0 / S, x1 / S, y1 / S, "LMRoman12-Regular", 11.96)
+        ac = [g("M", 1346.3, 15.5, 1405.8, 60.9), g("a", 1405.9, 31.2, 1438.4, 61.5), g("p", 1438.4, 31.6, 1474.5, 73.8)]
+        self.assertEqual(len(judge.page_rules([(bar, 3)], ac)), 1)
+        far = [(x, y + 60) for x, y in bar]                                    # 60 px further down: no rule of theirs
+        self.assertEqual(judge.page_rules([(far, 0)], ac), [])
+
+
 class PageGlyphPieceUnit(unittest.TestCase):
     """a page glyph's own ink beyond its quad is no page rule (0864 p4 L168/L169: the rotated italic F of F^_0)"""
 

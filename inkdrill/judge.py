@@ -1823,6 +1823,10 @@ def page_rules(comps: list, ac: list, page=None) -> list:
         xs, ys = [p[0] for p in comp], [p[1] for p in comp]
         x0, x1, y0, y1 = min(xs), max(xs) + 1, min(ys), max(ys) + 1
         maths, above, below, tight = False, [], [], []
+        # "tight" is half the TALLEST glyph over the component: an underline sits at a fixed depth under the baseline,
+        # so an x-height letter is further from it in its own heights than a tall one (lib:c9daf79960c3 p68 L17: under
+        # \\underline{Map} the a, 18.5 px over a 30 px glyph, was not tight, and M and p covered 74 % of the bar)
+        tall = max((g[3] - g[1] for g in gl if g[2] > x0 and g[0] < x1), default=4.0)
         for gx0, gy0, gx1, gy1, m in gl:
             if gx1 <= x0 or gx0 >= x1:
                 continue
@@ -1833,7 +1837,7 @@ def page_rules(comps: list, ac: list, page=None) -> list:
                 break
             if gap <= 1.5 * gh:                       # 1805.01788 p3: a Libertine \\frac's denominator 25 px under
                 (above if gy1 <= (y0 + y1) / 2 else below).append((max(gx0, x0), min(gx1, x1)))   # its bar, 22 px tall
-            if gap <= 0.5 * gh:
+            if gap <= 0.5 * max(gh, tall):
                 tight.append((max(gx0, x0), min(gx1, x1)))
 
         def cover(spans):
