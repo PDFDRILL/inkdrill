@@ -286,6 +286,27 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (board 114, the scan floor): the scan route sets the reading closer to a scan.**
+    - Rule 6. OCR evaluations (ISRI/UNLV ocreval, OCR-D dinglehopper) compare text with ground-truth text and never
+      with ink. The closest ink method is Document Image Decoding (Kopec and Chou, Xerox): it aligns a transcription
+      with the image glyph by glyph, using templates taken from the image. The idea here is that alignment's cheap
+      form: word by word, by extent.
+    - The snippet is rendered at SNIP_DPI 600. At 300 dpi, the cut at 128 closed 10 pt CM's e and a. On US6100897A
+      p18, 423 of MathPix's 624 holes were page 1 / rendered 0, nearly all e. The page stays at 300 dpi: rendering
+      it at 600 helped the 290 ppi scan (0.0498) but hurt the 243 and 150 ppi ones (alex1 0.2141).
+    - A line is mapped word by word when it has as many rendered words as page words (gap 0.35 of the median
+      height), and as a whole line otherwise.
+    - Face commands are dropped (`unface`): a scan tells no font. lib:fe56cd934435 p56: Gemma4's correct
+      \textit caption gave 43 holes, against 16 for MathPix's roman reading of it.
+    - Results. MathPix, whose text is the reference, from 0.3093 / 0.3771 / 0.4035 to 0.1147 / 0.1436 / 0.1837,
+      below half of each.
+      - Column order stays on US61 and alex1.
+      - On fe56, Gemma4 goes from first to last (0.1603), because it reads the running head and the folio as one
+        line. The old floor hid that.
+      - Perturbed MathPix readings on 13 pages: 5 % of words dropped scores worse on all 13 (the old route missed
+        1511 p2709); 5 % of letters swapped scores worse on 12, and 1511 p2709 ties.
+    - Still wrong: a born CM page through this route gets holes findings where its own 300 dpi raster closes an eye
+      (lib:008d43e5db48 p272 0.0356 -> 0.1810). Born rows use the glyph route and are untouched.
   - **changed 2026-11-28 (board lib:d68e0271bd4d p334): `\textsl` in OT1 on a CM slanted page.** A page with
     CMSL, CMBXSL, CMSLTT or CMSSI gets `OT1_SL`, as CMTT pages get `OT1_TT`: cmsl8 for CMSL8 at 7 pt, where T1 set
     cm-super's SFSL0700. pdfdrill-51's \textsl reading of p334: glyph 3 -> 1 (L18's C and M pair), residual

@@ -993,6 +993,83 @@ class JudgeScanRoute(unittest.TestCase):
             self.assertEqual(int(re.search(r" missing (\d+)", summary)[1]), int(re.search(r" comps (\d+)", summary)[1]))
 
 
+class ScanFloorUnit(unittest.TestCase):
+    """the scan route's setting (board 114: a reading equal to the reference scored 0.31-0.40 from the setting alone)"""
+
+    def test_unface_keeps_the_content(self):
+        self.assertEqual(scanjudge.unface("\\textsc{Figure} 30. \\textit{Finding the path}"), "Figure 30. Finding the path")
+        self.assertEqual(scanjudge.unface("\\textbf{a \\textit{b} c} d \\(x_{1}\\)"), "a b c d \\(x_{1}\\)")
+        self.assertEqual(scanjudge.unface("\\textit{a \\{ b} c"), "a \\{ b c")          # an escaped brace stays
+        self.assertEqual(scanjudge.unface("\\mathrm{S} and \\textup{x}"), "\\mathrm{S} and \\textup{x}")
+
+    def test_words_split_at_a_gap(self):
+        # US6100897A p18 at 300 dpi: x-height letters 22 px tall, 2-4 px apart inside a word, 12-16 px between words
+        word = lambda x0, n: [(x0 + 16 * k, 100, x0 + 16 * k + 13, 122) for k in range(n)]
+        cs = word(0, 3) + word(61, 2) + word(106, 4)
+        self.assertEqual([len(w) for w in scanjudge.words(cs[::-1])], [3, 2, 4])
+        self.assertEqual(scanjudge.words([]), [])
+
+    def test_a_word_maps_onto_its_own_word(self):
+        # the page's word gaps are not the snippet's in proportion (its widths drift against CM's along the line):
+        # one map for the line puts the rendered middle word off the page's (invented); a map per word does not
+        page = [(0, 100, 13, 122, 0), (16, 100, 29, 122, 1), (90, 100, 103, 122, 0), (106, 100, 119, 122, 1),
+                (150, 100, 163, 122, 0), (166, 100, 179, 122, 1)]           # word gaps 61 and 31: not in proportion
+        snip = [(0, 0, 13, 22, 0), (16, 0, 29, 22, 1), (60, 0, 73, 22, 0), (76, 0, 89, 22, 1), (120, 0, 133, 22, 0),
+                (136, 0, 149, 22, 1)]
+        whole = [k for k, *_ in scanjudge.mapped(page, list(range(6)), snip)]
+        self.assertIn("invented", whole)
+        wa = scanjudge.words([c + (j,) for j, c in enumerate(page)])
+        wb = scanjudge.words(snip)
+        self.assertEqual(len(wa), len(wb))
+        per_word = [k for bs, w in zip(wb, wa) for k, *_ in scanjudge.mapped(page, [c[5] for c in w], bs)]
+        self.assertEqual(per_word, ["ok"] * 6)
+        page[1] = page[1][:4] + (0,)                                     # the page's e with its eye closed
+        self.assertEqual([k for k, *_ in scanjudge.mapped(page, [0, 1], snip[:2])], ["ok", "holes"])
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class ScanSnippetResolution(unittest.TestCase):
+    """the reading's snippet at SNIP_DPI keeps the eyes of 10 pt CM: at 300 dpi the cut at 128 closed them, and a
+    correct e over a scan's open one was a holes finding (board 114 US6100897A p18: 423 of MathPix's 624)"""
+
+    def test_every_eye_is_a_hole(self):
+        with tempfile.TemporaryDirectory(prefix="test-scan-dpi-") as d:
+            line = "see the eel here, a cat sees"                    # 9 e and 2 a: 11 letters with an eye
+            pdf, got = judge.compile_group([([line], [10.0])], "", d)
+            bo = got[0][2]
+            holes = lambda dpi: sum(c[4] for c in scanjudge.components(
+                scanjudge.render(pdf, os.path.join(d, "r%d" % dpi), dpi=dpi)[bo], dpi))
+            self.assertEqual(holes(scanjudge.SNIP_DPI), 11)
+            self.assertLess(holes(scanjudge.DPI), 11)                # the reason for SNIP_DPI
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
+class ScanRouteSetting(unittest.TestCase):
+    """judge_scan maps word by word and sets no face: a page in another font than the snippet's CM, read right"""
+    LINE = JudgeScanRoute.LINE
+
+    def scan(self, d, name, page, read, pre=""):
+        _accent_case(d, name, page, read, pre)
+        out = io.StringIO()
+        judge.judge(os.path.join(d, name, "page.pdf"), 1, os.path.join(d, name, "r.lines.json"),
+                    os.path.join(d, name, "g"), out=out, route="scan")
+        return out.getvalue()
+
+    def test_a_times_page_read_right_has_no_residual(self):
+        # Times' widths drift against CM's along the line: one map for the line left 4 rendered components between
+        # the page's (invented 4, missing 1: 0.0685); word by word they land on their own letters
+        with tempfile.TemporaryDirectory(prefix="test-scan-times-") as d:
+            text = self.scan(d, "t", self.LINE, self.LINE, "\\usepackage{times}\n")
+            self.assertEqual(float(re.search(r"^SCAN1 .* residual (\S+)$", text, re.M)[1]), 0.0, text[-600:])
+
+    def test_a_face_is_not_set(self):
+        with tempfile.TemporaryDirectory(prefix="test-scan-face-") as d:
+            self.scan(d, "f", "\\textit{" + self.LINE + "}", "\\textit{" + self.LINE + "}")
+            tex = open(os.path.join(d, "f", "g", "lines.tex"), encoding="utf-8").read()
+            self.assertIn("Koefficienten", tex)
+            self.assertNotIn("\\textit", tex.split("\\begin{document}")[1])
+
+
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))
 class JudgePdflatexNeverHangs(unittest.TestCase):
     """a line holding \\end{document} made pdflatex spin without end (found testing the scan route, 2026-11-21): it is
