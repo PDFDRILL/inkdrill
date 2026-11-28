@@ -30,8 +30,10 @@ Guarantees:
 """
 from __future__ import annotations
 
+import collections
 import glob
 import json
+import math
 import os
 import re
 import subprocess
@@ -85,13 +87,21 @@ def unface(t: str) -> str:
 
 
 def words(cs: list) -> list:
-    """components (x0, y0, x1, y1, ...) in x order, split into words where the gap to the word so far exceeds WORD_GAP
-    of their median height"""
+    """components (x0, y0, x1, y1, ...) in x order, split into words where the gap to the word so far exceeds the line's
+    word gap: WORD_GAP of the median height, or the line's own split between letter and word gaps (Otsu's threshold over
+    its gaps) where that is larger. A scan whose letters stand further apart than 0.35 of their height was cut into its
+    letters (cam-cocuma87 p8 L20: 56 page words against 14 rendered)"""
     if not cs:
         return []
+    cs = sorted(cs, key=lambda c: c[0])
     gap = WORD_GAP * sorted(c[3] - c[1] for c in cs)[len(cs) // 2]
+    gaps, right = [], cs[0][2]
+    for c in cs[1:]:
+        gaps.append(c[0] - right)
+        right = max(right, c[2])
+    gap = max(gap, otsu(gaps))
     out = []
-    for c in sorted(cs, key=lambda c: c[0]):
+    for c in cs:
         if out and c[0] - max(x[2] for x in out[-1]) <= gap:
             out[-1].append(c)
         else:
@@ -99,10 +109,102 @@ def words(cs: list) -> list:
     return out
 
 
+def otsu(gs: list) -> float:
+    """the threshold between a line's letter gaps and its word gaps: the cut of the sorted gaps with the largest
+    between-class variance (Otsu); -inf with fewer than 4 gaps"""
+    gs = sorted(gs)
+    if len(gs) < 4:
+        return float("-inf")
+    n, tot = len(gs), sum(gs)
+    best, cut, acc = -1.0, float("-inf"), 0.0
+    for k in range(1, n):
+        acc += gs[k - 1]
+        m0, m1 = acc / k, (tot - acc) / (n - k)
+        v = k * (n - k) * (m0 - m1) ** 2
+        if v > best and gs[k] > gs[k - 1]:
+            best, cut = v, (gs[k - 1] + gs[k]) / 2
+    return cut
+
+
+#: the alignment's costs: a pair of words differs by |ln| of their width ratio; joining two words on one side (the gap
+#: rule merged or split them) adds JOIN; a word left without a partner costs SKIP (a width ratio of e, 2.7)
+JOIN = 0.3
+PAGE_JOIN = 12
+SKIP = 1.0
+
+
+def align(wb: list, wa: list, A: list) -> tuple:
+    """the line's rendered words wb (component lists) aligned with its page words wa (index lists into A) by their
+    widths, in order: a dynamic programme over pairings 1:1, 2:1 and 1:n (n <= PAGE_JOIN) and words left alone -- the cheap form of
+    Document Image Decoding's Viterbi alignment of a transcription with the image. Returns the aligned groups as
+    (rendered components, page indices) and the rendered components of words left alone (invented); a page word left
+    alone stays missing.
+
+    A line whose word counts differed was mapped whole by extent, and the map drifted along it: a correct reading of a
+    hard line cost more than leaving it out (alex1 p21: MathPix's correct "(9.16), (9.22), (9.24) and (9.26)" line, 29
+    findings, where a reading without it paid its missing ink only)."""
+    if not wb or not wa:
+        return [], [c for w in wb for c in w]
+    ext = lambda cs: (min(c[0] for c in cs), min(c[1] for c in cs), max(c[2] for c in cs), max(c[3] for c in cs))
+    pb = [ext(w) for w in wb]
+    pa = [ext([A[j] for j in w]) for w in wa]
+    # rendered widths in page units by the two lines' extents, not their heights (a face wider than CM, or a box with
+    # another share of ascenders, made every pair look unequal) nor their summed word widths (gaps left out: a page
+    # word cut into letters has far less of it than its extent)
+    s = (max(e[2] for e in pa) - min(e[0] for e in pa)) / max(max(e[2] for e in pb) - min(e[0] for e in pb), 1)
+    wid_b = lambda i, n: max((pb[i + n - 1][2] - pb[i][0]) * s, 1.0)
+    wid_a = lambda j, n: max(pa[j + n - 1][2] - pa[j][0], 1.0)
+    nb, na = len(wb), len(wa)
+    mw = max(sorted(wid_b(i, 1) for i in range(nb))[nb // 2], 1.0)   # the line's median rendered word, page units
+    INF = float("inf")
+    cost = [[INF] * (na + 1) for _ in range(nb + 1)]
+    back = [[None] * (na + 1) for _ in range(nb + 1)]
+    cost[0][0] = 0.0
+    for i in range(nb + 1):
+        for j in range(na + 1):
+            c0 = cost[i][j]
+            if c0 == INF:
+                continue
+            # every cost in one unit, width in median-word widths: a word left alone costs its own width, a pairing the
+            # difference of its two widths. Absorbing a dropped word into a neighbour so costs at least that word's ink,
+            # as leaving it alone does; per piece, a word cut into letters cost one SKIP per letter and was absorbed
+            # instead (lib:cf33914ffd33 p6, lib:d8a2bb86b4e5 p2: a reading with words dropped scored better)
+            steps = []
+            if j < na:
+                steps.append((0, 1, SKIP * wid_a(j, 1) / mw))
+            if i < nb:
+                steps.append((1, 0, SKIP * wid_b(i, 1) / mw))
+            # a rendered word may take up to PAGE_JOIN page words: a scan whose letters stand apart is cut into far more
+            # "words" than its reading has (cam-cocuma87 p8 L6: 60 page words against 13), and with 1:2 at most half
+            # its ink stayed in no group, missing
+            for di, dj in [(1, 1), (2, 1)] + [(1, n) for n in range(2, PAGE_JOIN + 1)]:
+                if i + di <= nb and j + dj <= na:
+                    steps.append((di, dj, abs(wid_b(i, di) - wid_a(j, dj)) / mw + (JOIN if di + dj > 2 else 0)))
+            for di, dj, c in steps:
+                if i + di <= nb and j + dj <= na and c0 + c < cost[i + di][j + dj]:
+                    cost[i + di][j + dj] = c0 + c
+                    back[i + di][j + dj] = (di, dj)
+    spans, lone, i, j = [], [], nb, na
+    while i or j:
+        di, dj = back[i][j]
+        i, j = i - di, j - dj
+        if di and dj:
+            spans.append(([c for w in wb[i:i + di] for c in w], [x for w in wa[j:j + dj] for x in w]))
+        elif di:
+            lone += wb[i]
+    return spans[::-1], lone
+
+
 def mapped(A: list, js: list, bs: list):
-    """the rendered components bs mapped onto the page components A[js] by extent (x and y scaled separately), each
-    as ("invented", box, []) with no page ink under it, ("holes", its holes, [j]) over one page component whose hole
-    count differs, or ("ok", box, under)"""
+    """the rendered components bs mapped onto the page components A[js], each as ("invented", box, []) with no page ink
+    under it, ("holes", its holes, [j]) over one page component whose hole count differs, or ("ok", box, under).
+    As many on each side: the k-th with the k-th in x order. A map by extent drifted by part of a letter across a word
+    in a face wider than CM's, and a page e paired with a rendered h (holes 1 / 0, then 0 / 1 beside it: alex1 p21's
+    MathPix 0.179 -> 0.070). Otherwise by extent, x and y scaled separately"""
+    if len(js) == len(bs) > 1:
+        for c, j in zip(sorted(bs, key=lambda c: c[0]), sorted(js, key=lambda j: A[j][0])):
+            yield ("holes", c[4], [j]) if A[j][4] != c[4] else ("ok", (A[j][0], A[j][1], A[j][2], A[j][3]), [j])
+        return
     ax0, ay0 = min(A[j][0] for j in js), min(A[j][1] for j in js)
     ax1, ay1 = max(A[j][2] for j in js), max(A[j][3] for j in js)
     bx0, by0 = min(c[0] for c in bs), min(c[1] for c in bs)
@@ -132,7 +234,15 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
     A = components(render(a_pdf, os.path.join(wd, "scan-page"), pno)[0])
     hs = sorted(c[3] - c[1] for c in A)
     med = hs[len(hs) // 2] if hs else 1
-    text_like = [j for j, c in enumerate(A) if 0.3 * med <= c[3] - c[1] <= 2.5 * med and c[2] - c[0] <= 5 * med]
+    # the population, from the page alone: every ink component up to text size, small print and specks included.
+    # It was text-like heights (0.3-2.5 of the median) plus the ink under the reading's own lines, so it moved with
+    # the reading: a line taken out took its small print out of the count, and leaving lines out paid
+    # (lib:d8a2bb86b4e5 p2; the per-line cap below holds only over a population no reading can change)
+    # its size bound from the upper half of the heights: on a contents page the leader dots outnumber the letters, the
+    # median was a dot, and the letters themselves fell outside 2.5 of it (lib:d8a2bb86b4e5 p2)
+    top = hs[len(hs) // 2:]
+    big = top[len(top) // 2] if top else 1
+    text_like = [j for j, c in enumerate(A) if c[3] - c[1] <= 2.5 * big and c[2] - c[0] <= 5 * big]
     texts = [unface(J.line_tex(ln)) for ln in lv]
     failed, pages, bo, unset = {}, [], 0, set()
     if texts:
@@ -143,8 +253,8 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
             pages = render(snip, os.path.join(wd, "scan-snip"), dpi=SNIP_DPI)
     covered, invented, holes, rendered, judged, not_set = set(), 0, 0, 0, 0, 0
     beyond = set()                                   # page ink under a line whose characters TeX cannot set
-    boxed = set()                                    # page ink under any placed line: counted whatever its height
     unplaced = 0
+    own, found = {}, collections.Counter()           # line -> the page ink under its box; line -> its findings
     for i, ln in enumerate(lv):
         r = ln.get("region")
         if not isinstance(r, dict):                  # no geometry: not set here, its ink stays missing
@@ -155,7 +265,8 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
                (r["top_left_y"] + r["height"]) * k)
         under_box = [j for j, c in enumerate(A)
                      if box[0] <= (c[0] + c[2]) / 2 < box[2] and box[1] <= (c[1] + c[3]) / 2 < box[3]]
-        boxed.update(under_box)
+        if i not in unset:
+            own[i] = under_box
         if i in unset:                               # a script pdflatex drops (CJK): unmeasurable, not missing;
             print(f"N L{i} UNSETTABLE", file=out)    # it was missing, so a reading garbled into Latin scored better
             beyond.update(under_box)                 # (CN208060706U p3: 5 % of letters swapped, 0.386 -> 0.290)
@@ -176,31 +287,54 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
         # word's components landed between the page's (board 114 US6100897A p18, MathPix: invented 539 -> 310)
         wb = words(B)
         wa = words([A[j] + (j,) for j in under_box])
-        spans = (list(zip(wb, [[c[5] for c in w] for w in wa])) if len(wb) == len(wa) else [(B, under_box)])
+        spans, lone = align(wb, [[c[5] for c in w] for w in wa], A)
+        for c in lone:                               # a rendered word the alignment gave no page word: invented
+            invented += 1
+            found[i] += 1
+            print(f"S L{i} invented-word {c[0]} {c[1]} {c[2]} {c[3]}", file=out)
         for bs, js in spans:
             for kind, q, j in mapped(A, js, bs):
                 if kind == "invented":
                     invented += 1
+                    found[i] += 1
                     print(f"S L{i} invented {round(q[0])} {round(q[1])} {round(q[2])} {round(q[3])}", file=out)
                     continue
                 covered.update(j)
                 if kind == "holes":
                     holes += 1
+                    found[i] += 1
                     print(f"S L{i} holes {A[j[0]][4]} {q} {A[j[0]][0]} {A[j[0]][1]}", file=out)
-    # the population: text-like ink anywhere, and ALL ink under the reading's lines. Invented counts every rendered
-    # component, so ink a line covers counts as missing whatever its height; with text-like ink alone a line of small
-    # print could only add invented, and a reading with 5 % of its words dropped scored better (lib:d8a2bb86b4e5 p2)
-    text_like = sorted((set(text_like) | boxed) - beyond)
+    text_like = sorted(set(text_like) - beyond)
     missing = [j for j in text_like if j not in covered]
     mostly_unset = len(beyond) > len(text_like)       # more ink TeX cannot set than ink it can: not measured
     for j in missing:
         print(f"S missing {A[j][0]} {A[j][1]} {A[j][2]} {A[j][3]}", file=out)
     n = len(text_like)
+    # the cap: a line costs at most what its absence would, the page ink it owns (each component owned by the first
+    # line whose box holds it). A correct line the instrument maps badly cost more than leaving it out, so omission
+    # paid (alex1 p21: MathPix's correct "(9.16), (9.22), (9.24) and (9.26)" line, 29 findings). A line at the cap
+    # is one the instrument cannot tell from its absence: it is counted and named (`capped`), never hidden
+    pop, owner = set(text_like), {}
+    for i, js in own.items():
+        for j in js:
+            if j in pop:
+                owner.setdefault(j, i)
+    held = collections.Counter(owner.values())
+    lost = collections.Counter(owner[j] for j in missing if j in owner)
+    cost, capped, capped_comps = len(missing) - sum(lost.values()), 0, 0
+    for i in set(held) | set(found):
+        f = found[i] + lost[i]
+        if held[i] and f >= held[i]:
+            capped += 1
+            capped_comps += held[i]
+            print(f"N L{i} CAPPED {f} {held[i]}", file=out)
+        cost += min(f, held[i]) if held[i] else f
     res = dict(comps=n, missing=len(missing), invented=invented, holes=holes, rendered=rendered, lines=len(lv),
-               lines_judged=judged, not_set=not_set, unplaced=unplaced, unsettable=len(unset))
+               lines_judged=judged, not_set=not_set, unplaced=unplaced, unsettable=len(unset), capped=capped,
+               capped_comps=capped_comps)
     print(f"# page {pno}: scan route, {len(lv)} lines, {len(A)} ink components, {n} text-like", file=out)
     print("SCAN1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())) +
-          (" residual %.6f" % ((len(missing) + invented + holes) / n) if n and judged and not mostly_unset
+          (" residual %.6f" % (cost / n) if n and judged and not mostly_unset
            else " residual NOT_RUN"),
           file=out)
     print(BLIND, file=out)                           # G3

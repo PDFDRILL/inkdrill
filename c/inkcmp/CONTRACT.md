@@ -286,6 +286,42 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (coordinator: the scan route rewarded omission): words aligned, a line capped at its absence.**
+    - A correctly read line could cost more than leaving it out. On alex1 p21, MathPix's correct "(9.16), (9.22), (9.24)
+      and (9.26)" line cost 29 findings, so a reading without it scored better.
+    - Alignment (`align`): the cheap form of Document Image Decoding's alignment.
+      - A dynamic programme over word widths pairs 1:1, 2:1 and 1:n up to PAGE_JOIN (12).
+      - Costs are in median-word widths: a word left alone costs its own width, so absorbing a dropped word costs at
+        least its ink.
+      - Rendered widths are scaled by the two lines' extents.
+      - Inside a group of as many components on both sides, the k-th pairs with the k-th; otherwise by extent.
+      - Word gaps per line: the larger of 0.35 of the median height and Otsu's split of the line's gaps.
+    - Cap: a line costs at most the page ink it owns. A line at the cap is `N L<i> CAPPED`, and SCAN1 carries `capped`
+      and `capped_comps`, so it is never hidden.
+    - Population from the page alone: every component up to text size, bounded by the upper-half median height. It
+      used to move with the reading, and a line taken out took its small print out of the count.
+    - Gate (coordinator):
+      - (a) 95 line removals on 19 pages: none scores below keeping; 14 equal, all capped.
+      - (b) 5 % of words dropped and 5 % of letters swapped score worse on every measured page but one: dropping
+        on lib:d8a2bb86b4e5 p2, 0.8789 against 0.8922. Accepted because part of it is legitimate: 3 of its 10
+        components come from "ZZ TOBE" -> "ZZ", MathPix's misreading of the "ZZ TOP" logo. The other 7 are not:
+        "JUST GOT PAID" -> "GOT PAID" 5 -> 1, "BACKDOOR LOVE AFFAIR" -> "LOVE AFFAIR" 2 -> 1, "WAITIN' FOR THE BUS"
+        -> "FOR THE BUS" 3 -> 2, "All Rights Reserved" -> "All" 3 -> 2. The page sets each italic contents entry as
+        one blob word, which the alignment cannot split, so the remaining words cover the dropped word's ink.
+      - (c) born rows: 49 jobs byte-identical.
+      - (d) cam-cocuma87 p8 0.179 -> 0.127 and lib:b3a3f448df2a p6 0.237 -> 0.196, both better than b644536.
+        Their earlier rises came from lines whose letters stand apart (60 page "words" against 13), which 1:2 joins
+        left half unmatched.
+    - Board scans, MathPix / ours / Gemma4: US6100897A p18 0.0710 / 0.1112 / 0.0775; lib:fe56cd934435 p56
+      0.0856 / 0.0696 / 0.0903; alex1 p21 0.0562 / 0.0914 / 0.1167. Capped lines are counted in each row.
+    - fe56: ours ranks ahead of MathPix, and it is NOT a better reading. Ours reads the italic caption of Figure 30
+      as "FtcvRE 30. F1ndzng the palh ... lfepard runntng ... lemt dutance" and costs 1 + 1 + 3 + 5; MathPix reads it
+      right and costs 11 + 8 + 7 + 9. The scan's italic i's are broken and have no dot. MathPix's correct i's carry
+      dots that land on no ink (invented); ours' 1, l and z have no dot, and those substitutions are the route's
+      BLIND class. The route measures agreement with the ink, not correctness.
+    - Held-out: lib:b73e785c2374 is left out, since its "MathPix" is pdfdrill output (the coordinator, 2026-11-28).
+    - Alternatives not tried: matching the reading glyph by glyph against the page's components (a character-level
+      alignment, which no page word segmentation can defeat), and comparing ink pixels inside each aligned group.
   - **changed 2026-11-28 (held-out check of 8efc31e): the scan route counts all ink under a line, and leaves out
     lines TeX cannot set.**
     - Test: 17 library scans outside the board (dated personal scans left out), MathPix readings, 5 % of words dropped

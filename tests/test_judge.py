@@ -1009,14 +1009,46 @@ class ScanFloorUnit(unittest.TestCase):
         self.assertEqual([len(w) for w in scanjudge.words(cs[::-1])], [3, 2, 4])
         self.assertEqual(scanjudge.words([]), [])
 
+    def test_a_word_of_as_many_components_pairs_in_order(self):
+        # a face whose letter widths are not CM's: by extent a rendered letter lands between two page letters
+        # (invented) or on its neighbour (holes 1 / 0, then 0 / 1: lib:d5b151f1a70b p13); in order each pairs with its
+        # own. Widths of an 8-letter word at 300 dpi, the page's narrow-wide where the snippet's are wide-narrow
+        def word(ws, y0):
+            out, x = [], 0
+            for w in ws:
+                out.append((x, y0, x + w, y0 + 18, 0)); x += w + 2
+            return out
+        page, snip = word([6, 20] * 4, 100), word([20, 6] * 4, 0)
+        # 7 rendered against 8 on the page: mapped by extent, and some land between the page's letters
+        self.assertIn("invented", [k for k, *_ in scanjudge.mapped(page, list(range(8)), snip[:7])])
+        self.assertEqual([k for k, *_ in scanjudge.mapped(page, list(range(8)), snip)], ["ok"] * 8)
+        snip[5] = snip[5][:4] + (1,)                                       # one rendered letter with an eye: found
+        self.assertEqual([k for k, _, j in scanjudge.mapped(page, list(range(8)), snip)][5], "holes")
+
+    def test_align_pairs_words_and_joins_a_word_cut_into_letters(self):
+        # rendered words and page words by width; a page word cut into its letters (cam-cocuma87 p8 L6: 60 page words
+        # against 13 rendered, letters standing apart) joins one rendered word, up to PAGE_JOIN pieces
+        def wordsat(xs, w, y0):
+            return [[(x, y0, x + w, y0 + 20, 0)] for x in xs]
+        A = [c for w in wordsat([0, 40, 80, 130], 30, 100) for c in w]
+        wb = wordsat([0, 40, 80, 130], 30, 0)
+        spans, lone = scanjudge.align(wb, [[0], [1], [2], [3]], A)
+        self.assertEqual([(len(b), js) for b, js in spans], [(1, [0]), (1, [1]), (1, [2]), (1, [3])])
+        self.assertEqual(lone, [])
+        letters = [(x, 100, x + 8, 120, 0) for x in (0, 11, 22, 33, 44, 55)]          # one word, six pieces apart
+        spans, lone = scanjudge.align([[(0, 0, 63, 20, 0)]], [[j] for j in range(6)], letters)
+        self.assertEqual([sorted(js) for _, js in spans], [[0, 1, 2, 3, 4, 5]])
+
     def test_a_word_maps_onto_its_own_word(self):
         # the page's word gaps are not the snippet's in proportion (its widths drift against CM's along the line):
-        # one map for the line puts the rendered middle word off the page's (invented); a map per word does not
+        # one map for the line puts the rendered middle word off the page's (invented); a map per word does not.
+        # (A line of as many components on both sides pairs them in order, so the line has a speck more)
         page = [(0, 100, 13, 122, 0), (16, 100, 29, 122, 1), (90, 100, 103, 122, 0), (106, 100, 119, 122, 1),
                 (150, 100, 163, 122, 0), (166, 100, 179, 122, 1)]           # word gaps 61 and 31: not in proportion
         snip = [(0, 0, 13, 22, 0), (16, 0, 29, 22, 1), (60, 0, 73, 22, 0), (76, 0, 89, 22, 1), (120, 0, 133, 22, 0),
                 (136, 0, 149, 22, 1)]
-        whole = [k for k, *_ in scanjudge.mapped(page, list(range(6)), snip)]
+        page.append((185, 118, 188, 121, 0))                             # a speck: the line's counts differ (7 / 6)
+        whole = [k for k, *_ in scanjudge.mapped(page, list(range(7)), snip)]
         self.assertIn("invented", whole)
         wa = scanjudge.words([c + (j,) for j, c in enumerate(page)])
         wb = scanjudge.words(snip)
@@ -1077,6 +1109,17 @@ class ScanRouteSetting(unittest.TestCase):
             self.assertEqual(comps, len(ink))
             hs = sorted(c[3] - c[1] for c in ink)
             self.assertTrue(any(c[3] - c[1] < 0.3 * hs[len(hs) // 2] for c in ink))   # small print is there
+
+    def test_a_line_costs_at_most_its_absence(self):
+        # a line costs at most the page ink it owns, what leaving it out would cost, and one at that cap is named
+        # (alex1 p21: MathPix's correct "(9.16), (9.22), (9.24) and (9.26)" line cost 29 findings, more than its
+        # absence, so a reading without it scored better)
+        with tempfile.TemporaryDirectory(prefix="test-scan-cap-") as d:
+            text = self.scan(d, "g", self.LINE, " ".join([self.LINE] * 3))          # three times its text: invented
+            summary = re.search(r"^SCAN1 .*$", text, re.M)[0]
+            self.assertIn("N L0 CAPPED", text)
+            self.assertIn(" capped 1 ", summary)
+            self.assertLessEqual(float(re.search(r"residual (\S+)", summary)[1]), 1.0)
 
     def test_a_line_tex_cannot_set_is_not_measured(self):
         # CN208060706U p3: 37 of 39 lines Chinese, which pdflatex drops; their ink was missing, so a reading garbled
