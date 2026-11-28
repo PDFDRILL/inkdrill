@@ -977,6 +977,28 @@ class JudgeSetterFallbackFound(unittest.TestCase):
             self.assertNotIn("stand_in", res, "NimbusRomNo9L-Regu is the page's own font's TeX copy")
 
 
+class SetterSansAndSlantFaces(unittest.TestCase):
+    """\\textsf and \\textsl are faces to the setter, not letters: held-out lib:2d00cd5eafc2 p195, a Helvetica page
+    whose reading writes \\textsf 40 times, set "\\textsf" as glyphs (280 B glyphs unpaired, 704 glyph findings)"""
+
+    def test_units(self):
+        from inkdrill import setter
+        self.assertEqual(setter.faced("\\textsf{7.6 Axis} 169"), [("f", "7.6 Axis"), ("", " 169")])
+        self.assertEqual(setter.faced("\\textsl{CMel}"), [("i", "CMel")])
+        self.assertEqual(setter.faced("\\textbf{\\textsf{a}}"), [("fb", "a")])
+        self.assertTrue(setter.SANS.search("NimbusSanL-Regu") and setter.SANS.search("Helvetica-Bold"))
+        self.assertFalse(setter.SANS.search("NimbusRomNo9L-Regu") or setter.SANS.search("Times-Roman"))
+
+    @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+    def test_textsf_on_a_sans_page(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-sf-") as d:
+            pre = "\\usepackage{helvet}\\renewcommand{\\familydefault}{\\sfdefault}\n"
+            res, out = _accent_case(d, "sf", "Spatial Axis Orientation", "\\textsf{Spatial Axis Orientation}", pre,
+                                    route="glyph")
+            self.assertEqual(res.get("setter"), 1, "\n".join(out)[:300])
+            self.assertEqual((res["glyph"], res["a_unpaired"], res["b_unpaired"]), (0, 0, 0), "\n".join(out)[:600])
+
+
 class InklessPageGlyphs(unittest.TestCase):
     """a page character drawn by a space glyph is no page glyph: lib:88d76967110e p170 L7 draws code 32 of a CFF
     Times-Roman (no outline) under ActualText U+00AD, and mutool's text gives the soft hyphen there"""

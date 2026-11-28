@@ -143,7 +143,13 @@ def advances(trace_text: str) -> dict:
 
 #: the text-face commands a reading writes (pdfdrill 35340ad3 writes \\textbf{..} and kin into lines.json text): the
 #: setter sets the group in the page's font of that face, as pdflatex does
-FACES = {"textbf": "b", "textit": "i", "texttt": "m", "textsc": "c", "textsuperscript": "s"}
+FACES = {"textbf": "b", "textit": "i", "textsl": "i", "texttt": "m", "textsc": "c", "textsuperscript": "s",
+         "textsf": "f"}
+#: a sans-serif page font by its name: \\textsf ("f") is set in the page's sans font of the face, or, where the page
+#: has none, in the face without it (on a Helvetica page that is its body: held-out lib:2d00cd5eafc2 p195, 40
+#: \\textsf set as the letters of the command before). \\textsl is "i": style() reads a slanted font as italic.
+SANS = re.compile(r"Sans|San[LM]|Helvetica|Arial|Heros|phv|Biolinum|Gothic|Grotesk|Univers|Frutiger|Myriad|Verdana|"
+                  r"Calibri|Segoe|Tahoma|Futura|GillSans|Optima|Avenir|Circular|CMSS|LMSans", re.I)
 #: a text superscript as readings write it: maths holding only a superscript of plain characters (a footnote marker
 #: ${}^{30}$, \\({ }^{30}\\), $^{30}$; board lib:69bc5c71b881 p16, CircularStd: both columns write them so), set as
 #: \\textsuperscript, which `faced` reads as the face "s"
@@ -161,19 +167,19 @@ def text_line(t: str) -> bool:
 
 
 def faced(t: str) -> list:
-    """a reading's text line as [(face, text)]: the four text-face commands read as faces (style() letters, nested
+    """a reading's text line as [(face, text)]: the text-face commands (FACES) read as faces (style() letters and f, nested
     faces combined: \\textbf{\\textit{..}} is "bi"), their braces gone; escapes and any other command stay text"""
     out, stack, buf, i = [], [], [], 0
 
     def face():
-        return "".join(c for c in "mbics" if any(c in f for f in stack if f))
+        return "".join(c for c in "fmbics" if any(c in f for f in stack if f))
 
     def flush():
         if buf:
             out.append((face(), "".join(buf)))
             buf.clear()
     while i < len(t):
-        m = re.match(r"\\(textbf|textit|texttt|textsc|textsuperscript)\s*\{", t[i:])
+        m = re.match(r"\\(textbf|textit|textsl|texttt|textsc|textsuperscript|textsf)\s*\{", t[i:])
         if m:
             flush()
             stack.append(FACES[m[1]])
@@ -331,8 +337,12 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         """the page's font of a face (its most traced); a face the page has no font program of is set in R, the
         command stripped and its argument kept"""
         if face not in face_font:
-            face_font[face] = next((f for f in text_fonts if style(f.split("+")[-1]) == face and program(f)), None)
-            if face_font[face] is None:
+            want = face.replace("f", "")
+            face_font[face] = next((f for f in text_fonts if style(f.split("+")[-1]) == want
+                                    and ("f" not in face or SANS.search(f.split("+")[-1])) and program(f)), None)
+            if face_font[face] is None and "f" in face:
+                face_font[face] = font_of(want)
+            elif face_font[face] is None:
                 stats["setter_face_stripped"] += 1
                 face_font[face] = R
         return face_font[face]
