@@ -1062,6 +1062,22 @@ class ScanRouteSetting(unittest.TestCase):
             text = self.scan(d, "t", self.LINE, self.LINE, "\\usepackage{times}\n")
             self.assertEqual(float(re.search(r"^SCAN1 .* residual (\S+)$", text, re.M)[1]), 0.0, text[-600:])
 
+    def test_all_ink_under_a_line_counts(self):
+        # small print in a line is outside the text-like heights (0.3-2.5 of the median), so its ink could only
+        # add invented, never be missing: dropping its words scored better (lib:d8a2bb86b4e5 p2's legal lines). A
+        # one-line page has all its ink under the line, so every component counts: 118 here, 94 text-like alone
+        with tempfile.TemporaryDirectory(prefix="test-scan-boxed-") as d:
+            tiny = "{\\fontsize{3}{3}\\selectfont all rights reserved by the company}"
+            page = "Wenn also die Koefficienten gegeben sind, so findet man " + tiny + " leicht die Wurzeln."
+            read = "Wenn also die Koefficienten gegeben sind, so findet man all rights reserved by the company leicht " \
+                   "die Wurzeln."
+            text = self.scan(d, "b", page, read)
+            ink = scanjudge.components(scanjudge.render(os.path.join(d, "b", "page.pdf"), os.path.join(d, "ink"), 1)[0])
+            comps = int(re.search(r"^SCAN1 .*?\bcomps (\d+)", text, re.M)[1])
+            self.assertEqual(comps, len(ink))
+            hs = sorted(c[3] - c[1] for c in ink)
+            self.assertTrue(any(c[3] - c[1] < 0.3 * hs[len(hs) // 2] for c in ink))   # small print is there
+
     def test_a_line_tex_cannot_set_is_not_measured(self):
         # CN208060706U p3: 37 of 39 lines Chinese, which pdflatex drops; their ink was missing, so a reading garbled
         # into Latin scored better than the right one. Now such a line is UNSETTABLE, and a page mostly so is NOT_RUN
