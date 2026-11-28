@@ -1331,6 +1331,21 @@ class VariantLetterUnit(unittest.TestCase):
         self.assertEqual(judge.variant_letters([de], [("&#x434;", "afii10069", 457.9, 704.7)])[0][0], "&#x434;")
 
 
+class PageGlyphPieceUnit(unittest.TestCase):
+    """a page glyph's own ink beyond its quad is no page rule (0864 p4 L168/L169: the rotated italic F of F^_0)"""
+
+    def test_a_piece_joined_to_its_glyph_is_the_glyph(self):
+        S = judge.S
+        # as measured at 400 dpi: the piece (1806,1508)-(1815,1511), 17 px, touching covered ink on 2; F's quad
+        # (1806.1,1512.4)-(1832.5,1540.4), 4.4 px under the piece's top
+        piece = [(x, y) for y in range(1508, 1511) for x in range(1806, 1815)][:17]
+        F = ("F", 0, 0, 1806.1 / S, 1512.4 / S, 1832.5 / S, 1540.4 / S, "CMMI7", 6.97)
+        self.assertEqual(judge.not_page_glyphs([(piece, 2)], [F]), [])
+        self.assertEqual(len(judge.not_page_glyphs([(piece, 0)], [F])), 1)             # free of glyph ink: a rule
+        far = [(x, y - 20) for x, y in piece]                                            # 20 px off: a rule
+        self.assertEqual(len(judge.not_page_glyphs([(far, 2)], [F])), 1)
+
+
 class GlyphFlagUnit(unittest.TestCase):
     """the flag of one pair: solid at THRESHOLD, or another number of holes between two letters"""
 

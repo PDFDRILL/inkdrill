@@ -1798,6 +1798,14 @@ def table_rules(rules: list, page) -> set:
     return out
 
 
+def not_page_glyphs(comps: list, ac: list) -> list:
+    """the page's rule-like components [(pixels, touch)] without a page glyph's own ink beyond its quad: joined to
+    covered ink (touch > 0) and inside one glyph quad widened by OWN_PAD_A, as `glyph_piece` is on the rendered side.
+    A rule stands free of glyph ink"""
+    own = [(c[3] * S, c[4] * S, c[5] * S, c[6] * S) for c in ac]
+    return [(comp, touch) for comp, touch in comps if not (touch > 0 and inside_quads(comp, own, OWN_PAD_A))]
+
+
 def page_rules(comps: list, ac: list, page=None) -> list:
     """the page's rules, from the page alone (J9): of the rule-like components of the ink no page glyph quad covers
     ([(pixels, touch)] over the whole page), those free of glyph ink (touch <= 30 %) that are maths -- a maths-font glyph
@@ -1852,6 +1860,10 @@ def page_rules(comps: list, ac: list, page=None) -> list:
 #: measured 1.25 (0864 p4 L168, small-caps R and E set upright for a rotated label) and 1.11 (its minus); at 1 px they
 #: were invented rules in two columns (board102)
 OWN_PAD = 2
+#: the same for a PAGE glyph, whose quad comes from the PDF's advance box: measured 3.6 and 4.4 (0864 p4 L168 and L169,
+#: the rotated italic F of F^_0 reaches past its quad's top, a 9 x 3 piece joined to it read as a page rule, missing in
+#: every column)
+OWN_PAD_A = 5
 
 
 def inside_quads(comp, quads, pad) -> bool:
@@ -2606,7 +2618,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                          boxes=boxes, glyphs=[], display=ln.get("type") in ("math", "equation"), up=1,
                          stage=collect(i), inside_only=rules_inside, a_page=[])
         got = rules_job(reqs, wd)
-        a_page = page_rules(got[0], ac, (aw, ah, ab))
+        a_page = page_rules(not_page_glyphs(got[0], ac), ac, (aw, ah, ab))
         for i, *_ in work:
             stages[i] = (lambda i: lambda side, quads, reg: got[where[(i, side)]])(i)
         a_owner = [rule_owner(c, boxes, glyph_owners, rules_inside) for c in a_page]

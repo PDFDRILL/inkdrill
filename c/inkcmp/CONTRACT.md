@@ -286,6 +286,15 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (pdfdrill-51, board 117 0864 p4): a page glyph's own ink beyond its quad is no page rule.**
+    - On 0864 p4, the rotated italic F of the y-axis labels "F^_0 : Greedy - Opus" (L168, L169) reaches 3.6 and
+      4.4 px past its quad's top.
+    - The C stage gave that 9 x 3, 17 px piece (joined to glyph ink, touch 2) as an uncovered component, and
+      page_rules kept it, so it counted as a missing rule in every column. The page draws no vector object there
+      (pdfdrill-51: none within 4 pt).
+    - `not_page_glyphs` drops a component that is joined to covered ink and lies within OWN_PAD_A (5 px) of one page
+      quad, as `glyph_piece` does on the rendered side. OWN_PAD stays 2 there.
+    - Board, 49 jobs: only the 3 jobs on 0864 p4 differ, rules_a 2 -> 0 and rules_missing 2 -> 0 in each column.
   - **changed 2026-11-28 (coordinator: the scan route rewarded omission): words aligned, a line capped at its absence.**
     - A correctly read line could cost more than leaving it out. On alex1 p21, MathPix's correct "(9.16), (9.22), (9.24)
       and (9.26)" line cost 29 findings, so a reading without it scored better.
