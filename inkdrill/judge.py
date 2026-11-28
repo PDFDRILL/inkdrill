@@ -290,6 +290,28 @@ def spelled(cs: list, traced: list) -> list:
 NAMELESS = ((re.compile(r"esint\d*$", re.I), "&#x222b;"),)
 
 
+#: (glyph name, font) -> the letter: a font that draws a Latin letter with a glyph named for another script.
+#: Linux Libertine's italic g, as the 2018 libertine package set it, is the single-storey glyph afii10069.ital (shared
+#: with Cyrillic italic de, so its ToUnicode says U+0434): the same outline as today's LibertineMathMI g (u1D454: width
+#: 499, the same 20 segments). Read as д, a correct g was another character and a glyph finding (board 115 1805.01788
+#: p3 L100's log_2)
+VARIANT_LETTER = [("afii10069.ital", re.compile(r"^LinLibertine\w*I\d*$"), "g")]
+
+
+def variant_letters(cs: list, traced: list) -> list:
+    """the page's characters with a glyph in VARIANT_LETTER read as the letter it draws"""
+    if not any(n == g[1] for g in traced for n, _, _ in VARIANT_LETTER):
+        return cs
+    TA = Origins(traced)
+    out = []
+    for c in cs:
+        g = TA.get(c[1], c[2], c[0])
+        hit = next((ch for n, r, ch in VARIANT_LETTER if g is not None and g[1] == n and r.search(c[7].split("+")[-1])),
+                   None)
+        out.append((hit,) + tuple(c[1:]) if hit and c[0] != hit else c)
+    return out
+
+
 def by_outline(cs: list) -> list:
     """the page's characters with those of a NAMELESS font replaced by what its outlines draw"""
     out = []
@@ -2285,7 +2307,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"), os.path.join(wd, "fontsA"))
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
     tr_a = spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, []))
-    ac = spelled(identified(ac, tr_a), tr_a)
+    ac = spelled(variant_letters(identified(ac, tr_a), tr_a), tr_a)
     ac = by_outline(ac)
     ms = math_sizes(ac)                              # the page's maths sizes, after its packages' own
     if ms and fam != "unmapped":

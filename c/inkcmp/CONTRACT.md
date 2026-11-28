@@ -286,6 +286,15 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (board 115 1805.01788 p3 L100): Libertine's italic g, drawn as afii10069.ital, is g.** The 2018
+    libertine package set italic g with the single-storey glyph named afii10069.ital, shared with Cyrillic italic de,
+    so its ToUnicode says U+0434. A correct g was then another character and a glyph finding. `variant_letters` reads
+    it as g; its outline is today's LibertineMathMI u1D454, point for point.
+    - pdfdrill 6ca55128's log_2 reading: glyph 1 -> 0, style 0 -> 1. The g alone is xor 0. Its window holds the o,
+      which the reading's maths italic sets 2 px further left than the page's text italic.
+    - Board, 49 jobs: only 1805 p3 differs, in all 3 columns: one glyph finding becomes style (ours 25 -> 24,
+      MathPix 6 -> 5, Gemma4 3 -> 2).
+    - The call site is held by that board row: today's libertine sets g, so no fixture can draw this glyph.
   - **changed 2026-11-28 (board 114, the scan floor): the scan route sets the reading closer to a scan.**
     - Rule 6. OCR evaluations (ISRI/UNLV ocreval, OCR-D dinglehopper) compare text with ground-truth text and never
       with ink. The closest ink method is Document Image Decoding (Kopec and Chou, Xerox): it aligns a transcription

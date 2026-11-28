@@ -1247,6 +1247,21 @@ class LigatureLetterOrder(unittest.TestCase):
         self.assertTrue(f[1] < got[1][1] < n[1], got[1])
 
 
+class VariantLetterUnit(unittest.TestCase):
+    """a Latin letter drawn by a glyph named for another script (board 115 1805.01788 p3 L100: Libertine's italic g,
+    glyph afii10069.ital, ToUnicode U+0434)"""
+
+    def test_libertine_italic_g(self):
+        # (char, x, y, quad.., font, size) and the trace's (unicode, glyph name, x, y): p3 L100's g at its origin
+        de = ("&#x434;", 457.9, 704.7, 457.9, 697.0, 462.6, 707.0, "GMLQBI+LinLibertineI", 8.966)
+        o = ("o", 454.1, 704.7, 454.1, 697.0, 458.4, 704.9, "GMLQBI+LinLibertineI", 8.966)
+        tr = [("&#x434;", "afii10069.ital", 457.9, 704.7), ("o", "o", 454.1, 704.7)]
+        self.assertEqual([c[0] for c in judge.variant_letters([o, de], tr)], ["o", "g"])
+        cyr = de[:7] + ("ABCDEF+LinLibertineO", 8.966)              # an upright face: de stays de
+        self.assertEqual(judge.variant_letters([cyr], tr)[0][0], "&#x434;")
+        self.assertEqual(judge.variant_letters([de], [("&#x434;", "afii10069", 457.9, 704.7)])[0][0], "&#x434;")
+
+
 class GlyphFlagUnit(unittest.TestCase):
     """the flag of one pair: solid at THRESHOLD, or another number of holes between two letters"""
 
