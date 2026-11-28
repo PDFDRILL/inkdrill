@@ -774,6 +774,24 @@ class JudgeSetter(unittest.TestCase):
             self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["glyph"], res["style"]), (0, 0, 0, 0),
                              [ln for ln in out.split("\n") if ln.startswith("G ") and ln.split()[8] == "1"])
 
+    def test_textsl_on_a_cmsl_page_is_set_in_cmsl(self):
+        """a CM page's \\textsl is set in OT1 cmsl at the page's design (CMSL8 at 7 pt -> cmsl8), not T1's cm-super
+        SFSL0700, the 7 pt design: board lib:d68e0271bd4d p334 L18, a correct \\textsl{CMel}, C solid 13, M solid 22"""
+        with tempfile.TemporaryDirectory(prefix="test-judge-sl-") as d:
+            page = "{\\scriptsize \\textsl{CMel OMel MC} and 92 DC $x$}"
+            _accent_case(d, "slp", page, "x")
+            fam, pre = judge.font_preamble(os.path.join(d, "slp", "page.pdf"), 1)
+            self.assertIn(judge.OT1_SL, pre)
+            res, out = self.run_case(d, "sl", page, "\\textsl{CMel OMel MC} and 92 DC \\(x\\)")
+            self.assertIn("set by pdflatex", out)
+            self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["glyph"], res["style"]), (0, 0, 0, 0),
+                             [ln for ln in out.split("\n") if ln.startswith("G ") and ln.split()[8] == "1"])
+
+    def test_no_ot1_sl_without_cm_slanted(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-sl-") as d:
+            _accent_case(d, "it", "Some \\textit{italic} text here.", "Some italic text here.")
+            self.assertNotIn(judge.OT1_SL, judge.font_preamble(os.path.join(d, "it", "page.pdf"), 1)[1])
+
     def page(self, d, name):
         _accent_case(d, name, "Some \\texttt{typewriter} text.", "Some text.")
         return os.path.join(d, name, "page.pdf"), 1

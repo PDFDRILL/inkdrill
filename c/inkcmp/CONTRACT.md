@@ -286,6 +286,10 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (board lib:d68e0271bd4d p334): `\textsl` in OT1 on a CM slanted page.** A page with
+    CMSL, CMBXSL, CMSLTT or CMSSI gets `OT1_SL`, as CMTT pages get `OT1_TT`: cmsl8 for CMSL8 at 7 pt, where T1 set
+    cm-super's SFSL0700. pdfdrill-51's \textsl reading of p334: glyph 3 -> 1 (L18's C and M pair), residual
+    0.0021 -> 0.0007. Board, 49 jobs: byte-identical (no board reading has \textsl).
   - **changed 2026-11-28 (board 113 lib:3fe71b4ef018 p328): the page's maths sizes apply, also on MathTime; holes
     tell letters apart only.**
     - `math_sizes` named its `\DeclareMathSizes` `{10}` (round to 2 places) while the line is set at

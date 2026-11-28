@@ -145,6 +145,11 @@ NFSS = {"times": "ptm", "helvetica": "phv", "palatino": "ppl", "cm": "cmr", "lib
 #: \texttt on a page whose typewriter is CMTT: OT1 sets cmtt itself (CMTT8 at 7 pt on the page -> cmtt8), where the
 #: judge's T1 sets cm-super's sftt, an outline of the same design whose m and - flag against CMTT
 OT1_TT = r"\DeclareTextFontCommand{\texttt}{\fontencoding{OT1}\ttfamily}"
+#: \textsl on a page whose slanted faces are OT1 Computer Modern (CMSL8 at 6.97 pt -> cmsl8; cmbxsl, cmsltt, and the
+#: sans's slant cmssi likewise): the judge's T1 sets cm-super's SFSL0700, the 7 pt design, where the page has the 8 pt
+#: one (board lib:d68e0271bd4d p334 L18: a reading's correct \textsl{CMel}, C solid 13, M solid 22)
+OT1_SL = r"\DeclareTextFontCommand{\textsl}{\fontencoding{OT1}\slshape}"
+CM_SLANTED = r"CM(?:SL|BXSL|SLTT|SSI)\d"
 #: the double quotes on a page that prints OT1 Computer Modern (CMR, no cm-super): its TeX set `` and '' from cmr's
 #: own glyphs (OT1 92 and 34); the judge's T1 sets them from cm-super's SFRM, another design (cmr10 against sfrm1000:
 #: xor 88, solid 21 at 10 pt; board 2103.01507 p118: a reading's correct quotes flagged at solid 58 and 9). The single
@@ -525,6 +530,8 @@ def font_preamble(pdf: str, page: int) -> tuple[str, str]:
         pre = [x for x in pre if x != r"\usepackage{newtxmath}"] + [NEWTX_LIBERTINE]
     if any(re.match(r"CMTT\d", n) for n in glyphs):   # the page's typewriter is OT1 Computer Modern: T1's is cm-super,
         pre.append(OT1_TT)                            # whose m and - differ (board lib:d68e0271bd4d p334, 10 glyphs)
+    if any(re.match(CM_SLANTED, n) for n in glyphs):   # its slanted faces too (OT1_SL)
+        pre.append(OT1_SL)
 
     # text in nameless Type 3 (dvips's PK bitmaps) and no cm-super outline on the page: the reading's T1 text is set
     # from the same bitmaps, compared ink against ink (T-0158 J2; against cm-super's outlines 43 of p12's 590 flagged)
