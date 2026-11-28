@@ -942,6 +942,41 @@ class SetterFakedSmallCaps(unittest.TestCase):
         self.assertIsNone(setter.caps_scale(big + low), "only capitals are small capitals")
 
 
+@unittest.skipUnless(shutil.which("kpsewhich"), "needs kpsewhich")
+class SetterStandIn(unittest.TestCase):
+    """a glyph the setter took from the TeX tree is a stand-in only when that program is another design than the
+    page's font; the page's own program, another face of it, and the TeX copy of the same font are not"""
+
+    def test_units(self):
+        from inkdrill import setter
+        self.assertTrue(setter.stand_in("ABCDEF+CircularStd-Book", "NimbusSanL-Regu"))   # LAST_RESORT
+        self.assertTrue(setter.stand_in("YPVIVP+Times-Roman", "NimbusRomNo9L-Regu"))     # Adobe's design, URW's
+        self.assertFalse(setter.stand_in("QJWKRX+NimbusRomNo9L-ReguItal", "NimbusRomNo9L-ReguItal"))
+        self.assertFalse(setter.stand_in("ABCDEF+CircularStd-Book", "CircularStd-Book"))
+        self.assertFalse(setter.stand_in("ABCDEF+CircularStd-Bold", "CircularStd-Book"), "a stripped face")
+        res = collections.Counter()
+        self.assertEqual(judge.count(res, "’", "’", "-", "-", "CircularStd-Book", True, 0.0, True), "-")
+        self.assertEqual((res["unmeasurable"], res["stand_in"], res["glyph"]), (1, 1, 0))
+        self.assertEqual(judge.count(res, "’", "’", "-", "-", "CircularStd-Book", True, 0.0), "g")
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeSetterFallbackFound(unittest.TestCase):
+    """a letter the page's subset lacks comes from the TeX tree's program, and the judge finds that program by its
+    own FontName: utmr8a.pfb holds NimbusRomNo9L-Regu (lib:88d76967110e p170 L54, two F's "no font holds the
+    glyph", each counted unpaired on both sides)"""
+
+    def test_fallback_in_times_is_judged(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-fb-") as d:
+            page = "Some rings Eig here."                       # no F in the page's Times subset
+            res, out = _accent_case(d, "fb", page, "Some rings Fig here.", "\\usepackage{times}\n", route="glyph")
+            self.assertEqual(res.get("setter"), 1, "\n".join(out)[:300])
+            self.assertFalse([ln for ln in out if ln.startswith("O ")])
+            self.assertEqual((res["no_outline"], res["a_unpaired"], res["b_unpaired"]), (0, 0, 0))
+            self.assertGreaterEqual(res["glyph"], 1, "the F, judged against the page's E")
+            self.assertNotIn("stand_in", res, "NimbusRomNo9L-Regu is the page's own font's TeX copy")
+
+
 class InklessPageGlyphs(unittest.TestCase):
     """a page character drawn by a space glyph is no page glyph: lib:88d76967110e p170 L7 draws code 32 of a CFF
     Times-Roman (no outline) under ActualText U+00AD, and mutool's text gives the soft hyphen there"""

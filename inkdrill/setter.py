@@ -77,6 +77,31 @@ def glyph_name(c: str) -> str | None:
 LAST_RESORT = "NimbusSanL-Regu"
 
 
+_FALLBACK_NAME = {}
+
+
+def stand_in(font: str, rendered: str) -> bool:
+    """whether a glyph the setter set in `rendered` for the page's `font` came from a TeX-tree program of ANOTHER
+    design: the fallback's own FontName is `rendered` and is not the page font's name. Its shape against the page's
+    measures the stand-in, not the reading (lib:69bc5c71b881 p16: CircularStd-Book's missing quote from NimbusSanL,
+    MathPix 2 glyph findings). The TeX tree's copy of the page's own font (NimbusRomNo9L-ReguItal) is no stand-in."""
+    base = font.split("+")[-1]
+    r = rendered.split("+")[-1]
+    if r == base or r == re.sub(r"\d+$", "", base):
+        return False
+    if font not in _FALLBACK_NAME:
+        path = tex_type1(font)
+        name = ""
+        if path:
+            try:
+                with open(path, "rb") as fh:
+                    name = type1.parse(fh.read()).name
+            except (OSError, ValueError, type1.FontNotType1):
+                name = ""
+        _FALLBACK_NAME[font] = name
+    return bool(_FALLBACK_NAME[font]) and r == _FALLBACK_NAME[font]
+
+
 def tex_type1(font: str) -> str | None:
     """the TeX tree's Type 1 program of a font, by its PostScript name (pdftex.map, no re-encoded or extended
     variants)"""
@@ -316,7 +341,11 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         fb = progs[F]["fb"]
         if fb["font"] is None:
             fb["path"] = tex_type1(F)
-            fb["font"] = type1.load(fb["path"]) if fb["path"] else False
+            if fb["path"]:                           # parsed, not load()ed: its name is then its own FontName
+                with open(fb["path"], "rb") as fh:
+                    fb["font"] = type1.parse(fh.read())
+            else:
+                fb["font"] = False
         f = fb["font"]
         if not f or name not in f.charstrings:
             return None
@@ -423,7 +452,10 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         pr = progs[F]
         if tex:
             fb = pr["fb"]
-            fids.append(font_obj(fb["path"], os.path.basename(fb["path"]).split(".")[0].upper(), glyphs[len(fids)],
+            # the BaseFont is the program's own FontName, by which the judge finds the program (lib:88d76967110e
+            # p170 L54: utmr8a.pfb named UTMR8A held NimbusRomNo9L-Regu, and its two F's had "no font holds the glyph")
+            base = fb["font"].name.strip() or os.path.basename(fb["path"]).split(".")[0].upper()
+            fids.append(font_obj(fb["path"], base, glyphs[len(fids)],
                                  lambda g, fb=fb: fb["adv"][g], False, pr["uni"]))
         else:
             fids.append(font_obj(pr["path"], F.split("+")[-1].replace(" ", ""), glyphs[len(fids)],

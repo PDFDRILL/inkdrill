@@ -2162,14 +2162,16 @@ def placed(pairs: list, near: int = 4, window: int = 24) -> list:
     return out
 
 
-def count(res, t: str, tb: str, sa: str, sb: str, fa: str, flag: bool, pl: float) -> str:
+def count(res, t: str, tb: str, sa: str, sb: str, fa: str, flag: bool, pl: float, stand: bool = False) -> str:
     """one judged pair into the page's counts: flagged by its ink, a glyph or style finding by `finding`; a pair
     whose ink agrees but which sits more than PLACE of its size off its place (`placed`) is a glyph finding and
     `misplaced`, in an unmeasurable face too: its place is read from the page's text, not from a font program.
     Returns what was counted for the pair, the G line's last field: g (glyph finding), s (style finding), - (none;
     so a flagged pair in a face TeX cannot set, J4)"""
     res["glyphs"] += 1
-    um = unsettable(fa)
+    um = unsettable(fa) or stand                # stand: the setter's glyph from another design (setter.stand_in)
+    if stand:
+        res["stand_in"] += 1
     res["unmeasurable"] += um
     if flag:
         res["flagged"] += 1
@@ -2688,7 +2690,8 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
                 if maths_digit(t, tb, fa, fb, fam) and "x" not in sa:
                     sa = "x" if sa == "-" else sa + "x"  # a digit the page set as maths, the reading as text
                 pl = places[i][k]
-                kind = count(res, t, tb, sa, sb, fa, flag, pl)
+                stand = set_by == "setter" and setter_mod.stand_in(fa, fb)
+                kind = count(res, t, tb, sa, sb, fa, flag, pl, stand)
                 print(f"G L{i} {t} {tb} {int(t == tb)} {xo} {so} {pc} {int(flag or abs(pl) > PLACE)} {sa} {sb} {fa} "
                       f"{pbox((t, ax, ay, qx0, qy0, qx1, qy1))} {round(pl, 3) + 0.0:.3f} {kind}", file=out)
             if is_formula(ln) and pairs:

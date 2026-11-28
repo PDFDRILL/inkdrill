@@ -496,6 +496,22 @@ thin-stroke miss, and an expected-failure test holds it open.
     - Measured: c57a p293's (13.9) with pdfdrill-bd's faithful \boxed reading goes from 2 rules missing to 0.
     - The 49 board jobs are byte-identical to 47326fc. Without the size floor, a 16 px glyph remnant on lib:5a5c76391c9c
       p4 had passed as a frame.
+  - **changed 2026-11-28 (coordinator, board 124): the setter's TeX-tree glyphs are found, and a stand-in's are
+    unmeasurable.**
+    - A letter the page's subset lacks is set from the TeX tree's program (`tex_type1`). Its BaseFont was the file's
+      stem (utmr8a.pfb → UTMR8A), while the program calls itself NimbusRomNo9L-Regu, and the judge finds a program by
+      its own FontName. So every such glyph was `O … no font holds the glyph` and counted unpaired on both sides
+      (lib:88d76967110e p170 L54, two F's). The BaseFont is now the program's FontName.
+    - Where that program is another design than the page's font (`setter.stand_in`: the fallback's FontName is not
+      the page font's name, e.g. NimbusSanL for CircularStd through LAST_RESORT, Nimbus for Adobe's Times-Roman), the
+      pair's shape measures the stand-in, so it is unmeasurable like an UNSETTABLE face. JUDGE1 counts it as
+      `stand_in` (printed only where non-zero). The TeX copy of the page's own font (NimbusRomNo9L-ReguItal for
+      NimbusRomNo9L-ReguItal) is judged.
+    - Born jobs: 44 of 49 byte-identical. The 5 that move have no `no_outline` left: 2311 p10 MathPix and ours
+      a_unpaired 5 → 0 and b_unpaired 5 → 0 (glyph unchanged, the ( ) 6 now judged as style); 69bc p16 MathPix
+      a_unpaired 10 → 5, b_unpaired 8 → 3, stand_in 5 (glyph 10 unchanged); 88d7 p170 MathPix and ours a_unpaired 3 → 0,
+      b_unpaired 3 → 0, the Optima F's unmeasurable. Board 124's ours reading of 88d7 p170: a_unpaired 2 → 0,
+      b_unpaired 2 → 0, glyph 0.
   - **changed 2026-11-28 (coordinator, board 123: ours' last non-zero born pages): small caps, inkless glyphs, size
     steps.** Three judge causes, each measured on its page; the other 47 of the 49 board jobs are byte-identical, and
     the two that move are lib:88d76967110e p170 (the second cause).
