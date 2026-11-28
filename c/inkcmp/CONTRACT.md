@@ -286,6 +286,25 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (held-out check of 8efc31e): the scan route counts all ink under a line, and leaves out
+    lines TeX cannot set.**
+    - Test: 17 library scans outside the board (dated personal scans left out), MathPix readings, 5 % of words dropped
+      or of letters swapped (seed 1).
+    - Red under 8efc31e, and under the old route too:
+      - lib:d8a2bb86b4e5 p2: dropping words scored better.
+      - CN208060706U p3: swapping letters scored better. pdflatex drops Chinese, so its ink was missing, and a reading
+        garbled into Latin covered it.
+    - Now:
+      - a line with characters pdflatex drops is `N L<i> UNSETTABLE`, and its ink is out of the count;
+      - a page with more such ink than measured ink is `residual NOT_RUN`, `STATUS UNSETTABLE`;
+      - all ink under a placed line counts, not only text-like ink, so ink a dropped word leaves is missing whatever
+        its height. That separates 1511.08771 p2709's swap (0.1477 -> 0.1481), which tied.
+    - Held-out: 15 of 16 measured pages rank both perturbations worse, and CN208060706U is NOT_RUN. MathPix reaches
+      half of the old route's residual on 5 of 16 only (on the board's 3 scans it does).
+    - Still red: lib:d8a2bb86b4e5 p2, a contents page whose small print the scan merges into blobs (residual 1.07).
+      Three fixes were tried and dropped: x stretch bounded, invented tested by overlap (it blunted swaps on 2 other
+      pages), and lines of blobs left out.
+    - Board scans: MathPix 0.1163 / 0.1385 / 0.1787 (8efc31e: 0.1147 / 0.1436 / 0.1837); column order unchanged.
   - **changed 2026-11-28 (board 115 1805.01788 p3 L100): Libertine's italic g, drawn as afii10069.ital, is g.** The 2018
     libertine package set italic g with the single-storey glyph named afii10069.ital, shared with Cyrillic italic de,
     so its ToUnicode says U+0434. A correct g was then another character and a glyph finding. `variant_letters` reads

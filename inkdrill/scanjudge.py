@@ -134,13 +134,16 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
     med = hs[len(hs) // 2] if hs else 1
     text_like = [j for j, c in enumerate(A) if 0.3 * med <= c[3] - c[1] <= 2.5 * med and c[2] - c[0] <= 5 * med]
     texts = [unface(J.line_tex(ln)) for ln in lv]
-    failed, pages, bo = {}, [], 0
+    failed, pages, bo, unset = {}, [], 0, set()
     if texts:
         snip, got = J.compile_group([(texts, [10.0] * len(texts))], "", wd)
-        failed, _, bo = got[0]
+        failed, dropped, bo = got[0]
+        unset = {i for i, t in enumerate(texts) if any(ch in t for ch in dropped)}
         if os.path.exists(snip):                     # G2: no document, no line
             pages = render(snip, os.path.join(wd, "scan-snip"), dpi=SNIP_DPI)
     covered, invented, holes, rendered, judged, not_set = set(), 0, 0, 0, 0, 0
+    beyond = set()                                   # page ink under a line whose characters TeX cannot set
+    boxed = set()                                    # page ink under any placed line: counted whatever its height
     unplaced = 0
     for i, ln in enumerate(lv):
         r = ln.get("region")
@@ -152,6 +155,11 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
                (r["top_left_y"] + r["height"]) * k)
         under_box = [j for j, c in enumerate(A)
                      if box[0] <= (c[0] + c[2]) / 2 < box[2] and box[1] <= (c[1] + c[3]) / 2 < box[3]]
+        boxed.update(under_box)
+        if i in unset:                               # a script pdflatex drops (CJK): unmeasurable, not missing;
+            print(f"N L{i} UNSETTABLE", file=out)    # it was missing, so a reading garbled into Latin scored better
+            beyond.update(under_box)                 # (CN208060706U p3: 5 % of letters swapped, 0.386 -> 0.290)
+            continue
         if i in failed or bo + i >= len(pages):
             print(f"N L{i} NOT_SET", file=out)
             not_set += 1
@@ -179,15 +187,24 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
                 if kind == "holes":
                     holes += 1
                     print(f"S L{i} holes {A[j[0]][4]} {q} {A[j[0]][0]} {A[j[0]][1]}", file=out)
+    # the population: text-like ink anywhere, and ALL ink under the reading's lines. Invented counts every rendered
+    # component, so ink a line covers counts as missing whatever its height; with text-like ink alone a line of small
+    # print could only add invented, and a reading with 5 % of its words dropped scored better (lib:d8a2bb86b4e5 p2)
+    text_like = sorted((set(text_like) | boxed) - beyond)
     missing = [j for j in text_like if j not in covered]
+    mostly_unset = len(beyond) > len(text_like)       # more ink TeX cannot set than ink it can: not measured
     for j in missing:
         print(f"S missing {A[j][0]} {A[j][1]} {A[j][2]} {A[j][3]}", file=out)
     n = len(text_like)
     res = dict(comps=n, missing=len(missing), invented=invented, holes=holes, rendered=rendered, lines=len(lv),
-               lines_judged=judged, not_set=not_set, unplaced=unplaced)
+               lines_judged=judged, not_set=not_set, unplaced=unplaced, unsettable=len(unset))
     print(f"# page {pno}: scan route, {len(lv)} lines, {len(A)} ink components, {n} text-like", file=out)
     print("SCAN1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())) +
-          (" residual %.6f" % ((len(missing) + invented + holes) / n) if n else " residual NOT_RUN"), file=out)
+          (" residual %.6f" % ((len(missing) + invented + holes) / n) if n and judged and not mostly_unset
+           else " residual NOT_RUN"),
+          file=out)
     print(BLIND, file=out)                           # G3
-    print("STATUS OK" if n else "STATUS NO_INK", file=out)
+    # a page whose every line TeX cannot set (CN208060706U p3: 37 of 39 lines Chinese) is not measured at all
+    print("STATUS OK" if n and judged and not mostly_unset else "STATUS UNSETTABLE" if unset else "STATUS NO_INK",
+          file=out)
     return res

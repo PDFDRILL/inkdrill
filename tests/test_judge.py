@@ -1062,6 +1062,16 @@ class ScanRouteSetting(unittest.TestCase):
             text = self.scan(d, "t", self.LINE, self.LINE, "\\usepackage{times}\n")
             self.assertEqual(float(re.search(r"^SCAN1 .* residual (\S+)$", text, re.M)[1]), 0.0, text[-600:])
 
+    def test_a_line_tex_cannot_set_is_not_measured(self):
+        # CN208060706U p3: 37 of 39 lines Chinese, which pdflatex drops; their ink was missing, so a reading garbled
+        # into Latin scored better than the right one. Now such a line is UNSETTABLE, and a page mostly so is NOT_RUN
+        with tempfile.TemporaryDirectory(prefix="test-scan-cjk-") as d:
+            text = self.scan(d, "c", self.LINE, "\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341")
+            self.assertIn("N L0 UNSETTABLE", text)
+            self.assertIn("STATUS UNSETTABLE", text)
+            self.assertIn("residual NOT_RUN", text)
+            self.assertIn("STATUS OK", self.scan(d, "l", self.LINE, self.LINE))
+
     def test_a_face_is_not_set(self):
         with tempfile.TemporaryDirectory(prefix="test-scan-face-") as d:
             self.scan(d, "f", "\\textit{" + self.LINE + "}", "\\textit{" + self.LINE + "}")
