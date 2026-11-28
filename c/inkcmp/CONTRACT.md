@@ -300,7 +300,8 @@ thin-stroke miss, and an expected-failure test holds it open.
       - all ink under a placed line counts, not only text-like ink, so ink a dropped word leaves is missing whatever
         its height. That separates 1511.08771 p2709's swap (0.1477 -> 0.1481), which tied.
     - Held-out: 15 of 16 measured pages rank both perturbations worse, and CN208060706U is NOT_RUN. MathPix reaches
-      half of the old route's residual on 5 of 16 only (on the board's 3 scans it does).
+      half of the old route's residual on 4 of 16 only (BH4, cgr_88, 1103899720, lib:bfd866e22509; on the
+      board's 3 scans it does).
     - Still red: lib:d8a2bb86b4e5 p2, a contents page whose small print the scan merges into blobs (residual 1.07).
       Three fixes were tried and dropped: x stretch bounded, invented tested by overlap (it blunted swaps on 2 other
       pages), and lines of blobs left out.
