@@ -244,6 +244,25 @@ def identified(cs: list, traced: list) -> list:
     return out
 
 
+#: glyph names that draw nothing: a space by its name (the drawn glyph's own unicode is a space too, see `inkless`)
+INKLESS = {"space", "nbspace", "nonbreakingspace", "uni0020", "uni00A0"}
+
+
+def inkless(cs: list, traced: list) -> list:
+    """the characters without those whose drawn glyph is a space: a page can draw its space glyph under an ActualText
+    that says otherwise, which mutool's text then reports (lib:88d76967110e p170 L7: code 32 of a CFF Times-Roman,
+    no outline, under ActualText U+00AD; side A counted an inkless soft hyphen as an unpaired page glyph in every
+    reading). Only where the trace gives the glyph both a space's name and a space's character."""
+    TA = Origins(traced)
+    out = []
+    for c in cs:
+        g = TA.get(c[1], c[2], c[0])
+        if g is not None and g[1] in INKLESS and not html.unescape(g[0]).strip() and html.unescape(c[0]).strip():
+            continue
+        out.append(c)
+    return out
+
+
 def spelled(cs: list, traced: list) -> list:
     """the page's characters with each composite glyph's letters, one character per part of its name. mutool gives
     a ligature's later letters from the ToUnicode map, as zero-width characters at the glyph's right edge (f_i: f,
@@ -795,6 +814,24 @@ def expanded(ma, mb):
     return (mb[0] * r, mb[1], mb[2] * r, mb[3])
 
 
+#: a text line's size step the reading has no way to state: a page glyph within this share of its line's size (and
+#: beyond SIZE_MIN, past pdflatex's snap) is compared with its partner set at the page glyph's own size. A script or
+#: a faked small capital (0.6-0.85 of the size) is outside it, and stays the reading's to state
+SIZE_STEP = 0.10
+SIZE_MIN = 0.02
+
+
+def resized(za: float, zb: float, body: float) -> bool:
+    """whether a pair on a TEXT line is compared at the page glyph's size `za`: the rendered glyph is at the size the
+    judge set its line at (`body`, the commonest rendered size: the reading stated no other), and the page glyph a
+    size step from it, as no reading line can say (lib:69bc5c71b881 p16 L90: the folio "16" at 8.5 pt in a footer at
+    8 pt, its 6 a glyph finding at solid 119 in the page's own CircularStd-Bold). Never the size alone: a pair at a
+    script's size still differs."""
+    if not za or not zb or abs(zb / body - 1) > 0.005:
+        return False
+    return SIZE_MIN < abs(za / zb - 1) <= SIZE_STEP
+
+
 def glyph_flag(solid: int, holes: tuple | None, t: str, tb: str) -> bool:
     """a pair is flagged at solid >= THRESHOLD, or when its two glyphs have another number of holes: then it is another
     glyph, however thin the stroke that makes the difference (e -> c: the crossbar, solid 4 at 10 pt). Holes tell two
@@ -844,6 +881,9 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
     inkb = {}                                       # reading page -> its index in the C job's `pageb` lines
     for i, ln, b, ca, cb, pairs, _ in work:
         TB = Origins(spec_b.traced(bo + i + 1, tb.get(bo + i + 1, [])))
+        formula = is_formula(ln)
+        zs = collections.Counter(round(q[8], 4) for q in cb if q[8])
+        body = zs.most_common(1)[0][0] if zs else 0.0   # the size the judge set the line at
         bg = [(q, TB.get(q[1], q[2], html.unescape(q[0]))) for q in cb]
         for k, (pa, pbb) in enumerate(pairs):
             X, Y = pa[1] * S + OX, pa[2] * S + OY
@@ -859,6 +899,10 @@ def glyph_scores(side_a: tuple, side_b, spec_b, bpdf: str, ac: list, work: list,
                 if u:
                     mb = turned(mb[:2], u) + turned(mb[2:], u)
             mb = expanded(sa[2], mb) if sa is not None and not u else mb   # the page line's font expansion
+            if mb and not formula and body and resized(pa[8], pbb[8], body):
+                r = pa[8] / pbb[8]                  # a text size step inside the line: set at the page glyph's
+                mb = tuple(v * r for v in mb)
+                res["resized"] += 1
             sb = (FB.find(gb[4]), gb[1], mb, X, Y) if gb else "none"
             ink_b = fname(gb[4] if gb else pbb[7]) in t3b     # a ligature's second letter too: its ink is there
             if ink_b:
@@ -2323,7 +2367,7 @@ def judge(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout, route:
     spec_a = memo(("spec", a_pdf, pno), Spec, a_pdf, pno, pno, os.path.join(wd, "specA"), os.path.join(wd, "fontsA"))
     ac = spec_a.chars(pno, memo(("chars", a_pdf, pno), chars, a_pdf, pno, pno)[0])   # origins as the PDF places
     tr_a = spec_a.traced(pno, trace(a_pdf, pno, pno, spec_a.trace_text).get(pno, []))
-    ac = spelled(variant_letters(identified(ac, tr_a), tr_a), tr_a)
+    ac = spelled(variant_letters(identified(inkless(ac, tr_a), tr_a), tr_a), tr_a)
     ac = by_outline(ac)
     ms = math_sizes(ac)                              # the page's maths sizes, after its packages' own
     if ms and fam != "unmapped":

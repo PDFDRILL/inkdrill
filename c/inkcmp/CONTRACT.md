@@ -496,6 +496,29 @@ thin-stroke miss, and an expected-failure test holds it open.
     - Measured: c57a p293's (13.9) with pdfdrill-bd's faithful \boxed reading goes from 2 rules missing to 0.
     - The 49 board jobs are byte-identical to 47326fc. Without the size floor, a 16 px glyph remnant on lib:5a5c76391c9c
       p4 had passed as a frame.
+  - **changed 2026-11-28 (coordinator, board 123: ours' last non-zero born pages): small caps, inkless glyphs, size
+    steps.** Three judge causes, each measured on its page; the other 47 of the 49 board jobs are byte-identical, and
+    the two that move are lib:88d76967110e p170 (the second cause).
+    - Faked small caps on the setter route. psnfss's Times small caps are the capitals at 0.8 in the regular font
+      (2311.09533v3 p10 L4 "AGREE": A at 10.91 pt, GREE at 8.73 pt in NimbusRomNo9L-Regu). The setter had no program of
+      a small-caps face, stripped `\textsc` and set "gree" in lower case. Where the page has no small-caps program and
+      shows faked capitals (`caps_scale`: capitals at 0.6-0.9 of the glyphs on their baseline beside them, the median;
+      0.800 here), a lower-case letter in `\textsc` is set as its capital at that scale. A page with none is set as
+      before. 2311 p10: ours glyph 4 → 0, Gemma4 8 → 4; MathPix unchanged.
+    - A page glyph drawn by a space glyph is no page glyph (`inkless`). lib:88d76967110e p170 L7 draws code 32 of a CFF
+      Times-Roman, whose `space` has no outline, under ActualText U+00AD, and mutool's text reports a soft hyphen there.
+      Side A counted it as unpaired in every reading. Dropped only where the trace gives the glyph a space's name AND a
+      space's character, so a soft hyphen drawn as a hyphen stays. a_glyphs 5025 → 5024, a_unpaired −1 in all three
+      columns.
+    - A text line's size step (`resized`). A reading line has one size: the judge sets it at the commonest page size
+      in its box, and no reading can say that two glyphs of it are 8.5 pt in an 8 pt line (lib:69bc5c71b881 p16 L90,
+      the folio "16" of the footer; its 6 at solid 119 in the page's own CircularStd-Bold, so not a substitute's
+      shape). On a text line, a pair whose rendered glyph is at the line's size and whose page glyph is 2-10 % from it
+      is compared with the rendered glyph scaled to the page glyph's size. A script (0.6-0.85), a faked small capital
+      (0.8) and a glyph the reading set at another size are outside it and still differ. `resized` in JUDGE1 counts the
+      pairs (printed only where non-zero). 69bc p16: ours glyph 1 → 0 (resized 2); MathPix and Gemma4 unchanged.
+    - CircularStd stays settable: the setter draws it from the page's own font program, and every other glyph of the
+      page pairs at 0. UNSETTABLE is for faces with no program anywhere, which is not this case.
   - **changed 2026-11-27 (J6): font expansion and Latin Modern.** Two causes on one page:
     - microtype's font expansion draws a justified line's glyphs up to 2–3 % wider or narrower, as the glyph
       matrix's x scale against its y scale. Where the page glyph's matrix is upright and that ratio is within 3 %, the

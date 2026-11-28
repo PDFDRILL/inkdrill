@@ -356,7 +356,7 @@ def _accent_case(tmp, name, page_line, read_line, preamble="", route="render", t
         json.dump(doc, fh)
     out = io.StringIO()
     os.makedirs(os.path.join(d, "w"))
-    res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out)
+    res = judge.judge(pdf, 1, lj, os.path.join(d, "w"), out=out, route=route)   # route was dropped before b123
     return res, out.getvalue().splitlines()
 
 
@@ -924,6 +924,79 @@ class SetterSuperscriptsAndLigatureNames(unittest.TestCase):
         sc, rise = setter.sup_metrics(body + [("3", "three", 101.0, 704.0, "F", (6.0, 0, 0, 6.0))])
         self.assertAlmostEqual(sc, 0.6) and self.assertAlmostEqual(rise, 0.4)
         self.assertEqual(setter.sup_metrics(body), (0.7, 0.35))                     # none on the page
+
+
+class SetterFakedSmallCaps(unittest.TestCase):
+    """caps_scale reads the page's faked small capitals (psnfss: the capitals at 0.8) from capitals on the baseline
+    of larger glyphs beside them, and nothing from a raised one (a superscript) or a page with none"""
+
+    def test_units(self):
+        from inkdrill import setter
+        big = [("A", "A", 100.0, 700.0, "F", (10.91, 0, 0, 10.91))]
+        caps = [(ch, ch, 108.0 + 7 * n, 700.0, "F", (8.73, 0, 0, 8.73)) for n, ch in enumerate("GREE")]
+        self.assertAlmostEqual(setter.caps_scale(big + caps), 8.73 / 10.91)       # 2311.09533 p10's AGREE
+        raised = [(ch, ch, 108.0 + 7 * n, 703.5, "F", (8.73, 0, 0, 8.73)) for n, ch in enumerate("GREE")]
+        self.assertIsNone(setter.caps_scale(big + raised))
+        self.assertIsNone(setter.caps_scale(big))
+        low = [(ch, ch, 108.0 + 7 * n, 700.0, "F", (8.73, 0, 0, 8.73)) for n, ch in enumerate("gree")]
+        self.assertIsNone(setter.caps_scale(big + low), "only capitals are small capitals")
+
+
+class InklessPageGlyphs(unittest.TestCase):
+    """a page character drawn by a space glyph is no page glyph: lib:88d76967110e p170 L7 draws code 32 of a CFF
+    Times-Roman (no outline) under ActualText U+00AD, and mutool's text gives the soft hyphen there"""
+
+    def test_units(self):
+        c = lambda ch, x: (ch, x, 615.1801, x, 614.0, x + 2.5, 614.2, "YPVIVP+Times-Roman", 10.0)
+        g = lambda ch, name, x: (ch, name, x, 615.1801, "YPVIVP+Times-Roman", (10.0, 0, 0, 10.0))
+        cs = [c("&#xad;", 62.0), c("s", 62.0 + 2.5), c("&#xad;", 80.0)]
+        tr = [g(" ", "space", 62.0), g("s", "s", 64.5), g("-", "hyphen", 80.0)]
+        self.assertEqual([x[0] for x in judge.inkless(cs, tr)], ["s", "&#xad;"],
+                         "the space glyph's character goes; a soft hyphen drawn as a hyphen stays")
+        self.assertEqual(judge.inkless(cs[:1], [g("x", "space", 62.0)]), cs[:1], "a space name drawing a letter")
+
+
+class TextSizeStep(unittest.TestCase):
+    """resized: a text line's page glyph a size step from the size the judge set the line at is compared at its own
+    size; a script's size, a rendered glyph the reading set at another size, or a rounding are not"""
+
+    def test_units(self):
+        self.assertTrue(judge.resized(8.5, 8.0, 8.0))           # lib:69bc5c71b881 p16's folio
+        self.assertTrue(judge.resized(9.0, 10.0, 10.0))         # \small, the edge
+        self.assertFalse(judge.resized(7.0, 10.0, 10.0))        # a superscript the reading lost
+        self.assertFalse(judge.resized(8.0, 10.0, 10.0))        # a small capital the reading lost
+        self.assertFalse(judge.resized(10.1, 10.0, 10.0))       # within pdflatex's snap
+        self.assertFalse(judge.resized(8.5, 7.0, 8.0))          # the reading set this glyph at a size of its own
+        self.assertFalse(judge.resized(8.5, 0.0, 8.0))
+
+
+@unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "needs " + ", ".join(TOOLS))
+class JudgeSmallCapsAndSizeStep(unittest.TestCase):
+    """end to end on the setter route, in Times: a reading's \\textsc on a page of psnfss's faked small caps pairs
+    without a finding (2311.09533v3 p10 L4, 4 glyph findings in ours), and a text line holding a size step no reading
+    can state (lib:69bc5c71b881 p16 L90, the folio at 8.5 pt in an 8 pt footer) has none either"""
+
+    def test_textsc_on_faked_small_caps(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-sc-") as d:
+            page = "The \\textsc{Agree} rings and fields here."
+            times = "\\usepackage{times}\n"
+            res, out = _accent_case(d, "sc", page, page, times, route="glyph")
+            self.assertEqual(res.get("setter"), 1, "\n".join(out)[:300])
+            self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["glyph"]), (0, 0, 0),
+                             [ln for ln in out if ln.startswith(("G ", "U ")) and (ln.split()[8:9] == ["1"] or ln[0] == "U")])
+            rp, out = _accent_case(d, "plain", page, "The Agree rings and fields here.", times, route="glyph")
+            self.assertEqual(rp.get("setter"), 1)
+            self.assertGreaterEqual(rp["glyph"], 4, "read without the small caps, g r e e are other glyphs")
+
+    def test_size_step_in_a_text_line(self):
+        with tempfile.TemporaryDirectory(prefix="test-judge-step-") as d:
+            page = "{\\fontsize{8}{10}\\selectfont Superhot Rock Energy hours {\\fontsize{8.5}{10}\\selectfont 1696}}"
+            res, out = _accent_case(d, "step", page, "Superhot Rock Energy hours 1696", "\\usepackage{times}\n",
+                                    route="glyph")
+            self.assertEqual(res.get("setter"), 1, "\n".join(out)[:300])
+            self.assertEqual(res["resized"], 4, "the four digits")
+            self.assertEqual((res["a_unpaired"], res["b_unpaired"], res["glyph"]), (0, 0, 0),
+                             [ln for ln in out if ln.startswith("G ") and ln.split()[8] == "1"])
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS) and shutil.which("kpsewhich"), "needs " + ", ".join(TOOLS))

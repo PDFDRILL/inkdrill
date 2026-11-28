@@ -10,6 +10,8 @@ How: one PDF page per reading line, as compile_lines makes them, so the judge re
 - A group in \\textbf, \\textit, \\texttt or \\textsc (pdfdrill 35340ad3 writes the face into the text): the
   page's font of that face with the most traced glyphs, as pdflatex honours the command; a face the page has no
   program of is set in the regular font, the command stripped and its argument kept. Never drawn as characters.
+  \\textsc on a page that fakes its small caps (psnfss: the capitals at 0.8 in the regular font) sets a lower-case
+  letter as its capital at the page's own scale (caps_scale).
 - A text superscript (a footnote marker, written as maths: ${}^{30}$, or \\textsuperscript): set in its face's font
   at the page's own superscript scale and rise (sup_metrics), so a line holding one is not a formula line.
 - Each character: the glyph the page itself traces for it in that font, with the page's advance (trace `adv`) and
@@ -207,6 +209,30 @@ def sup_metrics(traced: list) -> tuple:
     return sorted(scales)[len(scales) // 2], sorted(rises)[len(rises) // 2]
 
 
+def caps_scale(traced: list) -> float | None:
+    """the page's faked small capitals: the median scale of its capital letters set at 0.6 to 0.9 of the glyphs on
+    their baseline beside them (within three of their sizes), against those glyphs' commonest size. psnfss's Times
+    small caps are the capitals at 0.8: 2311.09533 p10's "AGREE", A at 10.91 pt and GREE at 8.73 pt in
+    NimbusRomNo9L-Regu, where the body is 9.96 pt. None on a page with none: a reading's \\textsc there keeps its
+    letters as written, as before."""
+    size = lambda g: abs(g[5][3]) or abs(g[5][0])
+    scales, row = [], collections.defaultdict(list)    # glyphs by baseline (pt, rounded down)
+    for n in traced:
+        if n[0].strip():
+            row[int(n[3] // 1)].append(n)
+    for g in traced:
+        z, ch = size(g), html.unescape(g[0])
+        if not (len(ch) == 1 and ch.isupper()) or not z:
+            continue
+        cand = [n for d in (-1, 0, 1) for n in row.get(int(g[3] // 1) + d, ())]
+        near = collections.Counter(round(size(n), 2) for n in cand if n is not g
+                                   and z / 0.9 <= size(n) <= z / 0.6 and abs(n[2] - g[2]) < 3 * size(n)
+                                   and abs(n[3] - g[3]) <= 0.05 * size(n))
+        if near:
+            scales.append(z / near.most_common(1)[0][0])
+    return sorted(scales)[len(scales) // 2] if scales else None
+
+
 def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: str, style, mathfont: str,
           stats: collections.Counter, line_ligs: list | None = None, line_gaps: list | None = None,
           line_tcs: list | None = None) -> str | None:
@@ -315,11 +341,16 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
         return codes[f][g]
     pages = []
     sc, rise = sup_metrics(traced)
+    caps = caps_scale(traced)
+    scale = lambda up: sc if up is True else caps if up == "c" else 1
     for li, (text, size) in enumerate(zip(texts, sizes)):
         items = []                                   # (slot, code, advance em, text) or (None, None, 0.25, " ")
         for face, part in faced(supered(text)):
             sup = "s" in face
             F = font_of(face.replace("s", ""))
+            # small capitals the page fakes (no program of that face: the face's font is the one without "c"): a
+            # lower-case letter is its capital at the page's own scale (caps_scale), as psnfss sets it
+            fake = "c" in face and caps is not None and F == font_of(face.replace("s", "").replace("c", ""))
             pr = progs[F]
             here = pr["ligs"] if line_ligs is None else pr["ligs"] & line_ligs[li]
             s, i = plain(part), 0
@@ -336,10 +367,13 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                 if c.isspace():
                     items.append((None, None, line_gaps[li] if line_gaps else 0.25, " ", sup))
                     continue
+                mode = sup
+                if fake and not sup and c.islower() and pr["uni"].get(c.upper()) is not None:
+                    c, mode = c.upper(), "c"
                 g = pr["uni"].get(c)
                 if g is not None:
                     f = slot(F, False)
-                    items.append((f, code(f, g), pr["adv"].get(g, 0.5), c, sup))
+                    items.append((f, code(f, g), pr["adv"].get(g, 0.5), c, mode))
                     continue
                 name = glyph_name(c)
                 a = fallback(F, name) if name else None
@@ -397,7 +431,7 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
     kids = []
     pages_id = len(objs) + 2 * len(pages) + 1
     for li, (items, size) in enumerate(pages):
-        w = (8 + sum(a * (sc if up else 1) for _, _, a, _, up in items) * size * 1.05
+        w = (8 + sum(a * scale(up) for _, _, a, _, up in items) * size * 1.05
              + len(items) * abs(line_tcs[li] if line_tcs else 0) * size)
         h = size * 1.4 + 4
         parts, run, last, cur_f = [], [], None, 0
@@ -417,8 +451,8 @@ def build(trace_text: str, traced: list, fonts, texts: list, sizes: list, wd: st
                 continue
             if f != cur_f or up != cur_up:              # a superscript: the page's scale and rise (sup_metrics)
                 flush()
-                ops.append("[%s] TJ /F%d %.4f Tf %.4f Ts" % (" ".join(parts), f + 1, size * (sc if up else 1),
-                                                             size * rise if up else 0))
+                ops.append("[%s] TJ /F%d %.4f Tf %.4f Ts" % (" ".join(parts), f + 1, size * scale(up),
+                                                             size * rise if up is True else 0))
                 parts, cur_f, cur_up, last = [], f, up, None
             g = glyphs[f][c - 1]
             F, tex = slots[f]
