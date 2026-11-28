@@ -22,7 +22,8 @@ glyph route's residual on the same pages):
   width at most 5 of it: figure ink is left out).
 
 Guarantees:
-- G1 The page's text layer is never read: neither `judge.chars` nor `judge.trace` is called.
+- G1 The page's text layer is never read: neither `judge.chars` nor `judge.trace` is called on the page. The
+  reading's own snippet is read (`char_boxes`), to name the character each rendered component belongs to.
 - G2 A snippet document that does not come out sets no line: every page component is then missing (as the glyph
   route, where a failed document fails every line).
 - G3 The output names the blind class on every page: a substitution with the same topology (t/n, n/u, l/1) is not
@@ -222,6 +223,60 @@ def mapped(A: list, js: list, bs: list):
             yield "ok", q, under
 
 
+#: a page component smaller than this (px at 300 dpi) carries no shape worth a label (dots, specks)
+SHAPE_MIN = 6
+#: like-sized: heights within this ratio are compared (the nearest neighbour is looked for among them only)
+SHAPE_BAND = 1.25
+
+
+def char_boxes(pdf: str, page: int) -> list:
+    """the characters of one snippet page with their boxes in SNIP_DPI px: [(char, x0, y0, x1, y1)]"""
+    if not pdf or not os.path.exists(pdf):
+        return []
+    from . import judge as J
+    k = SNIP_DPI / 72
+    return [(c[0], c[3] * k, c[4] * k, c[5] * k, c[6] * k) for c in J.chars(pdf, page, page)[0]]
+
+
+def char_of(glyphs: list, c) -> str | None:
+    """the character a rendered component belongs to: the smallest glyph box holding its centre (+1 px)"""
+    cx, cy = (c[0] + c[2]) / 2, (c[1] + c[3]) / 2
+    hit = [g for g in glyphs if g[1] - 1 <= cx <= g[3] + 1 and g[2] - 1 <= cy <= g[4] + 1]
+    return min(hit, key=lambda g: (g[3] - g[1]) * (g[4] - g[2]))[0] if hit else None
+
+
+def disagreements(A: list, said: dict, mask) -> list:
+    """the page components whose reading contradicts the page's own shapes: of the components the reading set exactly
+    one character on (SHAPE_MIN px and up), each one's nearest like-sized neighbour -- 12 x 12 bitmaps (classify's
+    normalise), Hamming distance plus 20 x the aspect difference -- carries another character, strictly nearer than its
+    own character's nearest; a character set once on the page is not judged (it has no class of its own). Returns
+    ([(component, its nearest neighbour)], the number of labelled components compared) Leave-one-out 1-NN
+    over the page's own labelled shapes: Document Image Decoding's templates from the image itself, in their
+    cheapest form."""
+    from . import classify
+    from .raster import InkMask
+    lab = [j for j, s in said.items() if len(s) == 1 and A[j][3] - A[j][1] >= SHAPE_MIN]
+    feat, band = {}, collections.defaultdict(list)
+    for j in lab:
+        x0, y0, x1, y1 = A[j][:4]
+        rows = [mask.data[y * mask.width + x0: y * mask.width + x1] for y in range(y0, y1)]
+        feat[j] = (classify.normalise(InkMask(b"".join(rows), x1 - x0, y1 - y0)), (x1 - x0) / max(y1 - y0, 1))
+        band[int(math.log(y1 - y0) / math.log(SHAPE_BAND))].append(j)
+    out = []
+    for j in lab:
+        b = int(math.log(A[j][3] - A[j][1]) / math.log(SHAPE_BAND))
+        cand = [o for d in (-1, 0, 1) for o in band.get(b + d, ()) if o != j]
+        same = [o for o in cand if said[o] == said[j]]
+        if not same:                                 # a character set once on the page has no class to be nearer to
+            continue
+        bj, aj = feat[j]
+        dist = lambda o: (bin(bj ^ feat[o][0]).count("1") + 20 * abs(aj - feat[o][1]), o)
+        o = min(cand, key=dist)
+        if said[o] != said[j] and dist(o)[0] < dist(min(same, key=dist))[0]:
+            out.append((j, o))
+    return out, len(lab)
+
+
 def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -> dict:
     from . import judge as J                         # the reading's lines and their setting are the glyph route's
     os.makedirs(wd, exist_ok=True)
@@ -231,7 +286,9 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
     lv = J.leaves(pg)
     pw_pt, _ = J.page_size(a_pdf, pno)
     k = pw_pt / pg["page_width"] * DPI / 72 if pg.get("page_width") else 0.0   # reading px -> 300 dpi px
-    A = components(render(a_pdf, os.path.join(wd, "scan-page"), pno)[0])
+    page_pgm = render(a_pdf, os.path.join(wd, "scan-page"), pno)[0]
+    A = components(page_pgm)
+    scan_mask = pnmio.load_mask(page_pgm, dpi=DPI)
     hs = sorted(c[3] - c[1] for c in A)
     med = hs[len(hs) // 2] if hs else 1
     # the population, from the page alone: every ink component up to text size, small print and specks included.
@@ -244,7 +301,7 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
     big = top[len(top) // 2] if top else 1
     text_like = [j for j, c in enumerate(A) if c[3] - c[1] <= 2.5 * big and c[2] - c[0] <= 5 * big]
     texts = [unface(J.line_tex(ln)) for ln in lv]
-    failed, pages, bo, unset = {}, [], 0, set()
+    failed, pages, bo, unset, snip = {}, [], 0, set(), ""
     if texts:
         snip, got = J.compile_group([(texts, [10.0] * len(texts))], "", wd)
         failed, dropped, bo = got[0]
@@ -255,6 +312,7 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
     beyond = set()                                   # page ink under a line whose characters TeX cannot set
     unplaced = 0
     own, found = {}, collections.Counter()           # line -> the page ink under its box; line -> its findings
+    said, said_line = {}, {}                         # page component -> the characters the reading set on it, its line
     for i, ln in enumerate(lv):
         r = ln.get("region")
         if not isinstance(r, dict):                  # no geometry: not set here, its ink stays missing
@@ -292,8 +350,15 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
             invented += 1
             found[i] += 1
             print(f"S L{i} invented-word {c[0]} {c[1]} {c[2]} {c[3]}", file=out)
+        glyphs = char_boxes(snip, bo + i + 1)
         for bs, js in spans:
-            for kind, q, j in mapped(A, js, bs):
+            order = sorted(bs, key=lambda c: c[0]) if len(js) == len(bs) > 1 else bs
+            for c, (kind, q, j) in zip(order, mapped(A, js, bs)):
+                if kind != "invented" and len(j) == 1:
+                    ch = char_of(glyphs, c)
+                    if ch:
+                        said.setdefault(j[0], set()).add(ch)
+                        said_line.setdefault(j[0], i)
                 if kind == "invented":
                     invented += 1
                     found[i] += 1
@@ -314,6 +379,16 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
     # line whose box holds it). A correct line the instrument maps badly cost more than leaving it out, so omission
     # paid (alex1 p21: MathPix's correct "(9.16), (9.22), (9.24) and (9.26)" line, 29 findings). A line at the cap
     # is one the instrument cannot tell from its absence: it is counted and named (`capped`), never hidden
+    # shape: a page component whose nearest like-sized neighbour the reading calls another character, the BLIND
+    # indicator (the route is blind to substitutions of one topology: fe56 p56's caption, ours' 1/l/t/z for the
+    # scan's broken italic i cost nothing, MathPix's correct dotted i cost its dot)
+    # it is reported beside the residual, never in it nor under the cap: a line's shape disagreements depend on the
+    # OTHER lines' labels, so removing a line could lower them (coordinator, 2026-11-28: its own field). It counts the
+    # consistency of a reading with the page's own shapes, not an error rate
+    shape_pairs, shape_labelled = disagreements(A, said, scan_mask)
+    shape = len(shape_pairs)
+    for j, other in shape_pairs:
+        print(f"S L{said_line[j]} shape {next(iter(said[j]))} {next(iter(said[other]))} {A[j][0]} {A[j][1]}", file=out)
     pop, owner = set(text_like), {}
     for i, js in own.items():
         for j in js:
@@ -330,7 +405,8 @@ def judge_scan(a_pdf: str, pno: int, lines_json: str, wd: str, out=sys.stdout) -
             print(f"N L{i} CAPPED {f} {held[i]}", file=out)
         cost += min(f, held[i]) if held[i] else f
     res = dict(comps=n, missing=len(missing), invented=invented, holes=holes, rendered=rendered, lines=len(lv),
-               lines_judged=judged, not_set=not_set, unplaced=unplaced, unsettable=len(unset), capped=capped,
+               lines_judged=judged, not_set=not_set, unplaced=unplaced, unsettable=len(unset), capped=capped, shape=shape,
+               shape_labelled=shape_labelled,
                capped_comps=capped_comps)
     print(f"# page {pno}: scan route, {len(lv)} lines, {len(A)} ink components, {n} text-like", file=out)
     print("SCAN1 " + " ".join(f"{k} {v}" for k, v in sorted(res.items())) +

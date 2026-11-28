@@ -286,6 +286,27 @@ thin-stroke miss, and an expected-failure test holds it open.
   - Linux Libertine/Biolinum is mapped (`\usepackage{libertine}`), with its style suffixes (B bold, I italic).
   - A page whose text glyphs are mostly in a family with no TeX equivalent is `FONT_UNMAPPED`: no XOR is
     measured, because same-font comparison does not apply.
+  - **changed 2026-11-28 (coordinator: the scan route's BLIND class): `shape` and `shape_labelled` in SCAN1, beside the
+    residual.**
+    - The route counts topology. A substitution with the same topology (t/n, n/u, l/1) costs nothing, so on
+      lib:fe56cd934435 p56 ours' 1/l/t/z for the scan's broken italic i ranked ahead of MathPix's correct reading.
+    - `shape` counts the page components whose reading the page's own shapes contradict. Each page component gets
+      the character the reading sets on it (the reading's own snippet is read for that; the page's text layer never
+      is, G1).
+    - A component is counted when its nearest like-sized neighbour (12 x 12 bitmaps, Hamming distance plus 20 x the
+      aspect difference) carries another character, strictly nearer than its own character's nearest. A character set
+      once on the page is not judged. `shape_labelled` is the number of components compared.
+    - It is a CONSISTENCY COUNT AMONG THE PAGE'S OWN SHAPES, NOT AN ERROR RATE. It is outside the residual and outside
+      the per-line cap, because a line's count depends on the other lines' labels. It also appears per component as
+      `S L<i> shape <char> <neighbour's char> x y`.
+    - Gate:
+      - (i) fe56: MathPix 41, Gemma4 40, ours 71, of 1317-1336 compared.
+      - (ii) 5 % of letters swapped raises it on all 28 measured pages (held-out and sensitivity sets; CN208060706U
+        NOT RUN).
+      - (iii) the residual and every other SCAN1 count is identical to 1eedeaa/378eeab on 213 outputs (board scans,
+        held-out, sensitivity, line removals).
+      - (iv) born rows: 49 jobs byte-identical.
+    - Board scans, MathPix / ours / Gemma4: US6100897A p18 2 / 58 / 9; fe56 41 / 71 / 40; alex1 p21 43 / 67 / 54.
   - **changed 2026-11-28 (pdfdrill-51, board 119 lib:c9daf79960c3 p68 L17): page_rules' "tight" uses the tallest glyph.**
     - The page's \underline{Map} paired on the page side. The rendered underline (128 x 3 px) failed the tight test:
       glyphs within half their own height must cover >= 80 % of the bar. M and p did, at 19 and 6 px over;

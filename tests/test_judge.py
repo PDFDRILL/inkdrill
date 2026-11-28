@@ -955,9 +955,15 @@ class JudgeScanRoute(unittest.TestCase):
         _accent_case(d, name, self.LINE, read)                  # the fixture (its own glyph-route run included)
         real = (judge.chars, judge.trace)
 
-        def refuse(*a, **k):
-            raise AssertionError("the scan route read the text layer")
-        judge.chars = judge.trace = refuse                       # G1: only around the scan route
+        page = os.path.join(d, name, "page.pdf")
+
+        def refuse(real_f):
+            def f(pdf, *a, **k):                                 # G1: the PAGE's text layer is never read; the
+                if os.path.abspath(pdf) == os.path.abspath(page):  # reading's own snippet is (`char_boxes`)
+                    raise AssertionError("the scan route read the text layer")
+                return real_f(pdf, *a, **k)
+            return f
+        judge.chars, judge.trace = refuse(real[0]), refuse(real[1])
         try:
             out = io.StringIO()
             res = judge.judge(os.path.join(d, name, "page.pdf"), 1, os.path.join(d, name, "r.lines.json"),
@@ -1329,6 +1335,38 @@ class VariantLetterUnit(unittest.TestCase):
         cyr = de[:7] + ("ABCDEF+LinLibertineO", 8.966)              # an upright face: de stays de
         self.assertEqual(judge.variant_letters([cyr], tr)[0][0], "&#x434;")
         self.assertEqual(judge.variant_letters([de], [("&#x434;", "afii10069", 457.9, 704.7)])[0][0], "&#x434;")
+
+
+class ShapeConsistencyUnit(unittest.TestCase):
+    """the BLIND indicator: a label the page's own shapes contradict (fe56 p56: ours' l/t/1 for broken italic i)"""
+
+    def test_a_label_its_lookalikes_do_not_share(self):
+        from inkdrill.raster import InkMask
+        W, H = 200, 40
+        px = bytearray(W * H)
+        A = []
+        def put(x0, rows):                       # a 10 x 24 glyph from rows of '#'
+            for y, row in enumerate(rows):
+                for x, ch in enumerate(row):
+                    if ch == "#":
+                        px[(8 + y) * W + x0 + x] = 0xFF
+            A.append((x0, 8, x0 + 10, 32, 0))
+        bar = ["....##...."] * 24
+        ring = ["..######..", ".##....##."] + [".##....##."] * 20 + [".##....##.", "..######.."]
+        for k in range(3):
+            put(10 + 30 * k, bar)
+        for k in range(3):
+            put(100 + 30 * k, ring)
+        mask = InkMask(bytes(px), W, H)
+        said = {j: {"l"} for j in range(3)}
+        said.update({j: {"o"} for j in range(3, 6)})
+        pairs, n = scanjudge.disagreements(A, said, mask)
+        self.assertEqual((pairs, n), ([], 6))
+        said[3] = {"l"}                          # a ring read as l: its look-alikes are o
+        pairs, n = scanjudge.disagreements(A, said, mask)
+        self.assertEqual([j for j, _ in pairs], [3])
+        said[0] = {"x"}                          # a character set once is not judged
+        self.assertNotIn(0, [j for j, _ in scanjudge.disagreements(A, said, mask)[0]])
 
 
 class UnderlineUnit(unittest.TestCase):
